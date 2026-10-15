@@ -610,6 +610,37 @@ describe('EngineOrchestrator', () => {
         }
     });
 
+    it('does not repeat a pending viewport event after delivering that range on native start', async () => {
+        registerNativeIndicator(testNativeDescriptor);
+        try {
+            const renderer = new FakeRenderer();
+            const chart = new Vela({} as unknown as HTMLElement, { live: false, volume: false }, { renderer, engines: [], dataFeed: new MockDataFeed() });
+            await chart.ready();
+            await flush();
+
+            const pending = { from: 1_700_000_036_000, to: 1_700_000_144_000 };
+            renderer.fireViewport(pending);
+            chart.addNativeIndicator('test-native');
+            await flush();
+            expect(lastNative.events).toEqual(['start', 'viewport']);
+            expect(lastNative.viewports).toEqual([pending]);
+
+            await new Promise((r) => setTimeout(r, 220));
+            await flush();
+            expect(lastNative.events).toEqual(['start', 'viewport']);
+            expect(lastNative.viewports).toEqual([pending]);
+
+            const later = { from: 1_700_000_072_000, to: 1_700_000_180_000 };
+            renderer.fireViewport(later);
+            await new Promise((r) => setTimeout(r, 220));
+            await flush();
+            expect(lastNative.events).toEqual(['start', 'viewport', 'viewport']);
+            expect(lastNative.viewports).toEqual([pending, later]);
+        } finally {
+            unregisterNativeIndicator('test-native');
+        }
+    });
+
     it('does not invent an initial native viewport or notify a native that is not viewport-aware', async () => {
         let withoutRange: TestNativeIndicator | undefined;
         let notViewportAware: TestNativeIndicator | undefined;
