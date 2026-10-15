@@ -278,23 +278,35 @@ class DrawingEngine implements ScriptingEngine {
     }
 }
 
+interface NativeProbeInstance {
+    symbol?: string;
+    timeframe?: string;
+    started: number;
+    stopped: number;
+    resumed: number;
+    suspended: number;
+    events: Array<'start' | 'viewport'>;
+    viewports: VisibleRange[];
+}
+
 /** A probe native-indicator type: records each instance's start context + lifecycle. */
-function probeNative(): { descriptor: NativeIndicatorDescriptor; instances: Array<{ symbol?: string; started: number; stopped: number; resumed: number; suspended: number }> } {
-    const instances: Array<{ symbol?: string; started: number; stopped: number; resumed: number; suspended: number }> = [];
+function probeNative(): { descriptor: NativeIndicatorDescriptor; instances: NativeProbeInstance[] } {
+    const instances: NativeProbeInstance[] = [];
     const descriptor: NativeIndicatorDescriptor = {
         type: 'probe',
         title: 'Probe',
         paneHint: 'price',
         overlay: true,
+        reactsToViewport: true,
         inputsSchema: () => [],
         defaultInputs: () => ({}),
         create: () => {
-            const rec = { symbol: undefined as string | undefined, started: 0, stopped: 0, resumed: 0, suspended: 0 };
+            const rec: NativeProbeInstance = { started: 0, stopped: 0, resumed: 0, suspended: 0, events: [], viewports: [] };
             instances.push(rec);
             return {
-                start(ctx: NativeIndicatorContext) { rec.started += 1; rec.symbol = ctx.symbol; ctx.emit({}); },
+                start(ctx: NativeIndicatorContext) { rec.started += 1; rec.symbol = ctx.symbol; rec.timeframe = ctx.timeframe; ctx.emit({}); rec.events.push('start'); },
                 onBars() {},
-                onViewport() {},
+                onViewport(range: VisibleRange) { rec.events.push('viewport'); rec.viewports.push(range); },
                 setInputs() {},
                 suspend() { rec.suspended += 1; },
                 resume() { rec.resumed += 1; },
@@ -554,7 +566,7 @@ describe('setMarket — in-place market switch', () => {
         expect(fresh.lines![0]!.x1).toBe(renderer.bars[0]!.time);
     });
 
-    it('restarts a native indicator with a fresh context, keeping the record id', async () => {
+    it('restarts a native indicator with the current viewport after a timeframe switch, keeping the record id', async () => {
         const { descriptor, instances } = probeNative();
         registerNativeIndicator(descriptor);
         const feed = new SwitchFeed();
@@ -566,12 +578,17 @@ describe('setMarket — in-place market switch', () => {
         expect(instances).toHaveLength(1);
         expect(instances[0]!.symbol).toBe('AAA');
 
-        await chart.setMarket({ symbol: 'BBB' });
+        const switchedRange = { from: 1_700_020_000_000, to: 1_700_030_000_000 };
+        renderer.visibleRange = switchedRange;
+        await chart.setMarket({ timeframe: '240' });
         await flush();
 
         expect(instances[0]!.stopped).toBe(1); // old instance released
         expect(instances).toHaveLength(2); // fresh instance from the descriptor
-        expect(instances[1]!.symbol).toBe('BBB'); // …started over the NEW market
+        expect(instances[1]!.symbol).toBe('AAA');
+        expect(instances[1]!.timeframe).toBe('240'); // …started over the NEW timeframe
+        expect(instances[1]!.events).toEqual(['start', 'viewport']);
+        expect(instances[1]!.viewports).toEqual([switchedRange]);
         expect(chart.indicators().some((h) => h.id === handle.id)).toBe(true); // same record/legend
     });
 

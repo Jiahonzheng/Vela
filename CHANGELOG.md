@@ -2,6 +2,14 @@
 
 All notable changes to Vela, newest first.
 
+## [Unreleased]
+
+### Fixed
+
+- **Viewport-aware native indicators start with the current visible range.** Native indicators
+  that react to viewport changes now receive the active range immediately after they start,
+  including after a market or timeframe change, without waiting for a later pan or zoom.
+
 ## [0.8.4]
 
 ### Added

@@ -2366,6 +2366,10 @@ export class EngineOrchestrator implements IndicatorController, PaneController, 
             };
             record.native.instance.start(ctx, record.inputValues);
             record.native.started = true;
+            if (record.native.descriptor.reactsToViewport) {
+                const range = this.currentVisibleRange();
+                if (range) record.native.instance.onViewport({ from: range.left, to: range.right });
+            }
         } catch (err) {
             this.fail(id, handle, err);
         }
