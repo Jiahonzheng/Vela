@@ -4,8 +4,39 @@ All notable changes to Vela, newest first.
 
 ## [Unreleased]
 
+### Added
+
+- **Size panes from code.** `chart.panes.setHeightWeight(paneId, weight)` sets how much of the
+  chart's height a pane takes, relative to the others: the price pane starts at 3 and each
+  indicator pane at 1, so a weight of 6 on the price pane next to two indicator panes gives it
+  three quarters of the height. `chart.panes.list()` now reports each pane's `heightWeight`, and
+  `pane:changed` fires when a pane's size changes, including when the user lets go of a pane
+  separator, and when a new indicator creates its pane, so a host can save the layout and keep
+  its own pane controls in step without polling.
+- **Clicks and the crosshair name the pane.** `onClick` now reports the pane that was clicked
+  and the value under the click on that pane's scale, alongside the bar time, and
+  `onCrosshairMove` reports the pane under the cursor. Both carry the pane's `paneId`, the same
+  id `chart.panes` uses, and right-click menu actions get it on `ctx.pointer` too, so a click
+  on one of several indicator panes can be told apart.
+
+### Changed
+
+- **Linear Regression is now two studies: an LSMA and a slope.** The Linear Regression
+  Curve opened an empty pane below the chart while its curve drew over the candles. It is
+  replaced by the **Least Squares Moving Average**, which draws on the price chart like the
+  other averages, colored by its slope and with a regression offset, and the **Linear
+  Regression Slope**, which plots the fit's change per bar in its own pane around a zero
+  line. Saved charts keep their study: a saved curve opens as an LSMA with the same length,
+  and a saved slope as a Linear Regression Slope.
+  _(Breaking: the `linear-regression` built-in type is gone. Add `lsma` or
+  `linear-regression-slope` instead.)_
+
 ### Fixed
 
+- **Resized panes keep their size when indicators are added.** Dragging a pane separator, then
+  adding an indicator that draws on an existing pane (a moving average on the price chart, or
+  one merged into another indicator's pane), snapped the panes back to their default heights.
+  Pane sizes now stay until you change them.
 - **Viewport-aware native indicators start with the current visible range.** Native indicators
   that react to viewport changes now receive the active range immediately after they start,
   including after a market or timeframe change, without waiting for a later pan or zoom.
