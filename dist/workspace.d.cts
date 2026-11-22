@@ -1,8 +1,8 @@
-import { O as OHLCV, V as VisibleRangePreset, b as VisibleRange, c as VelaOptions, I as InputValue, M as MarketDataFeed, d as VelaTheme, N as NativeBackend, e as MarketSession } from './DataProvider-zoHp39et.cjs';
-import { S as SyncSetting, V as VelaStorage, C as CellState, W as WidgetHistory, R as ResolvedIndicator, a as StatuslinePart, b as RangePreset, T as TrackSizes, c as VelaShellOptions, d as SyncOptions, e as SyncKind, f as WorkspaceState } from './statusline-model-Bqa9_0ND.cjs';
-export { g as ChartState, D as DrawingToolsState, P as PanelsState, h as SYMBOL_PICKER_DEFAULT_CATEGORIES, i as SymbolPickerCategory, j as SymbolPickerConfig, k as decodeState, l as encodeState, s as sanitizeState } from './statusline-model-Bqa9_0ND.cjs';
+import { O as OHLCV, V as VisibleRangePreset, b as VisibleRange, c as VelaOptions, I as InputValue, M as MarketDataFeed, d as VelaTheme, N as NativeBackend, e as MarketSession } from './DataProvider-MSQ3fzSV.cjs';
+import { S as SyncSetting, V as VelaStorage, C as CellState, W as WidgetHistory, R as ResolvedIndicator, a as StatuslinePart, b as RangePreset, T as TrackSizes, c as VelaShellOptions, d as SyncOptions, e as SyncKind, f as WorkspaceState } from './statusline-model-2PVYMu6x.cjs';
+export { g as ChartState, D as DrawingToolsState, P as PanelsState, h as SYMBOL_PICKER_DEFAULT_CATEGORIES, i as SymbolPickerCategory, j as SymbolPickerConfig, k as decodeState, l as encodeState, s as sanitizeState } from './statusline-model-2PVYMu6x.cjs';
 import { a as KeymapManager } from './keymap-Nk4cb7Tm.cjs';
-import { I as IndicatorHandle, S as ScriptingEngine, W as WidgetContext, V as Vela, E as ExternalIndicatorEntry, R as ReplayState, a as ReplayBounds, b as VelaEventMap, c as ScriptRun } from './contributions-CmH4S0zz.cjs';
+import { I as IndicatorHandle, S as ScriptingEngine, W as WidgetContext, V as Vela, E as ExternalIndicatorEntry, R as ReplayState, a as ReplayBounds, b as VelaEventMap, c as ScriptRun } from './contributions-A_i121-l.cjs';
 import { b as LocalizationOptions, M as MessageLike, T as Translator, c as LocaleChangedEvent } from './types-CsUd831-.cjs';
 import '@luxalgo/vela-ui/theme';
 
@@ -180,7 +180,8 @@ declare class ChartCell {
     private sessionAvailableFlag;
     /** The symbol of the most recent metadata probe — an older one landing late is dropped. */
     private metadataProbeSymbol;
-    private timeframeMetadata?;
+    private timeframeProbe;
+    private marketTimeframes;
     /** Latched: the symbol's extended tape wraps midnight (an overnight roll market) —
      *  one extended-hours shading phase instead of the pre/post split. */
     private sessionOvernightFlag;
@@ -321,6 +322,8 @@ declare class ChartCell {
      *  source refuses it (what the topbar shows). */
     get timeframe(): string;
     private timeframeSource;
+    /** @internal Refresh capabilities when the registry or this cell's market changes. */
+    refreshTimeframeMetadata(force?: boolean): void;
     /** @internal Resolve a timeframe choice against the capabilities known for this cell. */
     resolveTimeframeChoice(value: string, fallback?: string): string | null;
     /** The timeframe the user asked for — what the cell persists and the timeframe link
@@ -822,6 +825,7 @@ declare class VelaWorkspace {
     private readonly regions;
     private readonly events;
     private readonly feed;
+    private readonly offRegistryChange;
     private readonly cellsById;
     /** The one second pulse behind every time display: the bottom-bar clock and each
      *  cell's countdown chip subscribe to it, so they can never read different seconds. */
@@ -1456,8 +1460,8 @@ declare class VelaWorkspace {
     /** Trigger ② — a cell's indicator ledger changed: count + picker only if active. */
     private onCellIndicatorsChanged;
     private projectTimeframeControls;
-    private resolveTimeframeChoice;
-    /** All timeframe controls act on the current cell, including a choice from a menu already open. */
+    private readonly resolveTimeframeChoice;
+    /** The controls resolve the choice again on activation before passing it here. */
     private setActiveTimeframe;
     /** Star/unstar a timeframe — a WORKSPACE preference (one chip row, whatever the
      *  active cell); the topbar follows and the set persists with the document. */

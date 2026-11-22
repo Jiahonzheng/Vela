@@ -1,8 +1,9 @@
-import { LEGEND_AT_TOP_ATTR, priceStyleMessage, parseSymbol, priceStyleIds, PRICE_STYLE_UNAVAILABLE, BUILTIN_PRICE_STYLES, SecondClock, clockCorrection, isGroupRow, defaultMemberOf, groupKeyOf, groupMembers, normalizeSession, Vela, MultiProviderFeed, TypedEventBus, timeframeToMs, registerBuiltinChartTypes, resolveTheme, buildToolbar, createCustomMark, createAttributionMark, DrawingToolbar, relabelAttributionMark, applyAttributionMarkTheme, sharedBarStore, CANDLE_OVERRIDE_KEYS, withAlpha } from './chunk-SZMZ3SOW.js';
-import { resolveTopbarComposition, injectChromeStyles, topbarActionOverride, TOPBAR_BUILTIN_IDS, widgetActions, tzButtonLabel, resolveTimezone, timezoneMenuRows, SidePanel, sidePanels, DEFAULT_PANEL_ORDER, symbolRanking, iconAt, SESSION_OFF, SESSION_POST, SESSION_PRE, paneScaleAt, composeMenu, priceAxisItems, scaleChoiceOf, priceOnlyState, timeAxisItems, bodyItems, scaleWrites, invertWrite, settingsSectionOf, resolveEngines, legendActionsProviderFor, legendCalloutsProviderFor, drawingActionsProviderFor, normalizeTimezone, isExchangeTimezone, priceStyleApplies, statePersistenceHandlers, topbarHas, shellDefaults, rendererDefaults, mobilePlacement, widgetAttachments, chartType, getDrawingType, icon, nativeIndicatorEntry, inputDeltas, svg16 as svg16$1, composeSidebar, categoricalColor } from './chunk-JELNUQRA.js';
+import { LEGEND_AT_TOP_ATTR, priceStyleMessage, SecondClock, clockCorrection, parseSymbol, isGroupRow, defaultMemberOf, groupKeyOf, groupMembers, normalizeSession, Vela, MultiProviderFeed, priceStyleIds, TypedEventBus, registerBuiltinChartTypes, resolveTheme, buildToolbar, createCustomMark, createAttributionMark, DrawingToolbar, relabelAttributionMark, applyAttributionMarkTheme, sharedBarStore, PRICE_STYLE_UNAVAILABLE, BUILTIN_PRICE_STYLES, CANDLE_OVERRIDE_KEYS, withAlpha } from './chunk-OSXGWMCA.js';
+import { injectChromeStyles, tzButtonLabel, resolveTimezone, timezoneMenuRows, SidePanel, sidePanels, DEFAULT_PANEL_ORDER, symbolRanking, iconAt, SESSION_OFF, SESSION_POST, SESSION_PRE, paneScaleAt, widgetActions, composeMenu, priceAxisItems, scaleChoiceOf, priceOnlyState, timeAxisItems, bodyItems, scaleWrites, invertWrite, settingsSectionOf, resolveEngines, legendActionsProviderFor, legendCalloutsProviderFor, drawingActionsProviderFor, normalizeTimezone, isExchangeTimezone, priceStyleApplies, statePersistenceHandlers, resolveTopbarComposition, topbarActionOverride, topbarHas, shellDefaults, rendererDefaults, TOPBAR_BUILTIN_IDS, mobilePlacement, widgetAttachments, getDrawingType, icon, nativeIndicatorEntry, inputDeltas, composeSidebar, svg16 as svg16$1, chartType, categoricalColor } from './chunk-VDJ63WNL.js';
 import { registerIcon, svg16, applyPlotOverlayTokens, ensureUIHost, KeymapManager, isEditableTarget } from './chunk-ARGBUJLO.js';
 import { msg, sourceText, textOf, localizeNumberText, englishTranslator, sliceGraphemes, tickDecimals, LocaleState, pickLocalization, eventTimeText, withValues } from './chunk-VCYHJS6Q.js';
 import { baseOf } from './chunk-W4EJWLEO.js';
+import { timeframeToMs } from './chunk-IXLGXG62.js';
 import { DropdownMenu } from '@luxalgo/vela-ui/dropdown-menu';
 import { Tooltip } from '@luxalgo/vela-ui/tooltip';
 import { SURFACE_OPEN_EVENT, SURFACE_CLOSE_EVENT, announceSurface } from '@luxalgo/vela-ui/surface-events';
@@ -94,34 +95,38 @@ function chartTimeframeOf(value) {
   if (parsed.count === 1 && (parsed.unit === "D" || parsed.unit === "W" || parsed.unit === "M")) return parsed.unit;
   return parsed.canonical ?? null;
 }
-function parseMarketTimeframe(value) {
-  return parseTimeframe(value.trim().replace(/^(\d+)\s*m$/, "$1"));
+function calendarTimeframe({ count, unit }) {
+  return unit === "D" || unit === "W" || unit === "M" || unit === "Y" ? count === 1 ? unit : `${count}${unit}` : void 0;
 }
-function timeframeKey(value) {
-  const parsed = parseMarketTimeframe(value);
-  const unit = parsed.unit;
-  return unit === "D" || unit === "W" || unit === "M" || unit === "Y" ? `${parsed.count}${unit}` : parsed.canonical;
+function timeframeKey(parsed) {
+  return calendarTimeframe(parsed) ?? parsed.canonical;
 }
-function findAdvertisedTimeframe(value, list) {
-  if (!list) return void 0;
-  if (list.includes(value)) return value;
-  const canonical = timeframeKey(value);
-  return canonical === void 0 ? void 0 : list.find((entry) => timeframeKey(entry) === canonical);
+function declaredTimeframe(value) {
+  return /[a-z]/.test(value) ? { valid: false } : parseTimeframe(value);
 }
-function resolveTimeframeChoice(value, symbolTimeframes, providerTimeframes, fallback = value) {
-  const list = symbolTimeframes ? symbolTimeframes.list : providerTimeframes;
-  if (list) return findAdvertisedTimeframe(value, list) ?? null;
-  if (!symbolTimeframes) return fallback;
-  const finest = parseMarketTimeframe(symbolTimeframes.finest).ms;
-  const { ms, unit } = parseMarketTimeframe(value);
-  if (finest === void 0) return fallback;
-  if (ms === void 0 || ms < finest) return null;
-  const advertised = findAdvertisedTimeframe(value, providerTimeframes);
-  if (advertised !== void 0) return advertised;
-  if (unit === "S" && finest >= UNIT_MS.MIN) {
-    return ms % UNIT_MS.MIN === 0 ? String(ms / UNIT_MS.MIN) : null;
+function resolveTimeframeChoice(value, timeframes, fallback = value) {
+  if (!timeframes) return fallback;
+  const requested = parseTimeframe(value);
+  if (timeframes.list) {
+    const key = timeframeKey(requested);
+    if (key === void 0) return null;
+    const matches = timeframes.list.filter((entry) => timeframeKey(declaredTimeframe(entry)) === key);
+    return matches.includes(value) ? value : matches[0] ?? null;
   }
-  return fallback;
+  const finest = declaredTimeframe(timeframes.finest).ms;
+  if (finest === void 0) return fallback;
+  if (requested.ms === void 0 || requested.ms < finest) return null;
+  return calendarTimeframe(requested) ?? fallback;
+}
+function currentTimeframeChoice(options, timeframe, resolve) {
+  if (options.includes(timeframe)) return timeframe;
+  const current = resolve(timeframe);
+  return current === null ? void 0 : options.find((option) => resolve(option) === current);
+}
+function workspaceTimeframeLabel(value, i18n) {
+  const parsed = parseTimeframe(value, i18n);
+  if (parsed.unit === "D" || parsed.unit === "W" || parsed.unit === "M" || parsed.unit === "Y") return parsed.short;
+  return timeframeLabel(value, i18n);
 }
 function timeframeMs(value) {
   const v = String(value ?? "").trim();
@@ -693,8 +698,9 @@ var TEXT2 = {
   currentLayout: msg("widget.topbar.currentLayout", "Layout — {layout}"),
   currentStyle: msg("widget.topbar.currentStyle", "Chart style — {style}")
 };
-var Topbar = class {
-  constructor(host, opts) {
+var TopbarControl = class {
+  constructor(host, opts, resolveTimeframe) {
+    this.resolveTimeframe = resolveTimeframe;
     this.layoutButton = null;
     this.layoutPicker = null;
     this.layoutId = null;
@@ -893,7 +899,7 @@ var Topbar = class {
       host,
       i18n: opts.i18n ?? null,
       items: this.tfItems(),
-      onSelect: (id) => opts.onTimeframe(id),
+      onSelect: (id) => this.applyTimeframe(id),
       onFavorite: (id, on) => opts.onTimeframeFavorite?.(id, on),
       // Timeframe labels are two-or-three characters ("1m", "4h", "1D") — the
       // stylesheet's default min-width would leave the list mostly empty.
@@ -933,30 +939,29 @@ var Topbar = class {
     const doc = this.el.ownerDocument;
     this.tfChipsHost.replaceChildren();
     const stars = this.opts.onTimeframeFavorite !== void 0;
-    const chips = stars ? favoriteTimeframeChips(this.tfFavs).filter((tf) => this.resolveTimeframe(tf) !== null) : [];
-    const current = this.resolveTimeframe(this.timeframe);
-    const isCurrent = (tf) => tf === this.timeframe || current !== null && this.resolveTimeframe(tf) === current;
-    const currentIsFav = chips.some(isCurrent);
-    const shown = currentIsFav || chips.length === 0 ? chips : [...chips, this.timeframe];
+    const chips = stars ? favoriteTimeframeChips(this.tfFavs).filter((tf) => this.timeframeValue(tf) !== null) : [];
+    const current = this.checkedTimeframe(chips);
+    const shown = current !== void 0 || chips.length === 0 ? chips : [...chips, this.timeframe];
     for (const tf of shown) {
       const b = doc.createElement("button");
       b.className = "vela-widget-tf";
-      const label = timeframeLabel(tf, this.i18n);
+      const label = this.timeframeDisplay(tf);
       b.textContent = label;
-      if (isCurrent(tf)) {
+      if (tf === (current ?? this.timeframe)) {
         b.dataset.current = "1";
         b.setAttribute("aria-current", "true");
       } else {
         b.setAttribute("aria-label", this.t(TEXT2.switchTimeframe, { timeframe: label }));
-        b.addEventListener("click", () => this.opts.onTimeframe(tf));
+        b.addEventListener("click", () => this.applyTimeframe(tf));
       }
       this.tfChipsHost.appendChild(b);
     }
     this.tfCaret.replaceChildren();
     if (chips.length === 0) {
       this.tfCaret.dataset.solo = "1";
-      this.tfCaret.append(doc.createTextNode(timeframeLabel(this.timeframe, this.i18n)), iconEl("chevron-down", doc));
-      this.tfCaret.setAttribute("aria-label", this.t(TEXT2.currentTimeframe, { timeframe: timeframeLabel(this.timeframe, this.i18n) }));
+      const label = this.timeframeDisplay(this.timeframe);
+      this.tfCaret.append(doc.createTextNode(label), iconEl("chevron-down", doc));
+      this.tfCaret.setAttribute("aria-label", this.t(TEXT2.currentTimeframe, { timeframe: label }));
     } else {
       delete this.tfCaret.dataset.solo;
       this.tfCaret.appendChild(iconEl("chevron-down", doc));
@@ -1142,20 +1147,29 @@ var Topbar = class {
       if (dx) el.style.transform = `translateX(${dx}px)`;
     }
   }
-  resolveTimeframe(tf) {
-    return this.opts.resolveTimeframe ? this.opts.resolveTimeframe(tf) : tf;
+  timeframeValue(tf) {
+    return this.resolveTimeframe ? this.resolveTimeframe(tf) : tf;
+  }
+  applyTimeframe(tf) {
+    const value = this.timeframeValue(tf);
+    if (value !== null) this.opts.onTimeframe(value);
+  }
+  timeframeDisplay(tf) {
+    return this.resolveTimeframe ? workspaceTimeframeLabel(tf, this.i18n) : timeframeLabel(tf, this.i18n);
+  }
+  checkedTimeframe(options) {
+    return this.resolveTimeframe ? currentTimeframeChoice(options, this.timeframe, this.resolveTimeframe) : options.find((tf) => tf === this.timeframe);
   }
   tfItems() {
     const stars = this.opts.onTimeframeFavorite !== void 0;
-    const current = this.resolveTimeframe(this.timeframe);
+    const current = this.checkedTimeframe(this.opts.timeframes);
     return this.opts.timeframes.map((tf) => {
-      const choice = this.resolveTimeframe(tf);
       return {
         id: tf,
-        label: timeframeLabel(tf, this.i18n),
-        checked: tf === this.timeframe || choice !== null && choice === current,
+        label: this.timeframeDisplay(tf),
+        checked: tf === current,
         ...stars ? { favorite: this.tfFavs.includes(tf) } : {},
-        ...choice === null ? { disabled: true, title: this.t(TIMEFRAME_UNAVAILABLE) } : {}
+        ...this.timeframeValue(tf) === null ? { disabled: true, title: this.t(TIMEFRAME_UNAVAILABLE) } : {}
       };
     });
   }
@@ -1170,6 +1184,14 @@ var Topbar = class {
     }));
   }
 };
+var Topbar = class extends TopbarControl {
+  constructor(host, opts) {
+    super(host, opts);
+  }
+};
+function createWorkspaceTopbar(host, opts, resolve) {
+  return new TopbarControl(host, opts, resolve);
+}
 var RANGE_PRESETS = [
   { id: "1D", tf: "1", preset: "1D", bars: 1500 },
   //   1 day  @ 1m  = 1440 bars
@@ -4139,9 +4161,9 @@ var TEXT9 = {
   example: msg("widget.timeframeQuick.example", "e.g. 15, 4H, D, 3M"),
   invalid: msg("widget.timeframeQuick.invalid", "Not a timeframe")
 };
-var TimeframeQuick = class {
-  constructor(opts) {
-    this.opts = opts;
+var TimeframeQuickControl = class {
+  constructor(opts, resolveChoice) {
+    this.resolveChoice = resolveChoice;
     this.i18n = opts.i18n ?? null;
     const doc = (opts.host ?? document.body).ownerDocument;
     injectChromeStyles(STYLE_ID8, CSS8, doc);
@@ -4185,7 +4207,7 @@ var TimeframeQuick = class {
   relabel() {
     this.dialog.titleEl.textContent = this.t(TEXT9.title);
     this.dialog.setI18n(this.i18n);
-    this.refresh();
+    if (this.isOpen) this.renderHint();
   }
   open(seed = "") {
     this.relabel();
@@ -4217,11 +4239,8 @@ var TimeframeQuick = class {
   destroy() {
     this.dialog.destroy();
   }
-  refresh() {
-    if (this.isOpen) this.renderHint();
-  }
   resolveTimeframe(canonical) {
-    return this.opts.resolveTimeframe ? this.opts.resolveTimeframe(this.input.value.trim(), canonical) : canonical;
+    return this.resolveChoice ? this.resolveChoice(this.input.value.trim(), canonical) : canonical;
   }
   renderHint() {
     const raw = this.input.value.trim();
@@ -4238,6 +4257,14 @@ var TimeframeQuick = class {
     }
   }
 };
+var TimeframeQuick = class extends TimeframeQuickControl {
+  constructor(opts) {
+    super(opts);
+  }
+};
+function createWorkspaceTimeframeQuick(opts, resolve) {
+  return new TimeframeQuickControl(opts, resolve);
+}
 var TEXT10 = {
   title: msg("widget.shortcuts.title", "Keyboard shortcuts"),
   mouse: msg("widget.shortcuts.mouse", "Mouse"),
@@ -6428,6 +6455,7 @@ var ChartCell = class {
     this.sessionAvailableFlag = false;
     /** The symbol of the most recent metadata probe — an older one landing late is dropped. */
     this.metadataProbeSymbol = null;
+    this.timeframeProbe = null;
     /** Latched: the symbol's extended tape wraps midnight (an overnight roll market) —
      *  one extended-hours shading phase instead of the pre/post split. */
     this.sessionOvernightFlag = false;
@@ -6566,11 +6594,10 @@ var ChartCell = class {
       this.watermark?.setLoading(true);
       this.refreshSymbolMetadata(symbol2);
     });
-    this.inner.on("load:end", ({ symbol: symbol2 }) => {
+    this.inner.on("load:end", () => {
       this.watermark?.setLoading(false);
       this.refreshSessionShading();
-      if (this.timeframeMetadata?.provider !== this.timeframeSource(symbol2)?.provider) this.refreshSymbolMetadata(symbol2);
-      this.deps.onTimeframesChanged?.(this.id);
+      this.refreshTimeframeMetadata();
     });
     this.inner.on("viewport:changed", (range) => this.sessionShading.updateRange(range));
     this.applyTimezone();
@@ -6601,6 +6628,7 @@ var ChartCell = class {
         this.statusline?.setMeta(this.timeframe, this.inner.data.displayPrefix(this.state.symbol) ?? this.state.provider ?? "");
       }
       this.refreshSymbolMetadata();
+      this.refreshTimeframeMetadata();
       if (this.inner && this.state.symbol) this.marketStatus?.track(this.inner.data, this.state.symbol);
     });
     this.syncStatuslineColors();
@@ -6692,6 +6720,7 @@ var ChartCell = class {
     this.state.provider = parseSymbol(symbol).provider ?? void 0;
     if (!this.fallback) this.state.timeframe = timeframe;
     this.state.session = normalizeSession(this.inner?.market.session);
+    this.refreshTimeframeMetadata();
     this.watermark?.update(symbol, timeframe);
     this.statusline?.setSymbol(symbol);
     this.statusline?.setMeta(timeframe, this.inner?.data.displayPrefix(symbol) ?? this.state.provider ?? "");
@@ -6748,9 +6777,7 @@ var ChartCell = class {
     const chart = this.inner;
     if (!chart || !symbol) return;
     this.metadataProbeSymbol = symbol;
-    const source = this.timeframeSource(symbol);
-    const marketSymbol = source ? `${source.provider}:${source.ticker}` : symbol;
-    void chart.data.symbolInfo(marketSymbol).then((si) => {
+    void chart.data.symbolInfo(symbol).then((si) => {
       if (this.inner !== chart || this.metadataProbeSymbol !== symbol) return;
       if (si === void 0 && retry) {
         void chart.data.ready().then(() => {
@@ -6759,11 +6786,6 @@ var ChartCell = class {
         return;
       }
       if (this.state.symbol !== symbol) return;
-      const timeframes = source ? si?.timeframes : void 0;
-      if (this.timeframeMetadata?.symbol !== symbol || this.timeframeMetadata.provider !== source?.provider || this.timeframeMetadata.timeframes !== timeframes) {
-        this.timeframeMetadata = { symbol, provider: source?.provider, timeframes };
-        this.deps.onTimeframesChanged?.(this.id);
-      }
       const available = si?.has_extended_hours !== false && typeof si?.session === "string" && si.session !== "" && si.session !== "24x7";
       const overnight = parseSessionSpec(si)?.overnight === true;
       const zone = typeof si?.timezone === "string" && si.timezone !== "" ? si.timezone : void 0;
@@ -7060,21 +7082,45 @@ var ChartCell = class {
   get timeframe() {
     return this.fallback?.timeframe ?? this.state.timeframe ?? "60";
   }
-  timeframeSource(symbol) {
+  timeframeSource() {
     const feed = this.deps.feed;
-    if (this.inner?.market.offline || !(feed instanceof MultiProviderFeed)) return null;
-    return feed.resolveUnambiguousSymbol(symbol);
+    if (!this.inner || this.inner.market.offline || !this.symbol || !(feed instanceof MultiProviderFeed)) return null;
+    const source = feed.resolveUnambiguousSymbol(this.symbol);
+    if (!source) return null;
+    const provider = feed.providerInstance(source.provider);
+    if (!provider) return null;
+    return { market: `${source.provider}:${source.ticker}`, provider };
+  }
+  /** @internal Refresh capabilities when the registry or this cell's market changes. */
+  refreshTimeframeMetadata(force = false) {
+    const chart = this.inner;
+    const probe = this.timeframeSource();
+    const sameSource = probe?.market === this.timeframeProbe?.market && probe?.provider === this.timeframeProbe?.provider;
+    if (sameSource && (!force || !probe)) return;
+    this.timeframeProbe = probe;
+    if (!sameSource && this.marketTimeframes !== void 0) {
+      this.marketTimeframes = void 0;
+      this.deps.onTimeframesChanged?.(this.id);
+    }
+    if (!chart || !probe) return;
+    void chart.data.symbolInfo(probe.market).then((info) => {
+      if (this.inner !== chart || probe !== this.timeframeProbe) return;
+      const current = this.timeframeSource();
+      if (probe.market !== current?.market || probe.provider !== current.provider) return;
+      if (info === void 0) this.timeframeProbe = null;
+      if (this.marketTimeframes === info?.timeframes) return;
+      this.marketTimeframes = info?.timeframes;
+      this.deps.onTimeframesChanged?.(this.id);
+    }, () => {
+      if (probe === this.timeframeProbe && this.marketTimeframes === void 0) this.timeframeProbe = null;
+    });
   }
   /** @internal Resolve a timeframe choice against the capabilities known for this cell. */
   resolveTimeframeChoice(value, fallback = value) {
-    const symbol = this.symbol;
-    const source = this.timeframeSource(symbol);
-    if (!source) return fallback;
-    const metadata = this.timeframeMetadata;
-    const symbolTimeframes = metadata?.symbol === symbol && metadata.provider === source.provider ? metadata.timeframes : void 0;
-    if (symbolTimeframes) return resolveTimeframeChoice(value, symbolTimeframes, void 0, fallback);
-    const info = this.inner?.data.providerInstance(source.provider)?.info?.();
-    return resolveTimeframeChoice(value, info?.timeframes, info?.supportedTimeframes, fallback);
+    const source = this.timeframeSource();
+    const probe = this.timeframeProbe;
+    const timeframes = source && probe?.market === source.market && probe.provider === source.provider ? this.marketTimeframes : void 0;
+    return resolveTimeframeChoice(value, timeframes, fallback);
   }
   /** The timeframe the user asked for — what the cell persists and the timeframe link
    *  shares. Differs from {@link timeframe} while the symbol's source refuses it. */
@@ -8894,9 +8940,10 @@ var TimeframeDrawer = class {
     for (const tf of opts.timeframes) {
       const chip = doc.createElement("button");
       chip.className = "vela-tfd-chip";
-      chip.textContent = timeframeLabel(tf, opts.i18n);
       chip.addEventListener("click", () => {
-        opts.onTimeframe(tf);
+        const choice = opts.resolveTimeframe(tf);
+        if (choice === null) return;
+        opts.onTimeframe(choice);
         this.drawer.hide();
       });
       this.tfChips.set(tf, chip);
@@ -8910,7 +8957,7 @@ var TimeframeDrawer = class {
     const i18n = this.opts.i18n;
     for (const { el, text } of this.headings) el.textContent = textOf(i18n, text);
     for (const [id, chip] of this.rangeChips) chip.textContent = rangeLabel(id, i18n);
-    for (const [tf, chip] of this.tfChips) chip.textContent = timeframeLabel(tf, i18n);
+    for (const [tf, chip] of this.tfChips) chip.textContent = workspaceTimeframeLabel(tf, i18n);
   }
   open() {
     this.relabel();
@@ -8919,17 +8966,15 @@ var TimeframeDrawer = class {
   }
   refresh() {
     const tf = this.opts.currentTimeframe();
-    const resolve = (value) => this.opts.resolveTimeframe ? this.opts.resolveTimeframe(value) : value;
-    const current = resolve(tf);
+    const current = currentTimeframeChoice(this.opts.timeframes, tf, this.opts.resolveTimeframe);
     const range = this.opts.activeRange();
     for (const [id, chip] of this.rangeChips) {
       if (range !== null && id === range) chip.dataset.active = "1";
       else delete chip.dataset.active;
     }
     for (const [id, chip] of this.tfChips) {
-      const choice = resolve(id);
-      chip.disabled = choice === null;
-      if (range === null && (id === tf || choice !== null && choice === current)) chip.dataset.active = "1";
+      chip.disabled = this.opts.resolveTimeframe(id) === null;
+      if (range === null && id === current) chip.dataset.active = "1";
       else delete chip.dataset.active;
     }
   }
@@ -10313,6 +10358,10 @@ var VelaWorkspace = class {
       get: (kind) => this.syncOpts[kind],
       state: () => ({ ...this.syncOpts })
     };
+    this.resolveTimeframeChoice = (tf, fallback = tf) => {
+      const cell = this.activeId ? this.cellsById.get(this.activeId) : void 0;
+      return cell ? cell.resolveTimeframeChoice(tf, fallback) : fallback;
+    };
     registerBuiltinLayouts();
     registerBuiltinChartTypes();
     const hostEl = typeof container === "string" ? document.querySelector(container) : container;
@@ -10375,7 +10424,6 @@ var VelaWorkspace = class {
     void this.feed.ready().then(() => {
       if (this.destroyed) return;
       this.refreshRetention();
-      if (this.activeId) this.projectTimeframeControls(this.active);
     });
     this.symbolPicker = new SymbolPicker({
       ...opts.symbolPicker,
@@ -10403,14 +10451,13 @@ var VelaWorkspace = class {
       }
     }) : null;
     const picker = this.indicatorPicker;
-    this.tfQuick = new TimeframeQuick({
+    this.tfQuick = createWorkspaceTimeframeQuick({
       host: this.root,
       i18n: this.localeState,
-      resolveTimeframe: (tf, canonical) => this.resolveTimeframeChoice(tf, canonical),
       onApply: (tf) => this.setActiveTimeframe(tf),
       onOpenChange: (open) => this.trackDialog(open)
-    });
-    this.topbar = new Topbar(this.root, {
+    }, this.resolveTimeframeChoice);
+    this.topbar = createWorkspaceTopbar(this.root, {
       symbol: "",
       i18n: this.localeState,
       // RAW option, not the resolved lists — the bar distinguishes a host-declared
@@ -10425,7 +10472,6 @@ var VelaWorkspace = class {
       onAlertsClick: (anchor) => this.openAlertsMenu(anchor),
       timeframe: "60",
       timeframes: opts.timeframes ?? DEFAULT_TIMEFRAMES,
-      resolveTimeframe: (tf) => this.resolveTimeframeChoice(tf),
       timeframeFavorites: this.tfFavs,
       priceStyle: "candles",
       onTimeframe: (tf) => this.setActiveTimeframe(tf),
@@ -10452,7 +10498,7 @@ var VelaWorkspace = class {
         glyph: () => layoutGlyph(this.def)
       },
       getContext: () => this.context()
-    });
+    }, this.resolveTimeframeChoice);
     const main = doc.createElement("div");
     main.className = "vela-ws-main";
     const toolbar = buildToolbar(opts.drawings, this.localeState);
@@ -10626,6 +10672,12 @@ var VelaWorkspace = class {
     this.relinkIdenticalDrawings();
     this.syncCellPresentation();
     this.setActiveCell(bootActive != null && this.cellsById.has(bootActive) ? bootActive : this.order[0] ?? null);
+    this.offRegistryChange = this.feed.onRegistryChange(() => {
+      if (this.destroyed) return;
+      for (const cell of this.cellsById.values()) cell.refreshTimeframeMetadata(true);
+      const active = this.activeId ? this.cellsById.get(this.activeId) : void 0;
+      if (active) this.projectTimeframeControls(active);
+    });
     if (opts.autofocus) this.refocusActive();
     if (opts.indicators !== void 0) {
       void resolveIndicators(opts.indicators).then((list) => {
@@ -11263,6 +11315,7 @@ var VelaWorkspace = class {
     if (this.destroyed) return;
     this.flushPendingState();
     this.destroyed = true;
+    this.offRegistryChange();
     this.replay.destroy();
     if (this.persistKey !== null && typeof window !== "undefined") window.removeEventListener("beforeunload", this.onUnload);
     this.resizeObserver?.disconnect();
@@ -12335,18 +12388,12 @@ var VelaWorkspace = class {
     this.topbar.setTimeframe(cell.timeframe);
     this.mobileBar?.setTimeframe(cell.timeframe);
     this.tfDrawer?.refresh();
-    this.tfQuick.refresh();
+    if (this.tfQuick.isOpen) this.tfQuick.relabel();
   }
-  resolveTimeframeChoice(tf, fallback = tf) {
-    const cell = this.activeId ? this.cellsById.get(this.activeId) : void 0;
-    return cell ? cell.resolveTimeframeChoice(tf, fallback) : fallback;
-  }
-  /** All timeframe controls act on the current cell, including a choice from a menu already open. */
+  /** The controls resolve the choice again on activation before passing it here. */
   setActiveTimeframe(tf) {
-    const choice = this.resolveTimeframeChoice(tf);
-    if (choice === null) return;
     this.bottombar?.setActiveRange(null);
-    this.active.setTimeframe(choice);
+    this.active.setTimeframe(tf);
   }
   /** Star/unstar a timeframe — a WORKSPACE preference (one chip row, whatever the
    *  active cell); the topbar follows and the set persists with the document. */
@@ -12428,7 +12475,7 @@ var VelaWorkspace = class {
     this.tfDrawer ?? (this.tfDrawer = new TimeframeDrawer({
       host: this.root,
       timeframes: this.opts.timeframes ?? DEFAULT_TIMEFRAMES,
-      resolveTimeframe: (tf) => this.resolveTimeframeChoice(tf),
+      resolveTimeframe: this.resolveTimeframeChoice,
       ranges: RANGE_PRESETS,
       currentTimeframe: () => this.active.timeframe,
       activeRange: () => this.active.activeRangeId,

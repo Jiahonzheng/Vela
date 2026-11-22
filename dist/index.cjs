@@ -8983,6 +8983,36 @@ function validateMark(mark) {
   return { ...mark, glyph: { ...mark.glyph } };
 }
 
+// src/core/data-unavailable.ts
+var NAME = "DataUnavailableError";
+var DataUnavailableError = class extends Error {
+  constructor(details, message) {
+    super(message ?? dataUnavailableMessage(details));
+    this.name = NAME;
+    this.reason = details.reason;
+    if (details.symbol !== void 0) this.symbol = details.symbol;
+    if (details.timeframe !== void 0) this.timeframe = details.timeframe;
+    if (details.finest !== void 0) this.finest = details.finest;
+    if (details.default !== void 0) this.default = details.default;
+  }
+};
+function dataUnavailableMessage(d) {
+  const what = d.symbol ?? "The series";
+  if (d.reason === "timeframe") {
+    const hints = [];
+    if (d.finest !== void 0) hints.push(`its finest timeframe is ${d.finest}`);
+    if (d.default !== void 0 && d.default !== d.finest) hints.push(`its default timeframe is ${d.default}`);
+    return `${what} is not served at ${d.timeframe ?? "this timeframe"}${hints.length > 0 ? `; ${hints.join(", ")}` : ""}`;
+  }
+  return `${what}${d.timeframe !== void 0 ? ` at ${d.timeframe}` : ""} is not available (${d.reason})`;
+}
+var optionalString = (v) => v === void 0 || typeof v === "string";
+function isDataUnavailableError(e) {
+  if (typeof e !== "object" || e === null) return false;
+  const o = e;
+  return o.name === NAME && typeof o.reason === "string" && typeof o.message === "string" && optionalString(o.symbol) && optionalString(o.timeframe) && optionalString(o.finest) && optionalString(o.default);
+}
+
 // src/data/timeframe.ts
 var NAMED_TF_MS = { D: 864e5, W: 6048e5, M: 2592e6 };
 var UNIT_MS = { s: 1e3, m: 6e4, h: 36e5, d: 864e5, w: 6048e5, M: 2592e6 };
@@ -9442,36 +9472,6 @@ var ProviderRegistry = class {
   }
 };
 
-// src/core/data-unavailable.ts
-var NAME = "DataUnavailableError";
-var DataUnavailableError = class extends Error {
-  constructor(details, message) {
-    super(message ?? dataUnavailableMessage(details));
-    this.name = NAME;
-    this.reason = details.reason;
-    if (details.symbol !== void 0) this.symbol = details.symbol;
-    if (details.timeframe !== void 0) this.timeframe = details.timeframe;
-    if (details.finest !== void 0) this.finest = details.finest;
-    if (details.default !== void 0) this.default = details.default;
-  }
-};
-function dataUnavailableMessage(d) {
-  const what = d.symbol ?? "The series";
-  if (d.reason === "timeframe") {
-    const hints = [];
-    if (d.finest !== void 0) hints.push(`its finest timeframe is ${d.finest}`);
-    if (d.default !== void 0 && d.default !== d.finest) hints.push(`its default timeframe is ${d.default}`);
-    return `${what} is not served at ${d.timeframe ?? "this timeframe"}${hints.length > 0 ? `; ${hints.join(", ")}` : ""}`;
-  }
-  return `${what}${d.timeframe !== void 0 ? ` at ${d.timeframe}` : ""} is not available (${d.reason})`;
-}
-var optionalString = (v) => v === void 0 || typeof v === "string";
-function isDataUnavailableError(e) {
-  if (typeof e !== "object" || e === null) return false;
-  const o = e;
-  return o.name === NAME && typeof o.reason === "string" && typeof o.message === "string" && optionalString(o.symbol) && optionalString(o.timeframe) && optionalString(o.finest) && optionalString(o.default);
-}
-
 // src/chart-types/registry.ts
 var RANGE_MIN = msg("chart.settings.rangeMin", "{label} — min");
 var RANGE_MAX = msg("chart.settings.rangeMax", "{label} — max");
@@ -9719,6 +9719,8 @@ var EngineOrchestrator = class _EngineOrchestrator {
     /** Invalidates detached async work (backfill loops, in-flight loads, gap heals):
      *  bumped by init(), setMarket() and destroy(). */
     this.generation = 0;
+    /** Invalidates the starting native's viewport when the current series is replaced. */
+    this.seriesGeneration = 0;
     /** Aborts the in-flight PROGRESSIVE load's source polling on supersession — an
      *  abandoned stream left polling to its own budget starves the browser's per-host
      *  connection pool, and the NEXT symbol's very first fetch with it (measured). */
@@ -9892,8 +9894,9 @@ var EngineOrchestrator = class _EngineOrchestrator {
   }
   /** Bump the generation — superseding every detached continuation — and release
    *  superseded setMarket awaiters so their promises resolve instead of hanging. */
-  bumpGeneration() {
+  bumpGeneration(preserveSeries = false) {
     const gen = ++this.generation;
+    if (!preserveSeries) this.seriesGeneration = gen;
     this.progressiveAbort?.abort();
     this.progressiveAbort = null;
     for (const w of this.supersedeWaiters.splice(0)) w();
@@ -10174,7 +10177,7 @@ var EngineOrchestrator = class _EngineOrchestrator {
     const sessionOnly = identityChanged && next.session !== void 0 && next.data === void 0 && (next.symbol === void 0 || next.symbol === m.symbol) && (next.timeframe === void 0 || next.timeframe === m.timeframe);
     const carried = sessionOnly && next.visibleRange === void 0 ? this.currentVisibleRange() : void 0;
     const carriedCount = carried ? this.rawBars.filter((b) => b.time >= carried.left && b.time <= carried.right).length : 0;
-    const gen = this.bumpGeneration();
+    const gen = this.bumpGeneration(depthOnly);
     this.switchingMarket = true;
     try {
       this.stopLive();
@@ -11631,11 +11634,11 @@ var EngineOrchestrator = class _EngineOrchestrator {
           if (alive && record.renderHandle && !record.hidden) this.renderer.setIndicatorStatus?.(record.renderHandle, status);
         }
       };
-      const generation = this.generation;
+      const seriesGeneration = this.seriesGeneration;
       native.instance.start(ctx, record.inputValues);
       if (!alive) return;
       native.started = true;
-      if (!record.hidden && this.generation === generation && native.descriptor.reactsToViewport) {
+      if (!record.hidden && this.seriesGeneration === seriesGeneration && native.descriptor.reactsToViewport) {
         const range = this.renderer.getVisibleRange();
         if (range) this.notifyNativeViewport(record, range, this.viewportRevision);
         else this.nativeViewportRevisions.set(native.instance, this.viewportRevision);
@@ -12902,10 +12905,16 @@ var MultiProviderFeed = class {
   }
   // ── Registry surface (driven by chart.data / DataControl) ──────────────
   registerProvider(name, provider) {
+    this.invalidateSymbolInfo(name);
     return this.registry.register(name, provider);
   }
   unregisterProvider(name) {
+    this.invalidateSymbolInfo(name);
     this.registry.unregister(name);
+  }
+  /** @internal Watch registrations, index settlement and removals. */
+  onRegistryChange(cb) {
+    return this.registry.onChange(cb);
   }
   providers() {
     return this.registry.names().map((n) => this.registry.infoOf(n));
@@ -12964,6 +12973,12 @@ var MultiProviderFeed = class {
     if (!resolved4) return void 0;
     return this.fetchSymbolInfo(resolved4);
   }
+  invalidateSymbolInfo(name) {
+    const prefix = symKey({ provider: name.trim().toLowerCase(), ticker: "" });
+    for (const cache2 of [this.symInfoCache, this.symInfoInflight]) {
+      for (const key of cache2.keys()) if (key.startsWith(prefix)) cache2.delete(key);
+    }
+  }
   /**
    * One round trip per symbol, shared. A market switch probes this metadata from five
    * places at once (the bar load's prefetch, the renderer's tick size, the market-status
@@ -12982,13 +12997,14 @@ var MultiProviderFeed = class {
     if (hit && Date.now() - hit.at < SYMBOL_INFO_TTL_MS) return Promise.resolve(hit.info);
     const inflight = this.symInfoInflight.get(key);
     if (inflight) return inflight;
-    const getSymbolInfo = this.registry.get(resolved4.provider)?.getSymbolInfo;
-    if (!getSymbolInfo) return Promise.resolve(void 0);
-    const p = Promise.resolve(getSymbolInfo.call(this.registry.get(resolved4.provider), resolved4.ticker)).then((info) => {
+    const provider = this.registry.get(resolved4.provider);
+    if (!provider?.getSymbolInfo) return Promise.resolve(void 0);
+    const p = Promise.resolve(provider.getSymbolInfo(resolved4.ticker)).then((info) => {
+      if (this.symInfoInflight.get(key) !== p) return void 0;
       if (info) this.symInfoCache.set(key, { info, at: Date.now() });
       return info;
     }).finally(() => {
-      this.symInfoInflight.delete(key);
+      if (this.symInfoInflight.get(key) === p) this.symInfoInflight.delete(key);
     });
     this.symInfoInflight.set(key, p);
     return p;
@@ -21213,8 +21229,10 @@ function isTimeLabelWithinAxis(x, width) {
   return x >= TIME_LABEL_EDGE_INSET && x <= width - TIME_LABEL_EDGE_INSET;
 }
 function viewportTimeTicks(coords, timeZone, target = DEFAULT_TIME_TICK_TARGET, fmt = ENGLISH_FORMAT) {
-  const { from, to } = coords.visibleTimeRange();
-  const offset = tzOffsetMs((from + to) / 2, displayZone(timeZone, coords.barInterval));
+  const range = coords.visibleTimeRange();
+  const { from, to } = range;
+  const midpoint = Math.floor((from + to) / (2 * SEC)) * SEC;
+  const offset = tzOffsetMs(midpoint, displayZone(timeZone, coords.barInterval));
   const firstBar = coords.logicalToTime(0);
   const inGap = (time) => coords.isInCompressedGap(time);
   const ticks = timeTickCandidates(from, to, target, offset, firstBar, inGap);
@@ -21222,7 +21240,7 @@ function viewportTimeTicks(coords, timeZone, target = DEFAULT_TIME_TICK_TARGET, 
   if (coords.barInterval <= 0 || coords.barInterval >= DAY2) return ticks.map(format);
   const gridTicks = target === DEFAULT_TIME_TICK_TARGET ? ticks : timeTickCandidates(from, to, DEFAULT_TIME_TICK_TARGET, offset, firstBar, inGap);
   const ordinaryDate = (tick) => tick.unit === "day" && new Date(tick.time + offset).getUTCDate() !== 1;
-  const replacements = coalescedGapDates(coords, gridTicks, ordinaryDate);
+  const replacements = coalescedGapDates(coords, gridTicks, ordinaryDate, offset, range);
   if (replacements.size === 0) return ticks.map(format);
   const selected = ticks.filter((tick) => !ordinaryDate(tick) || !inGap(tick.time) || !replacements.has(Math.floor(coords.timeToLogical(tick.time)))).map(format);
   for (const date of replacements.values()) {
@@ -21234,16 +21252,12 @@ function viewportTimeTicks(coords, timeZone, target = DEFAULT_TIME_TICK_TARGET, 
   }
   return selected.sort((a, b) => a.time - b.time);
 }
-function coalescedGapDates(coords, gridTicks, ordinaryDate) {
+function coalescedGapDates(coords, gridTicks, ordinaryDate, offsetMs, range) {
   const datesByGap = /* @__PURE__ */ new Map();
-  const datesOnBars = /* @__PURE__ */ new Map();
   for (const tick of gridTicks) {
     if (tick.unit !== "day" && tick.unit !== "month" && tick.unit !== "year") continue;
+    if (!coords.isInCompressedGap(tick.time)) continue;
     const slot = Math.floor(coords.timeToLogical(tick.time));
-    if (!coords.isInCompressedGap(tick.time)) {
-      datesOnBars.set(slot, tick);
-      continue;
-    }
     const dates = datesByGap.get(slot);
     if (dates) dates.push(tick);
     else datesByGap.set(slot, [tick]);
@@ -21252,9 +21266,15 @@ function coalescedGapDates(coords, gridTicks, ordinaryDate) {
   for (const [slot, dates] of datesByGap) {
     const ordinary = dates.filter(ordinaryDate);
     if (ordinary.length < 2) continue;
-    const reopening = datesOnBars.get(slot + 1);
     const landmarks = dates.filter((tick) => !ordinaryDate(tick)).reverse();
-    const ranked = [...reopening ? [reopening] : [], ...landmarks, ...ordinary.reverse()];
+    const ranked = [...landmarks, ...ordinary.reverse()];
+    const nextBar = coords.logicalToTime(slot + 1);
+    const reopeningDate = Math.floor((nextBar + offsetMs) / DAY2) * DAY2 - offsetMs;
+    if (reopeningDate >= range.from && reopeningDate <= range.to && (reopeningDate === nextBar || coords.isInCompressedGap(reopeningDate) && Math.floor(coords.timeToLogical(reopeningDate)) === slot) && !ranked.some((tick) => tick.time === reopeningDate)) {
+      const monthStart2 = new Date(reopeningDate + offsetMs).getUTCDate() === 1;
+      const reopening = gridTicks.find((tick) => tick.time === reopeningDate) ?? { time: reopeningDate, unit: monthStart2 ? "month" : "day", major: monthStart2 };
+      ranked.splice(reopeningDate === nextBar ? 0 : landmarks.length, 0, reopening);
+    }
     const visible = ranked.find((tick) => isTimeLabelWithinAxis(coords.timeToX(tick.time), coords.width));
     replacements.set(slot, visible ?? ranked[0]);
   }

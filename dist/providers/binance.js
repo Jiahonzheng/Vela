@@ -1,4 +1,6 @@
 import { ledgerCryptoIconUrl, baseOf } from '../chunk-W4EJWLEO.js';
+import { minuteBarTimeframe } from '../chunk-IXLGXG62.js';
+import '../chunk-UGLBJVMQ.js';
 
 // src/data/providers/binance/BinanceProvider.ts
 var SPOT_BASE = "https://api.binance.com/api/v3";
@@ -124,15 +126,14 @@ var BinanceProvider = class {
       displayName: "Binance",
       requiresApiKey: false,
       supportedTimeframes: SUPPORTED_TIMEFRAMES,
-      timeframes: { finest: "1" },
       capabilities: { enumerate: true, stream: true, symbolInfo: true }
     };
   }
   async getBars(ticker, timeframe, range) {
+    const tf = normalizeTf(minuteBarTimeframe(ticker, timeframe));
     try {
       const { apiSymbol, isFutures } = parseTicker(ticker);
       const base = isFutures ? FUTURES_BASE : await this.spotBase();
-      const tf = normalizeTf(timeframe);
       const nativeInterval = TF_TO_INTERVAL[tf];
       if (nativeInterval) {
         return dedupeSorted(klinesToOHLCV(await this.fetchKlines(base, apiSymbol, nativeInterval, range)));

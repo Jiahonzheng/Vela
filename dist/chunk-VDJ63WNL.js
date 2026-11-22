@@ -6514,36 +6514,6 @@ registerDrawingType({
   create: (init) => new Liquidity(init)
 });
 
-// src/core/data-unavailable.ts
-var NAME = "DataUnavailableError";
-var DataUnavailableError = class extends Error {
-  constructor(details, message) {
-    super(message ?? dataUnavailableMessage(details));
-    this.name = NAME;
-    this.reason = details.reason;
-    if (details.symbol !== void 0) this.symbol = details.symbol;
-    if (details.timeframe !== void 0) this.timeframe = details.timeframe;
-    if (details.finest !== void 0) this.finest = details.finest;
-    if (details.default !== void 0) this.default = details.default;
-  }
-};
-function dataUnavailableMessage(d) {
-  const what = d.symbol ?? "The series";
-  if (d.reason === "timeframe") {
-    const hints = [];
-    if (d.finest !== void 0) hints.push(`its finest timeframe is ${d.finest}`);
-    if (d.default !== void 0 && d.default !== d.finest) hints.push(`its default timeframe is ${d.default}`);
-    return `${what} is not served at ${d.timeframe ?? "this timeframe"}${hints.length > 0 ? `; ${hints.join(", ")}` : ""}`;
-  }
-  return `${what}${d.timeframe !== void 0 ? ` at ${d.timeframe}` : ""} is not available (${d.reason})`;
-}
-var optionalString = (v) => v === void 0 || typeof v === "string";
-function isDataUnavailableError(e) {
-  if (typeof e !== "object" || e === null) return false;
-  const o = e;
-  return o.name === NAME && typeof o.reason === "string" && typeof o.message === "string" && optionalString(o.symbol) && optionalString(o.timeframe) && optionalString(o.finest) && optionalString(o.default);
-}
-
 // src/chart-types/registry.ts
 var RANGE_MIN = msg("chart.settings.rangeMin", "{label} — min");
 var RANGE_MAX = msg("chart.settings.rangeMax", "{label} — max");
@@ -7658,4 +7628,4 @@ var SidePanel = class {
   }
 };
 
-export { AnchoredVwap, ArrowMark, Box, CONTEXT_MENU_BUILTIN_ORDER, Callout, CalloutBase, Comment, DEDEKIND_CURVATURE_OPTIONS, DEFAULT_DRAWING_COLOR, DEFAULT_PANEL_MAX_WIDTH, DEFAULT_PANEL_MIN_WIDTH, DEFAULT_PANEL_ORDER, DEFAULT_PANEL_WIDTH, DIRECTION_OPTIONS, DataUnavailableError, DedekindTessellation, Drawing, FIB_PRESETS, FibLevels, FibRatios, FibRetracement, FibSpiral, FixedRangeVolumeProfile, GANN_SQUARE_ARCS, GLYPH_OPTIONS, GannSquare, GlyphStamp, LINE_STYLE_OPTIONS, Liquidity, MACH_NUMBER_OPTIONS, MACH_WAVE_COUNT_OPTIONS, MachFigure, Magnifier, MeasureBox, Note, OVERRIDABLE_TOPBAR_IDS, PatternDrawing, PositionTool, PriceActionZone, PriceLabel, PriceNote, RadialFib, RegressionChannel, SIDEBAR_ACTIONS_SLOT, SIDEBAR_DEFAULT_BOTTOM, SIDEBAR_DEFAULT_TOP, SIDEBAR_PANELS_SLOT, SIDEBAR_SEPARATOR, STAMP_SIZE_OPTIONS, SegmentDrawing, SidePanel, Signpost, TEXT_SIZE_OPTIONS, TIMEFRAME_BANDS, TIMEZONES, TOPBAR_BUILTIN_IDS, TOPBAR_DEFAULT_LEFT, TOPBAR_DEFAULT_RIGHT, TextLabel, TrendLine, bodyItems, chartType, chartTypes, clampPanelWidth, composeMenu, composeSidebar, createDrawing, dataUnavailableMessage, defaultText, deserializeDrawing, drawingActions, drawingActionsProviderFor, drawingTypeEntries, drawingTypeEntry, drawingTypes, foldBaseModulation, getDrawingType, getNativeIndicator, injectChromeStyles, inputDeltas, inputVisible, invertWrite, isDataUnavailableError, isExchangeTimezone, isLineLikeSeries, isTransparentStrokeColor, joinMultiValue, legendActions, legendActionsProviderFor, legendCallouts, legendCalloutsProviderFor, lineSegmentIntersection, magnifierTimeframeLabel, magnifierTimeframesBelow, matchFibPreset, mobilePlacement, nativeIndicatorDescriptors, nativeIndicatorEntries, nativeIndicatorEntry, nativeIndicatorTypes, nativeInstanceChannel, normalizeSettingsRow, normalizeTimezone, paneScaleAt, parseMultiValue, pinnedTopbarActionIds, priceAxisItems, priceOnlyState, priceStyleApplies, registerChartType, registerDefaultEngine, registerDrawingAction, registerDrawingType, registerLegendAction, registerLegendCallout, registerNativeIndicator, registerRendererDefaults, registerRendererLayer, registerShellDefaults, registerSidePanel, registerStatePersistence, registerSymbolRanking, registerWidgetAction, registerWidgetAttachment, rendererDefaults, rendererLayers, resetDrawingSettings, resolveEngines, resolveTimezone, resolveTopbarComposition, sanitizeShowOn, scaleChoiceOf, scaleWrites, seriesInScale, seriesShownOn, settingsRowValueKeys, settingsRowVisible, settingsSectionOf, shellDefaults, shownOnTimeframe, shownPriceStyle, sidePanels, stableSeriesId, statePersistenceHandlers, symbolRanking, tickerModifierIds, timeAxisItems, timeframeBandOf, timezoneMenuRows, topbarActionOverride, topbarHas, tzButtonLabel, tzMenuLabel, tzOffset, unregisterChartType, unregisterDefaultEngine, unregisterDrawingAction, unregisterLegendAction, unregisterLegendCallout, unregisterNativeIndicator, unregisterRendererDefaults, unregisterRendererLayer, unregisterShellDefaults, unregisterSidePanel, unregisterStatePersistence, unregisterWidgetAction, unregisterWidgetAttachment, widgetActions, widgetAttachments };
+export { AnchoredVwap, ArrowMark, Box, CONTEXT_MENU_BUILTIN_ORDER, Callout, CalloutBase, Comment, DEDEKIND_CURVATURE_OPTIONS, DEFAULT_DRAWING_COLOR, DEFAULT_PANEL_MAX_WIDTH, DEFAULT_PANEL_MIN_WIDTH, DEFAULT_PANEL_ORDER, DEFAULT_PANEL_WIDTH, DIRECTION_OPTIONS, DedekindTessellation, Drawing, FIB_PRESETS, FibLevels, FibRatios, FibRetracement, FibSpiral, FixedRangeVolumeProfile, GANN_SQUARE_ARCS, GLYPH_OPTIONS, GannSquare, GlyphStamp, LINE_STYLE_OPTIONS, Liquidity, MACH_NUMBER_OPTIONS, MACH_WAVE_COUNT_OPTIONS, MachFigure, Magnifier, MeasureBox, Note, OVERRIDABLE_TOPBAR_IDS, PatternDrawing, PositionTool, PriceActionZone, PriceLabel, PriceNote, RadialFib, RegressionChannel, SIDEBAR_ACTIONS_SLOT, SIDEBAR_DEFAULT_BOTTOM, SIDEBAR_DEFAULT_TOP, SIDEBAR_PANELS_SLOT, SIDEBAR_SEPARATOR, STAMP_SIZE_OPTIONS, SegmentDrawing, SidePanel, Signpost, TEXT_SIZE_OPTIONS, TIMEFRAME_BANDS, TIMEZONES, TOPBAR_BUILTIN_IDS, TOPBAR_DEFAULT_LEFT, TOPBAR_DEFAULT_RIGHT, TextLabel, TrendLine, bodyItems, chartType, chartTypes, clampPanelWidth, composeMenu, composeSidebar, createDrawing, defaultText, deserializeDrawing, drawingActions, drawingActionsProviderFor, drawingTypeEntries, drawingTypeEntry, drawingTypes, foldBaseModulation, getDrawingType, getNativeIndicator, injectChromeStyles, inputDeltas, inputVisible, invertWrite, isExchangeTimezone, isLineLikeSeries, isTransparentStrokeColor, joinMultiValue, legendActions, legendActionsProviderFor, legendCallouts, legendCalloutsProviderFor, lineSegmentIntersection, magnifierTimeframeLabel, magnifierTimeframesBelow, matchFibPreset, mobilePlacement, nativeIndicatorDescriptors, nativeIndicatorEntries, nativeIndicatorEntry, nativeIndicatorTypes, nativeInstanceChannel, normalizeSettingsRow, normalizeTimezone, paneScaleAt, parseMultiValue, pinnedTopbarActionIds, priceAxisItems, priceOnlyState, priceStyleApplies, registerChartType, registerDefaultEngine, registerDrawingAction, registerDrawingType, registerLegendAction, registerLegendCallout, registerNativeIndicator, registerRendererDefaults, registerRendererLayer, registerShellDefaults, registerSidePanel, registerStatePersistence, registerSymbolRanking, registerWidgetAction, registerWidgetAttachment, rendererDefaults, rendererLayers, resetDrawingSettings, resolveEngines, resolveTimezone, resolveTopbarComposition, sanitizeShowOn, scaleChoiceOf, scaleWrites, seriesInScale, seriesShownOn, settingsRowValueKeys, settingsRowVisible, settingsSectionOf, shellDefaults, shownOnTimeframe, shownPriceStyle, sidePanels, stableSeriesId, statePersistenceHandlers, symbolRanking, tickerModifierIds, timeAxisItems, timeframeBandOf, timezoneMenuRows, topbarActionOverride, topbarHas, tzButtonLabel, tzMenuLabel, tzOffset, unregisterChartType, unregisterDefaultEngine, unregisterDrawingAction, unregisterLegendAction, unregisterLegendCallout, unregisterNativeIndicator, unregisterRendererDefaults, unregisterRendererLayer, unregisterShellDefaults, unregisterSidePanel, unregisterStatePersistence, unregisterWidgetAction, unregisterWidgetAttachment, widgetActions, widgetAttachments };

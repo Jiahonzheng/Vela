@@ -1,4 +1,6 @@
 import { ledgerCryptoIconUrl, baseOf } from '../chunk-W4EJWLEO.js';
+import { minuteBarTimeframe } from '../chunk-IXLGXG62.js';
+import '../chunk-UGLBJVMQ.js';
 
 // src/data/providers/hyperliquid/HyperliquidProvider.ts
 var INFO_URL = "https://api.hyperliquid.xyz/info";
@@ -132,14 +134,13 @@ var HyperliquidProvider = class {
       displayName: "Hyperliquid",
       requiresApiKey: false,
       supportedTimeframes: SUPPORTED_TIMEFRAMES,
-      timeframes: { finest: "1" },
       capabilities: { enumerate: true, stream: true, symbolInfo: true }
     };
   }
   async getBars(ticker, timeframe, range) {
+    const tf = normalizeTf(minuteBarTimeframe(ticker, timeframe));
     try {
       const coin = await this.resolveCoin(ticker);
-      const tf = normalizeTf(timeframe);
       const nativeInterval = TF_TO_INTERVAL[tf];
       if (nativeInterval) {
         return dedupeSorted((await this.fetchCandles(coin, nativeInterval, tfMs(tf), range)).map(candleToOHLCV));

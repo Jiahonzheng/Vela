@@ -1,8 +1,8 @@
-import { V as Vela, W as WidgetContext, T as TopbarComposition, af as SidePanelButton, a2 as PanelDockView } from './contributions-CmH4S0zz.cjs';
-export { C as CellStateContext, j as ContextMenuPointer, b3 as DEFAULT_PANEL_ORDER, E as ExternalIndicatorEntry, J as FullscreenControl, a1 as OVERRIDABLE_TOPBAR_IDS, b4 as ResolvedTopbarComposition, b5 as SIDEBAR_ACTIONS_SLOT, aa as SIDEBAR_DEFAULT_BOTTOM, ab as SIDEBAR_DEFAULT_TOP, b6 as SIDEBAR_PANELS_SLOT, b7 as SIDEBAR_SEPARATOR, ag as SidePanelDescriptor, ah as SidePanelHandle, d as SidebarComposition, aj as SidebarControl, b8 as SidebarLayout, b9 as SidebarSource, ak as StatePersistenceHandler, ao as SymbolRankingHook, ba as TOPBAR_BUILTIN_IDS, bb as TOPBAR_DEFAULT_LEFT, bc as TOPBAR_DEFAULT_RIGHT, au as WidgetActionDescriptor, av as WidgetActionTarget, aw as WidgetAttachment, ax as composeSidebar, bd as pinnedTopbarActionIds, aK as registerSidePanel, aL as registerStatePersistence, aM as registerSymbolRanking, aN as registerWidgetAction, aO as registerWidgetAttachment, be as resolveTopbarComposition, aQ as sidePanels, aR as statePersistenceHandlers, aS as symbolRanking, aT as topbarActionOverride, bf as topbarHas, aZ as unregisterSidePanel, a_ as unregisterStatePersistence, a$ as unregisterWidgetAction, b0 as unregisterWidgetAttachment, b1 as widgetActions, b2 as widgetAttachments } from './contributions-CmH4S0zz.cjs';
-import { c as VelaOptions, e as MarketSession, H as DataWindowReadout } from './DataProvider-zoHp39et.cjs';
-import { c as VelaShellOptions, W as WidgetHistory, b as RangePreset, f as WorkspaceState, a as StatuslinePart, P as PanelsState } from './statusline-model-Bqa9_0ND.cjs';
-export { B as Bottombar, m as BottombarOptions, C as CellState, g as ChartState, D as DrawingToolsState, I as IndicatorLoader, n as IndicatorManifest, o as IndicatorManifestEntry, p as RANGE_PRESETS, R as ResolvedIndicator, h as SYMBOL_PICKER_DEFAULT_CATEGORIES, q as SymbolPicker, i as SymbolPickerCategory, j as SymbolPickerConfig, r as SymbolPickerOptions, V as VelaStorage, t as WidgetStorage, k as decodeState, l as encodeState, u as filterSymbols, v as localStorageAdapter, w as resolveIndicators, s as sanitizeState } from './statusline-model-Bqa9_0ND.cjs';
+import { V as Vela, W as WidgetContext, T as TopbarComposition, af as SidePanelButton, a2 as PanelDockView } from './contributions-A_i121-l.cjs';
+export { C as CellStateContext, j as ContextMenuPointer, b3 as DEFAULT_PANEL_ORDER, E as ExternalIndicatorEntry, J as FullscreenControl, a1 as OVERRIDABLE_TOPBAR_IDS, b4 as ResolvedTopbarComposition, b5 as SIDEBAR_ACTIONS_SLOT, aa as SIDEBAR_DEFAULT_BOTTOM, ab as SIDEBAR_DEFAULT_TOP, b6 as SIDEBAR_PANELS_SLOT, b7 as SIDEBAR_SEPARATOR, ag as SidePanelDescriptor, ah as SidePanelHandle, d as SidebarComposition, aj as SidebarControl, b8 as SidebarLayout, b9 as SidebarSource, ak as StatePersistenceHandler, ao as SymbolRankingHook, ba as TOPBAR_BUILTIN_IDS, bb as TOPBAR_DEFAULT_LEFT, bc as TOPBAR_DEFAULT_RIGHT, au as WidgetActionDescriptor, av as WidgetActionTarget, aw as WidgetAttachment, ax as composeSidebar, bd as pinnedTopbarActionIds, aK as registerSidePanel, aL as registerStatePersistence, aM as registerSymbolRanking, aN as registerWidgetAction, aO as registerWidgetAttachment, be as resolveTopbarComposition, aQ as sidePanels, aR as statePersistenceHandlers, aS as symbolRanking, aT as topbarActionOverride, bf as topbarHas, aZ as unregisterSidePanel, a_ as unregisterStatePersistence, a$ as unregisterWidgetAction, b0 as unregisterWidgetAttachment, b1 as widgetActions, b2 as widgetAttachments } from './contributions-A_i121-l.cjs';
+import { c as VelaOptions, e as MarketSession, H as DataWindowReadout } from './DataProvider-MSQ3fzSV.cjs';
+import { c as VelaShellOptions, W as WidgetHistory, b as RangePreset, f as WorkspaceState, a as StatuslinePart, P as PanelsState } from './statusline-model-2PVYMu6x.cjs';
+export { B as Bottombar, m as BottombarOptions, C as CellState, g as ChartState, D as DrawingToolsState, I as IndicatorLoader, n as IndicatorManifest, o as IndicatorManifestEntry, p as RANGE_PRESETS, R as ResolvedIndicator, h as SYMBOL_PICKER_DEFAULT_CATEGORIES, q as SymbolPicker, i as SymbolPickerCategory, j as SymbolPickerConfig, r as SymbolPickerOptions, V as VelaStorage, t as WidgetStorage, k as decodeState, l as encodeState, u as filterSymbols, v as localStorageAdapter, w as resolveIndicators, s as sanitizeState } from './statusline-model-2PVYMu6x.cjs';
 import { a as KeymapManager } from './keymap-Nk4cb7Tm.cjs';
 import { T as Translator, b as LocalizationOptions, c as LocaleChangedEvent, M as MessageLike, i as MessageDescriptor } from './types-CsUd831-.cjs';
 import { d as SidePanel } from './side-panel-DfLMHSx9.cjs';
@@ -63,6 +63,29 @@ type LayoutPickerShape = {
     cols: number;
 };
 
+interface ParsedTimeframe {
+    valid: boolean;
+    count?: number;
+    unit?: string;
+    ms?: number;
+    /** What the chart consumes ("180" for 3h). */
+    canonical?: string;
+    /** Human line ("3 months"). */
+    label?: string;
+    /** Compact chip ("3M"). */
+    short?: string;
+}
+/** Parse a typed timeframe string. `valid` is false for empty/garbage input (count ≥ 1).
+ *  The labels read in `i18n`'s language (English without one). */
+declare function parseTimeframe(text: string, i18n?: Translator | null): ParsedTimeframe;
+/** Workspace choices can carry the raw unit separately from quick entry's default value. */
+type TimeframeChoiceResolver = (value: string, fallback?: string) => string | null;
+/** Duration in ms of an existing timeframe value (`1`, `60`, `4h`, `D`, `W`, …), NaN if unknown. */
+declare function timeframeMs(value: string): number;
+/** Compact display label for any timeframe value ("60" → "1h", "D" → "1D"), in `i18n`'s
+ *  language (English without one). */
+declare function timeframeLabel(value: string, i18n?: Translator | null): string;
+
 /** A price style's name, in `i18n`'s language (English without one). */
 declare function priceStyleLabel(id: string, i18n?: Translator | null): string;
 interface TopbarOptions {
@@ -70,7 +93,6 @@ interface TopbarOptions {
     onSymbolClick?: () => void;
     timeframe: string;
     timeframes: readonly string[];
-    resolveTimeframe?: (tf: string) => string | null;
     /** Favorite timeframes — duration-sorted quick-switch chips, stars in the
      *  dropdown rows. Push later changes with {@link Topbar.setTimeframeFavorites}. */
     timeframeFavorites?: readonly string[];
@@ -125,7 +147,8 @@ interface TopbarOptions {
     /** The shell's translator (labels, tooltips, menus). Absent: English. */
     i18n?: Translator;
 }
-declare class Topbar {
+declare class TopbarControl {
+    private readonly resolveTimeframe?;
     readonly el: HTMLElement;
     private readonly symbolEl;
     /** Duration-sorted favorite chips (plus an unstarred current, when needed). */
@@ -180,7 +203,7 @@ declare class Topbar {
     private readonly relabels;
     private get i18n();
     private t;
-    constructor(host: HTMLElement, opts: TopbarOptions);
+    constructor(host: HTMLElement, opts: TopbarOptions, resolveTimeframe?: TimeframeChoiceResolver | undefined);
     setSymbol(symbol: string): void;
     setTimeframe(tf: string): void;
     /** Reflect the favorite-timeframe set — the quick-switch chips and the dropdown stars. */
@@ -224,9 +247,15 @@ declare class Topbar {
     relocalize(): void;
     /** Paint each `.vela-sep` as exactly one device pixel, snapped to the pixel grid. */
     private syncHairlines;
-    private resolveTimeframe;
+    private timeframeValue;
+    private applyTimeframe;
+    private timeframeDisplay;
+    private checkedTimeframe;
     private tfItems;
     private styleItems;
+}
+declare class Topbar extends TopbarControl {
+    constructor(host: HTMLElement, opts: TopbarOptions);
 }
 
 /** How the status line reads a bar out: the four O/H/L/C values (bar-shaped styles),
@@ -471,21 +500,20 @@ declare class IndicatorPicker {
 }
 
 interface TimeframeQuickOptions {
-    resolveTimeframe?: (input: string, canonical: string) => string | null;
     onApply: (canonical: string) => void;
     onOpenChange?: (open: boolean) => void;
     host?: HTMLElement;
     /** The shell's translator. Absent: English. */
     i18n?: Translator;
 }
-declare class TimeframeQuick {
-    private readonly opts;
+declare class TimeframeQuickControl {
+    private readonly resolveChoice?;
     private readonly dialog;
     private readonly input;
     private readonly hint;
     private readonly i18n;
     private t;
-    constructor(opts: TimeframeQuickOptions);
+    constructor(opts: TimeframeQuickOptions, resolveChoice?: TimeframeChoiceResolver | undefined);
     /** The dialog's title in the shell's language, re-read on every open. */
     relabel(): void;
     open(seed?: string): void;
@@ -496,9 +524,11 @@ declare class TimeframeQuick {
     type(text: string): void;
     close(): void;
     destroy(): void;
-    refresh(): void;
     private resolveTimeframe;
     private renderHint;
+}
+declare class TimeframeQuick extends TimeframeQuickControl {
+    constructor(opts: TimeframeQuickOptions);
 }
 
 /** What the dock needs from whatever chrome shows its toggles. */
@@ -836,27 +866,6 @@ declare class ChartContextMenu {
     private builtinItems;
     private run;
 }
-
-interface ParsedTimeframe {
-    valid: boolean;
-    count?: number;
-    unit?: string;
-    ms?: number;
-    /** What the chart consumes ("180" for 3h). */
-    canonical?: string;
-    /** Human line ("3 months"). */
-    label?: string;
-    /** Compact chip ("3M"). */
-    short?: string;
-}
-/** Parse a typed timeframe string. `valid` is false for empty/garbage input (count ≥ 1).
- *  The labels read in `i18n`'s language (English without one). */
-declare function parseTimeframe(text: string, i18n?: Translator | null): ParsedTimeframe;
-/** Duration in ms of an existing timeframe value (`1`, `60`, `4h`, `D`, `W`, …), NaN if unknown. */
-declare function timeframeMs(value: string): number;
-/** Compact display label for any timeframe value ("60" → "1h", "D" → "1D"), in `i18n`'s
- *  language (English without one). */
-declare function timeframeLabel(value: string, i18n?: Translator | null): string;
 
 interface TimezoneEntry {
     value: string;

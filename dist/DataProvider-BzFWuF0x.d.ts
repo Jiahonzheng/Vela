@@ -1,4 +1,4 @@
-import { M as MessageLike, T as Translator, m as TextDirection, b as LocalizationOptions } from './types-CsUd831-.cjs';
+import { M as MessageLike, T as Translator, m as TextDirection, b as LocalizationOptions } from './types-CsUd831-.js';
 import { ThemeSettings, UiTheme } from '@luxalgo/vela-ui/theme';
 
 /**
@@ -2553,8 +2553,8 @@ interface SymbolInfo {
     /**
      * The timeframes the source serves for this symbol. Timeframe strings use the uppercase
      * canonical form: `'1D'` (or `'D'`), `'W'`, `'1M'` (or `'M'`), `'3M'`, `'12M'`, or bare
-     * minutes such as `'60'`. Never lowercase: `'1m'` is one minute, not one month. Absent ⇒
-     * the provider's `timeframes` or `supportedTimeframes` declaration, if any.
+     * minutes such as `'60'`. Keep these strings canonical. When absent, the workspace
+     * offers its usual timeframe choices. `info().supportedTimeframes` is informational.
      */
     timeframes?: {
         /** The finest timeframe served. Every coarser one is served too, unless `list` is present. */
@@ -2724,13 +2724,9 @@ interface ProviderInfo {
     /**
      * Timeframes the provider serves, in the uppercase canonical form of
      * `SymbolInfo.timeframes` (`'1D'`/`'D'`, `'W'`, `'1M'`/`'M'`, bare minutes such as
-     * `'60'`; never lowercase). Used for timeframe choices when neither the symbol nor the
-     * provider supplies a more specific `timeframes` declaration.
+     * `'60'`; never lowercase). Informational; a symbol's own `timeframes` overrides it.
      */
     supportedTimeframes?: readonly string[];
-    /** Provider-wide timeframe limits. Use `finest` without `list` when the feed
-     *  can serve any coarser interval, including by aggregation. A symbol may override it. */
-    timeframes?: SymbolInfo['timeframes'];
     capabilities: ProviderCapabilities;
 }
 /**

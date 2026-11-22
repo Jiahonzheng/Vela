@@ -1,6 +1,6 @@
-import { a as SymbolDescriptor, D as DataProvider, W as WallClock, V as VisibleRangePreset } from './DataProvider-DnONc_Ws.js';
-import { S as ScriptingEngine, T as TopbarComposition, d as SidebarComposition, V as Vela } from './contributions-83tnTOef.js';
-import { M as MessageLike, T as Translator } from './types-CsUd831-.js';
+import { a as SymbolDescriptor, D as DataProvider, W as WallClock, V as VisibleRangePreset } from './DataProvider-MSQ3fzSV.cjs';
+import { S as ScriptingEngine, T as TopbarComposition, d as SidebarComposition, V as Vela } from './contributions-A_i121-l.cjs';
+import { M as MessageLike, T as Translator } from './types-CsUd831-.cjs';
 
 /** The linkable dimensions. `crosshair` mirrors the pointer time onto same-group
  *  cells as GHOST crosshairs (renderers without the optional `setExternalCrosshair`

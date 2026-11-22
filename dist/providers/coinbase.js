@@ -1,4 +1,6 @@
 import { ledgerCryptoIconUrl, baseOf } from '../chunk-W4EJWLEO.js';
+import { minuteBarTimeframe } from '../chunk-IXLGXG62.js';
+import '../chunk-UGLBJVMQ.js';
 
 // src/data/providers/coinbase/RequestGate.ts
 var REAL_CLOCK = {
@@ -177,14 +179,13 @@ var CoinbaseProvider = class {
       displayName: "Coinbase",
       requiresApiKey: false,
       supportedTimeframes: SUPPORTED_TIMEFRAMES,
-      timeframes: { finest: "1" },
       capabilities: { enumerate: true, stream: true, symbolInfo: true }
     };
   }
   async getBars(ticker, timeframe, range) {
+    const tf = normalizeTf(minuteBarTimeframe(ticker, timeframe));
     try {
       const product = parseProductId(ticker);
-      const tf = normalizeTf(timeframe);
       const gran = TF_TO_GRAN[tf];
       if (gran) return dedupeSorted(await this.fetchCandles(product, gran, range));
       if (tf === "W" || tf === "M") {
