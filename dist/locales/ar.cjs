@@ -2435,6 +2435,7 @@ var ar_default = {
   "widget.symbolPicker.search": "البحث عن رمز…",
   "widget.symbolPicker.showContracts": "إظهار العقود",
   "widget.symbolPicker.tab.all": "الكل",
+  "widget.symbolPicker.tab.commodities": "السلع",
   "widget.symbolPicker.tab.crypto": "العملات المشفرة",
   "widget.symbolPicker.tab.etfs": "صناديق ETF",
   "widget.symbolPicker.tab.forex": "الفوركس",

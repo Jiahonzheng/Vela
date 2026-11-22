@@ -2433,6 +2433,7 @@ var tr_default = {
   "widget.symbolPicker.search": "Sembol ara…",
   "widget.symbolPicker.showContracts": "Kontratları göster",
   "widget.symbolPicker.tab.all": "Tümü",
+  "widget.symbolPicker.tab.commodities": "Emtialar",
   "widget.symbolPicker.tab.crypto": "Kripto",
   "widget.symbolPicker.tab.etfs": "ETF'ler",
   "widget.symbolPicker.tab.forex": "Forex",

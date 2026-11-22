@@ -1,9 +1,9 @@
-import { O as OHLCV, V as VisibleRangePreset, b as VisibleRange, c as VelaOptions, I as InputValue, M as MarketDataFeed, d as VelaTheme, N as NativeBackend, e as MarketSession } from './DataProvider-DTq2vs_n.js';
-import { S as SyncSetting, V as VelaStorage, C as CellState, W as WidgetHistory, R as ResolvedIndicator, a as StatuslinePart, b as RangePreset, T as TrackSizes, c as VelaShellOptions, d as SyncOptions, e as SyncKind, f as WorkspaceState } from './statusline-model-CwpH9iDi.js';
-export { g as ChartState, D as DrawingToolsState, P as PanelsState, h as decodeState, i as encodeState, s as sanitizeState } from './statusline-model-CwpH9iDi.js';
-import { a as KeymapManager } from './keymap-CUd8DehI.js';
-import { I as IndicatorHandle, S as ScriptingEngine, W as WidgetContext, V as Vela, E as ExternalIndicatorEntry, R as ReplayState, b as ReplayBounds, c as VelaEventMap, d as ScriptRun } from './contributions-Bv7AR8Ib.js';
-import { b as LocalizationOptions, M as MessageLike, T as Translator, c as LocaleChangedEvent } from './types-CEQPjecV.js';
+import { O as OHLCV, V as VisibleRangePreset, b as VisibleRange, c as VelaOptions, I as InputValue, M as MarketDataFeed, d as VelaTheme, N as NativeBackend, e as MarketSession } from './DataProvider-DnONc_Ws.js';
+import { S as SyncSetting, V as VelaStorage, C as CellState, W as WidgetHistory, R as ResolvedIndicator, a as StatuslinePart, b as RangePreset, T as TrackSizes, c as VelaShellOptions, d as SyncOptions, e as SyncKind, f as WorkspaceState } from './statusline-model-BfkAwyHJ.js';
+export { g as ChartState, D as DrawingToolsState, P as PanelsState, h as SYMBOL_PICKER_DEFAULT_CATEGORIES, i as SymbolPickerCategory, j as SymbolPickerConfig, k as decodeState, l as encodeState, s as sanitizeState } from './statusline-model-BfkAwyHJ.js';
+import { a as KeymapManager } from './keymap-D_nO-7mC.js';
+import { I as IndicatorHandle, S as ScriptingEngine, W as WidgetContext, V as Vela, E as ExternalIndicatorEntry, R as ReplayState, a as ReplayBounds, b as VelaEventMap, c as ScriptRun } from './contributions-83tnTOef.js';
+import { b as LocalizationOptions, M as MessageLike, T as Translator, c as LocaleChangedEvent } from './types-CsUd831-.js';
 import '@luxalgo/vela-ui/theme';
 
 /** The cells that follow `originId` under `setting` — PURE (never includes the origin). */

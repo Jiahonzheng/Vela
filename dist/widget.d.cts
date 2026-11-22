@@ -1,12 +1,12 @@
-import { V as Vela, W as WidgetContext, T as TopbarComposition, af as SidePanelButton, a2 as PanelDockView } from './contributions-Ds7Er8qM.cjs';
-export { C as CellStateContext, j as ContextMenuPointer, b3 as DEFAULT_PANEL_ORDER, E as ExternalIndicatorEntry, J as FullscreenControl, a1 as OVERRIDABLE_TOPBAR_IDS, b4 as ResolvedTopbarComposition, b5 as SIDEBAR_ACTIONS_SLOT, aa as SIDEBAR_DEFAULT_BOTTOM, ab as SIDEBAR_DEFAULT_TOP, b6 as SIDEBAR_PANELS_SLOT, b7 as SIDEBAR_SEPARATOR, ag as SidePanelDescriptor, ah as SidePanelHandle, a as SidebarComposition, aj as SidebarControl, b8 as SidebarLayout, b9 as SidebarSource, ak as StatePersistenceHandler, ao as SymbolRankingHook, ba as TOPBAR_BUILTIN_IDS, bb as TOPBAR_DEFAULT_LEFT, bc as TOPBAR_DEFAULT_RIGHT, au as WidgetActionDescriptor, av as WidgetActionTarget, aw as WidgetAttachment, ax as composeSidebar, bd as pinnedTopbarActionIds, aK as registerSidePanel, aL as registerStatePersistence, aM as registerSymbolRanking, aN as registerWidgetAction, aO as registerWidgetAttachment, be as resolveTopbarComposition, aQ as sidePanels, aR as statePersistenceHandlers, aS as symbolRanking, aT as topbarActionOverride, bf as topbarHas, aZ as unregisterSidePanel, a_ as unregisterStatePersistence, a$ as unregisterWidgetAction, b0 as unregisterWidgetAttachment, b1 as widgetActions, b2 as widgetAttachments } from './contributions-Ds7Er8qM.cjs';
-import { c as VelaOptions, e as MarketSession, a as SymbolDescriptor, H as DataWindowReadout } from './DataProvider-D8zBxnVM.cjs';
-import { c as VelaShellOptions, W as WidgetHistory, b as RangePreset, f as WorkspaceState, a as StatuslinePart, P as PanelsState } from './statusline-model-FC7C40Bz.cjs';
-export { B as Bottombar, j as BottombarOptions, C as CellState, g as ChartState, D as DrawingToolsState, I as IndicatorLoader, k as IndicatorManifest, l as IndicatorManifestEntry, m as RANGE_PRESETS, R as ResolvedIndicator, V as VelaStorage, n as WidgetStorage, h as decodeState, i as encodeState, o as localStorageAdapter, r as resolveIndicators, s as sanitizeState } from './statusline-model-FC7C40Bz.cjs';
-import { a as KeymapManager } from './keymap-B8pTW-nj.cjs';
-import { T as Translator, b as LocalizationOptions, c as LocaleChangedEvent, M as MessageLike, i as MessageDescriptor } from './types-CEQPjecV.cjs';
-import { d as SidePanel } from './side-panel-S4J2AAwf.cjs';
-export { C as CONTEXT_MENU_BUILTIN_ORDER, D as DEFAULT_PANEL_MAX_WIDTH, a as DEFAULT_PANEL_MIN_WIDTH, b as DEFAULT_PANEL_WIDTH, S as SidePanelOptions, c as clampPanelWidth } from './side-panel-S4J2AAwf.cjs';
+import { V as Vela, W as WidgetContext, T as TopbarComposition, af as SidePanelButton, a2 as PanelDockView } from './contributions-CmH4S0zz.cjs';
+export { C as CellStateContext, j as ContextMenuPointer, b3 as DEFAULT_PANEL_ORDER, E as ExternalIndicatorEntry, J as FullscreenControl, a1 as OVERRIDABLE_TOPBAR_IDS, b4 as ResolvedTopbarComposition, b5 as SIDEBAR_ACTIONS_SLOT, aa as SIDEBAR_DEFAULT_BOTTOM, ab as SIDEBAR_DEFAULT_TOP, b6 as SIDEBAR_PANELS_SLOT, b7 as SIDEBAR_SEPARATOR, ag as SidePanelDescriptor, ah as SidePanelHandle, d as SidebarComposition, aj as SidebarControl, b8 as SidebarLayout, b9 as SidebarSource, ak as StatePersistenceHandler, ao as SymbolRankingHook, ba as TOPBAR_BUILTIN_IDS, bb as TOPBAR_DEFAULT_LEFT, bc as TOPBAR_DEFAULT_RIGHT, au as WidgetActionDescriptor, av as WidgetActionTarget, aw as WidgetAttachment, ax as composeSidebar, bd as pinnedTopbarActionIds, aK as registerSidePanel, aL as registerStatePersistence, aM as registerSymbolRanking, aN as registerWidgetAction, aO as registerWidgetAttachment, be as resolveTopbarComposition, aQ as sidePanels, aR as statePersistenceHandlers, aS as symbolRanking, aT as topbarActionOverride, bf as topbarHas, aZ as unregisterSidePanel, a_ as unregisterStatePersistence, a$ as unregisterWidgetAction, b0 as unregisterWidgetAttachment, b1 as widgetActions, b2 as widgetAttachments } from './contributions-CmH4S0zz.cjs';
+import { c as VelaOptions, e as MarketSession, H as DataWindowReadout } from './DataProvider-zoHp39et.cjs';
+import { c as VelaShellOptions, W as WidgetHistory, b as RangePreset, f as WorkspaceState, a as StatuslinePart, P as PanelsState } from './statusline-model-Bqa9_0ND.cjs';
+export { B as Bottombar, m as BottombarOptions, C as CellState, g as ChartState, D as DrawingToolsState, I as IndicatorLoader, n as IndicatorManifest, o as IndicatorManifestEntry, p as RANGE_PRESETS, R as ResolvedIndicator, h as SYMBOL_PICKER_DEFAULT_CATEGORIES, q as SymbolPicker, i as SymbolPickerCategory, j as SymbolPickerConfig, r as SymbolPickerOptions, V as VelaStorage, t as WidgetStorage, k as decodeState, l as encodeState, u as filterSymbols, v as localStorageAdapter, w as resolveIndicators, s as sanitizeState } from './statusline-model-Bqa9_0ND.cjs';
+import { a as KeymapManager } from './keymap-Nk4cb7Tm.cjs';
+import { T as Translator, b as LocalizationOptions, c as LocaleChangedEvent, M as MessageLike, i as MessageDescriptor } from './types-CsUd831-.cjs';
+import { d as SidePanel } from './side-panel-DfLMHSx9.cjs';
+export { C as CONTEXT_MENU_BUILTIN_ORDER, D as DEFAULT_PANEL_MAX_WIDTH, a as DEFAULT_PANEL_MIN_WIDTH, b as DEFAULT_PANEL_WIDTH, S as SidePanelOptions, c as clampPanelWidth } from './side-panel-DfLMHSx9.cjs';
 import '@luxalgo/vela-ui/theme';
 
 interface VelaWidgetOptions extends VelaOptions, VelaShellOptions {
@@ -422,74 +422,6 @@ declare class Watermark {
     /** Measure the text at the cap and shrink it to the price pane's width. */
     private fit;
     destroy(): void;
-}
-
-declare function filterSymbols(list: readonly SymbolDescriptor[], query: string, limit?: number, top?: readonly string[] | false): SymbolDescriptor[];
-interface SymbolPickerOptions {
-    /** `provider` is the venue of the chosen row — absent only for a source that has none. */
-    /** Called with the CHOSEN symbol — `EXCHANGE:`-prefixed when the row named a venue,
-     *  so the selection pins the venue the user actually pointed at. */
-    onSelect: (symbol: string) => void;
-    onOpenChange?: (open: boolean) => void;
-    host?: HTMLElement;
-    /** The row's icon URL — routed to the descriptor's OWNING provider
-     *  (`resolveSymbolIcon`). Absent or `undefined` per row ⇒ the initials badge. */
-    iconFor?: (d: SymbolDescriptor) => string | undefined;
-    /** The shell's translator. Absent: English. */
-    i18n?: Translator;
-}
-declare class SymbolPicker {
-    private readonly opts;
-    private readonly dialog;
-    private readonly input;
-    private readonly list;
-    private source;
-    private rows;
-    private highlighted;
-    private seed;
-    private activeTab;
-    private tabs;
-    private visible;
-    /** The last filter pass returned fewer raw rows than asked — the pool is drained
-     *  (checked BEFORE folding: folding shortens pages without meaning exhaustion). */
-    private exhausted;
-    /** Group rows currently expanded (venue-scoped keys) — members shown inline. */
-    private readonly expanded;
-    /** The ranked pool cache — `key` fingerprints the raw pool the ranking ran on. */
-    private ranked;
-    private ranking;
-    constructor(opts: SymbolPickerOptions);
-    /** Wire where symbols come from (re-called on every widget rebuild). */
-    setSource(source: () => readonly SymbolDescriptor[]): void;
-    open(initialQuery?: string): void;
-    get isOpen(): boolean;
-    /** Text typed at the picker that never reached its field: closed, it opens seeded
-     *  with the text; open (the field takes focus a tick after the dialog does, and a
-     *  fast typist's next key lands in that tick), it extends the query. */
-    type(text: string): void;
-    close(): void;
-    destroy(): void;
-    /** Route a row activation: a GROUP row loads its default member (the root itself is
-     *  listed, never loadable), any other row loads itself. */
-    private pick;
-    /** Expand/collapse a group row IN PLACE — same query, same page, same scroll; only
-     *  the member rows under the group appear or go. */
-    private toggleExpand;
-    private select;
-    private moveHighlight;
-    private renderHighlight;
-    /** The picker's pool: the source, shaped by the registered symbol ranking. Cached —
-     *  the hook runs when the pool CHANGES (an index lands or refreshes), never per
-     *  keystroke; an async hook resolves onto the next repaint (stale-while-revalidate
-     *  in between, the raw pool before the first resolve). */
-    private pool;
-    /** The dialog's fixed text in the shell's language, re-read on every open. */
-    relabel(): void;
-    private computeRows;
-    private refresh;
-    /** Append the page the grown `visible` just uncovered — rows already on screen stay put. */
-    private grow;
-    private rowEl;
 }
 
 interface IndicatorRow {
@@ -959,4 +891,4 @@ declare function fmtPrice(n: number | null | undefined, dp?: number): string;
  *  `chart.i18n.format.percent(pct)`. */
 declare function fmtChange(open: number | null | undefined, close: number | null | undefined): string;
 
-export { type BuiltInPanel, ChartContextMenu, type ContextMenuCallbacks, DataWindow, type DataWindowLine, type DataWindowSection, IndicatorPicker, type IndicatorPickerOptions, type IndicatorRow, ObjectTree, type PanelChrome, PanelDock, type PanelDockDeps, PanelsState, type ParsedTimeframe, RangePreset, ShortcutsHelp, SidePanel, SidePanelButton, Statusline, type StatuslineMenuHooks, StatuslinePart, SymbolPicker, type SymbolPickerOptions, TIMEZONES, TimeframeQuick, type TimeframeQuickOptions, type TimezoneEntry, Topbar, TopbarComposition, type TopbarOptions, VelaShellOptions, VelaWidget, type VelaWidgetOptions, Watermark, WidgetContext, WorkspaceState, dataWindowSections, decimalsFor, filterSymbols, fmtChange, fmtPrice, normalizeTimezone, parseTimeframe, priceStyleLabel, timeframeLabel, timeframeMs, tzButtonLabel, tzMenuLabel, tzOffset };
+export { type BuiltInPanel, ChartContextMenu, type ContextMenuCallbacks, DataWindow, type DataWindowLine, type DataWindowSection, IndicatorPicker, type IndicatorPickerOptions, type IndicatorRow, ObjectTree, type PanelChrome, PanelDock, type PanelDockDeps, PanelsState, type ParsedTimeframe, RangePreset, ShortcutsHelp, SidePanel, SidePanelButton, Statusline, type StatuslineMenuHooks, StatuslinePart, TIMEZONES, TimeframeQuick, type TimeframeQuickOptions, type TimezoneEntry, Topbar, TopbarComposition, type TopbarOptions, VelaShellOptions, VelaWidget, type VelaWidgetOptions, Watermark, WidgetContext, WorkspaceState, dataWindowSections, decimalsFor, fmtChange, fmtPrice, normalizeTimezone, parseTimeframe, priceStyleLabel, timeframeLabel, timeframeMs, tzButtonLabel, tzMenuLabel, tzOffset };

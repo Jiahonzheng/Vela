@@ -2435,6 +2435,7 @@ var hi_default = {
   "widget.symbolPicker.search": "सिंबल खोजें…",
   "widget.symbolPicker.showContracts": "कॉन्ट्रैक्ट दिखाएं",
   "widget.symbolPicker.tab.all": "सभी",
+  "widget.symbolPicker.tab.commodities": "कमोडिटी",
   "widget.symbolPicker.tab.crypto": "क्रिप्टो",
   "widget.symbolPicker.tab.etfs": "ETF",
   "widget.symbolPicker.tab.forex": "फ़ॉरेक्स",

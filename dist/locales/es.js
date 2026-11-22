@@ -2433,6 +2433,7 @@ var es_default = {
   "widget.symbolPicker.search": "Buscar símbolo…",
   "widget.symbolPicker.showContracts": "Mostrar contratos",
   "widget.symbolPicker.tab.all": "Todos",
+  "widget.symbolPicker.tab.commodities": "Materias primas",
   "widget.symbolPicker.tab.crypto": "Cripto",
   "widget.symbolPicker.tab.etfs": "ETF",
   "widget.symbolPicker.tab.forex": "Forex",

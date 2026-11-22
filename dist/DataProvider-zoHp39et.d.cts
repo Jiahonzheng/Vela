@@ -1,4 +1,4 @@
-import { M as MessageLike, T as Translator, m as TextDirection, b as LocalizationOptions } from './types-CEQPjecV.cjs';
+import { M as MessageLike, T as Translator, m as TextDirection, b as LocalizationOptions } from './types-CsUd831-.cjs';
 import { ThemeSettings, UiTheme } from '@luxalgo/vela-ui/theme';
 
 /**

@@ -2433,6 +2433,7 @@ var he_default = {
   "widget.symbolPicker.search": "חיפוש סימול…",
   "widget.symbolPicker.showContracts": "הצגת חוזים",
   "widget.symbolPicker.tab.all": "הכול",
+  "widget.symbolPicker.tab.commodities": "סחורות",
   "widget.symbolPicker.tab.crypto": "קריפטו",
   "widget.symbolPicker.tab.etfs": "תעודות סל",
   "widget.symbolPicker.tab.forex": "מט״ח",

@@ -2433,6 +2433,7 @@ var ko_default = {
   "widget.symbolPicker.search": "종목 검색…",
   "widget.symbolPicker.showContracts": "개별 계약 표시",
   "widget.symbolPicker.tab.all": "전체",
+  "widget.symbolPicker.tab.commodities": "원자재",
   "widget.symbolPicker.tab.crypto": "가상자산",
   "widget.symbolPicker.tab.etfs": "ETF",
   "widget.symbolPicker.tab.forex": "외환",

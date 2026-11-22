@@ -3407,8 +3407,8 @@ function filterSymbols(list, query, limit = 100, top = TOP_TICKERS) {
 var STYLE_ID6 = "vela-widget-symbolpicker";
 var CSS6 = css`@layer vela.chrome {
 
-/* The dialog body is flush (a flex column): search + market tabs are a fixed head
-   and the result list is the ONLY scroller, in both layouts. A sticky head over a
+/* The dialog body is flush (a flex column): search + category tabs are a fixed head
+   and the result list handles vertical scrolling in both layouts. A sticky head over a
    scrolling padded body is not an option — browsers pin sticky boxes to the
    scroller's content box, so the head lands one padding below the top and covers
    the first row. */
@@ -3435,14 +3435,14 @@ var CSS6 = css`@layer vela.chrome {
     text-transform: uppercase;
 }
 .vela-sp-input::placeholder { text-transform: none; }
-.vela-sp-tabs { display: flex; gap: 14px; margin: 12px 2px 0; border-bottom: 1px solid ${t.border}; padding-bottom: 8px; }
-/* Mobile (fullscreen dialog): the asset-class strip scrolls sideways instead of
-   overflowing the body, and the result list stops capping itself — it fills the
-   rest of the screen. The bottom inset (+ safe area) is the kit's: every mobile
+.vela-sp-tabs { display: flex; gap: 14px; margin: 12px 2px 0; border-bottom: 1px solid ${t.border}; padding-bottom: 8px; overflow-x: auto; }
+.vela-sp-tabs > .vela-tab { flex: none; }
+/* Mobile (fullscreen dialog): the result list fills the rest of the screen.
+   The bottom inset (+ safe area) is the kit's: every mobile
    dialog body carries it, flush or not, so the list adds none of its own. */
-[data-layout='mobile'] .vela-sp-tabs { overflow-x: auto; scrollbar-width: none; gap: 6px; }
+[data-layout='mobile'] .vela-sp-tabs { scrollbar-width: none; gap: 6px; }
 [data-layout='mobile'] .vela-sp-tabs::-webkit-scrollbar { display: none; }
-[data-layout='mobile'] .vela-sp-tabs > .vela-tab { flex: none; padding: 7px 10px; }
+[data-layout='mobile'] .vela-sp-tabs > .vela-tab { padding: 7px 10px; }
 [data-layout='mobile'] .vela-sp-list { flex: 1 1 auto; max-height: none; margin-bottom: 0; }
 .vela-sp-list {
     min-height: 0;
@@ -3513,33 +3513,60 @@ var TEXT7 = {
   search: msg("widget.symbolPicker.search", "Search symbol…"),
   noMatch: msg("widget.symbolPicker.noMatch", "No symbols match."),
   empty: msg("widget.symbolPicker.empty", "No symbols available yet."),
-  showContracts: msg("widget.symbolPicker.showContracts", "Show contracts")
+  showContracts: msg("widget.symbolPicker.showContracts", "Show contracts"),
+  all: msg("widget.symbolPicker.tab.all", "All")
 };
-var TABS = [
-  { id: "all", label: msg("widget.symbolPicker.tab.all", "All") },
-  { id: "stocks", label: msg("widget.symbolPicker.tab.stocks", "Stocks") },
-  { id: "etfs", label: msg("widget.symbolPicker.tab.etfs", "ETFs") },
-  { id: "crypto", label: msg("widget.symbolPicker.tab.crypto", "Crypto") },
-  { id: "futures", label: msg("widget.symbolPicker.tab.futures", "Futures") },
-  { id: "forex", label: msg("widget.symbolPicker.tab.forex", "Forex") }
+var ALL_TAB_ID = "all";
+var SYMBOL_PICKER_DEFAULT_CATEGORIES = [
+  {
+    id: "stocks",
+    label: msg("widget.symbolPicker.tab.stocks", "Stocks"),
+    matches: (symbol) => symbol.type?.toLowerCase() === "stock"
+  },
+  {
+    id: "etfs",
+    label: msg("widget.symbolPicker.tab.etfs", "ETFs"),
+    matches: (symbol) => symbol.type?.toLowerCase() === "etf"
+  },
+  {
+    id: "crypto",
+    label: msg("widget.symbolPicker.tab.crypto", "Crypto"),
+    matches: (symbol) => {
+      const type = symbol.type?.toLowerCase();
+      return type === "crypto" || type === "futures";
+    }
+  },
+  {
+    id: "futures",
+    label: msg("widget.symbolPicker.tab.futures", "Futures"),
+    matches: (symbol) => {
+      const type = symbol.type?.toLowerCase();
+      return type === "futures" || type === "root";
+    }
+  },
+  {
+    id: "forex",
+    label: msg("widget.symbolPicker.tab.forex", "Forex"),
+    matches: (symbol) => symbol.type?.toLowerCase() === "forex"
+  },
+  {
+    id: "commodities",
+    label: msg("widget.symbolPicker.tab.commodities", "Commodities"),
+    matches: (symbol) => symbol.type?.toLowerCase() === "commodity"
+  }
 ];
-var TAB_TYPES = {
-  crypto: ["crypto"],
-  stocks: ["stock"],
-  etfs: ["etf"],
-  futures: ["futures", "root"],
-  forex: ["forex"]
-};
-var CRYPTO_FUTURES_PROVIDERS = /* @__PURE__ */ new Set(["binanceusdm", "binancecm", "okxfutures", "okxswap"]);
 var PAGE = 100;
 var SymbolPicker = class {
   constructor(opts) {
     this.opts = opts;
+    this.categories = /* @__PURE__ */ new Map();
     this.source = () => [];
     this.rows = [];
     this.highlighted = 0;
     this.seed = "";
-    this.activeTab = "all";
+    this.activeTab = ALL_TAB_ID;
+    /** Group picks use the same category pool as the rendered rows. Null means All. */
+    this.categoryPool = null;
     this.visible = PAGE;
     /** The last filter pass returned fewer raw rows than asked — the pool is drained
      *  (checked BEFORE folding: folding shortens pages without meaning exhaustion). */
@@ -3549,6 +3576,11 @@ var SymbolPicker = class {
     /** The ranked pool cache — `key` fingerprints the raw pool the ranking ran on. */
     this.ranked = null;
     this.ranking = false;
+    for (const category of opts.categories ?? SYMBOL_PICKER_DEFAULT_CATEGORIES) {
+      const { id } = category;
+      if (!id.trim() || id === ALL_TAB_ID || this.categories.has(id)) continue;
+      this.categories.set(id, category);
+    }
     const doc = (opts.host ?? document.body).ownerDocument;
     injectChromeStyles(STYLE_ID6, CSS6, doc);
     this.input = doc.createElement("input");
@@ -3561,7 +3593,7 @@ var SymbolPicker = class {
     this.tabs = createTabs({
       variant: "filled",
       className: "vela-sp-tabs",
-      items: TABS.map((tab) => ({ value: tab.id, label: textOf(opts.i18n, tab.label) })),
+      items: this.tabItems(),
       defaultValue: this.activeTab,
       onValueChange: (id) => {
         this.activeTab = id;
@@ -3663,8 +3695,11 @@ var SymbolPicker = class {
   /** Route a row activation: a GROUP row loads its default member (the root itself is
    *  listed, never loadable), any other row loads itself. */
   pick(s) {
-    const target = isGroupRow(s) ? defaultMemberOf(this.pool(), s) ?? s : s;
-    this.select(target.ticker, target.prefix ?? target.provider, this.opts.onSelect);
+    let target = s;
+    if (isGroupRow(s)) {
+      target = this.categoryPool === null ? defaultMemberOf(this.pool(), s) ?? s : defaultMemberOf(this.categoryPool, s);
+    }
+    if (target) this.select(target.ticker, target.prefix ?? target.provider, this.opts.onSelect);
   }
   /** Expand/collapse a group row IN PLACE — same query, same page, same scroll; only
    *  the member rows under the group appear or go. */
@@ -3674,11 +3709,9 @@ var SymbolPicker = class {
     const scrollTop = this.list.scrollTop;
     const focus = this.rows[this.highlighted];
     this.rows = this.computeRows();
-    this.list.replaceChildren();
-    this.rows.forEach((r, i) => this.list.appendChild(this.rowEl(r, i)));
     const at = focus ? this.rows.indexOf(focus) : -1;
     this.highlighted = at >= 0 ? at : Math.min(this.highlighted, Math.max(0, this.rows.length - 1));
-    this.renderHighlight();
+    this.renderRows();
     this.list.scrollTop = scrollTop;
   }
   select(ticker, venue, onSelect) {
@@ -3721,21 +3754,34 @@ var SymbolPicker = class {
     }
     return this.ranked?.result ?? raw;
   }
-  /** The dialog's fixed text in the shell's language, re-read on every open. */
+  tabItems() {
+    const i18n = this.opts.i18n;
+    return [
+      { value: ALL_TAB_ID, label: textOf(i18n, TEXT7.all) },
+      ...Array.from(this.categories, ([value, category]) => ({ value, label: textOf(i18n, category.label) }))
+    ];
+  }
+  /** The dialog's text in the shell's language, re-read on every open. */
   relabel() {
     const i18n = this.opts.i18n;
     this.dialog.titleEl.textContent = textOf(i18n, TEXT7.title);
     this.dialog.setI18n(i18n ?? null);
     this.input.placeholder = textOf(i18n, TEXT7.search);
-    this.tabs.setItems(TABS.map((tab) => ({ value: tab.id, label: textOf(i18n, tab.label) })));
+    this.tabs.setItems(this.tabItems());
   }
   computeRows() {
     const all = this.pool();
-    const tab = this.activeTab;
-    const pool = tab === "all" ? all : all.filter((s) => {
-      const type = s.type?.toLowerCase() ?? "";
-      return TAB_TYPES[tab].includes(type) || tab === "crypto" && type === "futures" && CRYPTO_FUTURES_PROVIDERS.has(s.provider?.toLowerCase() ?? "");
-    });
+    const category = this.categories.get(this.activeTab);
+    let pool = all;
+    if (category) {
+      const matches = all.filter((s) => category.matches(s));
+      const groupsWithMembers = /* @__PURE__ */ new Set();
+      for (const s of matches) {
+        if (s.group != null && !isGroupRow(s)) groupsWithMembers.add(groupKeyOf(s));
+      }
+      pool = matches.filter((s) => !isGroupRow(s) || groupsWithMembers.has(groupKeyOf(s)));
+    }
+    this.categoryPool = category ? pool : null;
     const filtered = filterSymbols(pool, this.input.value, this.visible, symbolRanking() ? false : TOP_TICKERS);
     this.exhausted = filtered.length < this.visible;
     const folded = foldGroups(filtered);
@@ -3746,7 +3792,7 @@ var SymbolPicker = class {
     for (const s of folded) {
       out.push(s);
       if (!isGroupRow(s) || !this.expanded.has(groupKeyOf(s))) continue;
-      for (const m of groupMembers(all, s)) {
+      for (const m of groupMembers(pool, s)) {
         if (present.has(keyOf(m))) continue;
         present.add(keyOf(m));
         out.push(m);
@@ -3755,10 +3801,13 @@ var SymbolPicker = class {
     return out;
   }
   refresh() {
-    const doc = this.list.ownerDocument;
     this.visible = PAGE;
     this.rows = this.computeRows();
     this.highlighted = 0;
+    this.renderRows();
+  }
+  renderRows() {
+    const doc = this.list.ownerDocument;
     this.list.replaceChildren();
     if (!this.rows.length) {
       const empty = doc.createElement("div");
@@ -3770,11 +3819,22 @@ var SymbolPicker = class {
     this.rows.forEach((s, i) => this.list.appendChild(this.rowEl(s, i)));
     this.renderHighlight();
   }
-  /** Append the page the grown `visible` just uncovered — rows already on screen stay put. */
+  /** Extend the rendered page while keeping row indices aligned with selection. */
   grow() {
-    const already = this.rows.length;
+    const previous = this.rows;
     this.rows = this.computeRows();
-    this.rows.slice(already).forEach((s, j) => this.list.appendChild(this.rowEl(s, already + j)));
+    const canAppend = previous.every((row, index) => {
+      const next = this.rows[index];
+      return next !== void 0 && next.ticker === row.ticker && next.prefix === row.prefix && next.provider === row.provider && next.group === row.group;
+    });
+    if (!canAppend) {
+      const scrollTop = this.list.scrollTop;
+      this.highlighted = Math.min(this.highlighted, Math.max(0, this.rows.length - 1));
+      this.renderRows();
+      this.list.scrollTop = scrollTop;
+      return;
+    }
+    this.rows.slice(previous.length).forEach((s, index) => this.list.appendChild(this.rowEl(s, previous.length + index)));
   }
   rowEl(s, i) {
     const doc = this.list.ownerDocument;
@@ -10318,6 +10378,7 @@ var VelaWorkspace = class {
       if (this.activeId) this.projectTimeframeControls(this.active);
     });
     this.symbolPicker = new SymbolPicker({
+      ...opts.symbolPicker,
       host: this.root,
       i18n: this.localeState,
       // Row icons come from each descriptor's OWNING provider (resolveSymbolIcon).
@@ -12645,4 +12706,4 @@ var VelaWorkspace = class {
   }
 };
 
-export { Bottombar, ChartCell, ChartContextMenu, DataWindow, GRID_PICKER_MAX, IndicatorPicker, ObjectTree, PanelDock, RANGE_PRESETS, ShortcutsHelp, Statusline, SymbolPicker, TimeframeQuick, Topbar, VelaWorkspace, Watermark, WorkspaceReplay, activeAfterLayout, barClose, dataWindowSections, decimalsFor, decodeState, encodeState, ensureLayout, evenTracks, filterSymbols, fmtChange, fmtPrice, gridStyles, lastOpenClosedBy, layoutDefinition, layoutForGrid, layoutShape, layouts, localStorageAdapter, memoryStorageAdapter, parseTimeframe, priceStyleLabel, rangesWithin, registerBuiltinLayouts, registerLayout, resizeTracks, resolveIndicators, sanitizeState, syncTargets, timeframeLabel, timeframeMs, trackOffsets, unregisterLayout };
+export { Bottombar, ChartCell, ChartContextMenu, DataWindow, GRID_PICKER_MAX, IndicatorPicker, ObjectTree, PanelDock, RANGE_PRESETS, SYMBOL_PICKER_DEFAULT_CATEGORIES, ShortcutsHelp, Statusline, SymbolPicker, TimeframeQuick, Topbar, VelaWorkspace, Watermark, WorkspaceReplay, activeAfterLayout, barClose, dataWindowSections, decimalsFor, decodeState, encodeState, ensureLayout, evenTracks, filterSymbols, fmtChange, fmtPrice, gridStyles, lastOpenClosedBy, layoutDefinition, layoutForGrid, layoutShape, layouts, localStorageAdapter, memoryStorageAdapter, parseTimeframe, priceStyleLabel, rangesWithin, registerBuiltinLayouts, registerLayout, resizeTracks, resolveIndicators, sanitizeState, syncTargets, timeframeLabel, timeframeMs, trackOffsets, unregisterLayout };

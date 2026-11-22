@@ -1,9 +1,9 @@
-import { i as MessageDescriptor, a as MessageArgs, L as LocalePack, b as LocalizationOptions, T as Translator, M as MessageLike } from './types-CEQPjecV.cjs';
-import { X as DrawingTypeKey, ar as DrawingStyle, g as SerializedDrawing, f as Drawing, O as OHLCV, m as SymbolFacts, bd as SeriesKind, d as VelaTheme } from './DataProvider-D8zBxnVM.cjs';
-import { g as DataControl, a as SidebarComposition } from './contributions-Ds7Er8qM.cjs';
-import './side-panel-S4J2AAwf.cjs';
+import { i as MessageDescriptor, a as MessageArgs, L as LocalePack, b as LocalizationOptions, T as Translator, M as MessageLike } from './types-CsUd831-.cjs';
+import { X as DrawingTypeKey, ar as DrawingStyle, g as SerializedDrawing, f as Drawing, O as OHLCV, m as SymbolFacts, bd as SeriesKind, d as VelaTheme } from './DataProvider-zoHp39et.cjs';
+import { g as DataControl, d as SidebarComposition } from './contributions-CmH4S0zz.cjs';
+import './side-panel-DfLMHSx9.cjs';
 import '@luxalgo/vela-ui/icons';
-import './keymap-B8pTW-nj.cjs';
+import './keymap-Nk4cb7Tm.cjs';
 import '@luxalgo/vela-ui/palette';
 
 /** Values a message interpolates. */

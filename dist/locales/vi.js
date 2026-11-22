@@ -2433,6 +2433,7 @@ var vi_default = {
   "widget.symbolPicker.search": "Tìm mã…",
   "widget.symbolPicker.showContracts": "Hiện các hợp đồng",
   "widget.symbolPicker.tab.all": "Tất cả",
+  "widget.symbolPicker.tab.commodities": "Hàng hóa",
   "widget.symbolPicker.tab.crypto": "Tiền mã hóa",
   "widget.symbolPicker.tab.etfs": "ETF",
   "widget.symbolPicker.tab.forex": "Ngoại hối",

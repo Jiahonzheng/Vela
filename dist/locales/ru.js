@@ -2433,6 +2433,7 @@ var ru_default = {
   "widget.symbolPicker.search": "Поиск инструмента…",
   "widget.symbolPicker.showContracts": "Показать контракты",
   "widget.symbolPicker.tab.all": "Все",
+  "widget.symbolPicker.tab.commodities": "Сырьевые товары",
   "widget.symbolPicker.tab.crypto": "Крипто",
   "widget.symbolPicker.tab.etfs": "ETF",
   "widget.symbolPicker.tab.forex": "Форекс",

@@ -2433,6 +2433,7 @@ var ms_default = {
   "widget.symbolPicker.search": "Cari simbol…",
   "widget.symbolPicker.showContracts": "Tunjukkan kontrak",
   "widget.symbolPicker.tab.all": "Semua",
+  "widget.symbolPicker.tab.commodities": "Komoditi",
   "widget.symbolPicker.tab.crypto": "Kripto",
   "widget.symbolPicker.tab.etfs": "ETF",
   "widget.symbolPicker.tab.forex": "Forex",

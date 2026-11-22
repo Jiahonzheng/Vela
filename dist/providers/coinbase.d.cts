@@ -1,5 +1,5 @@
-import { D as DataProvider, P as ProviderInfo, B as BarRange, O as OHLCV, S as SymbolInfo, a as SymbolDescriptor, U as Unsubscribe } from '../DataProvider-D8zBxnVM.cjs';
-import '../types-CEQPjecV.cjs';
+import { D as DataProvider, P as ProviderInfo, B as BarRange, O as OHLCV, S as SymbolInfo, a as SymbolDescriptor, U as Unsubscribe } from '../DataProvider-zoHp39et.cjs';
+import '../types-CsUd831-.cjs';
 import '@luxalgo/vela-ui/theme';
 
 /**

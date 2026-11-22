@@ -2435,6 +2435,7 @@ var pt_BR_default = {
   "widget.symbolPicker.search": "Buscar ativo…",
   "widget.symbolPicker.showContracts": "Mostrar contratos",
   "widget.symbolPicker.tab.all": "Todos",
+  "widget.symbolPicker.tab.commodities": "Commodities",
   "widget.symbolPicker.tab.crypto": "Cripto",
   "widget.symbolPicker.tab.etfs": "ETFs",
   "widget.symbolPicker.tab.forex": "Forex",

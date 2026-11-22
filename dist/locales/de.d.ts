@@ -1,4 +1,4 @@
-import { L as LocalePack } from '../types-CEQPjecV.js';
+import { L as LocalePack } from '../types-CsUd831-.js';
 
 declare const de: LocalePack;
 

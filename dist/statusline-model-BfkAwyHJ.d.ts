@@ -1,6 +1,6 @@
-import { D as DataProvider, W as WallClock, V as VisibleRangePreset } from './DataProvider-DTq2vs_n.js';
-import { S as ScriptingEngine, T as TopbarComposition, a as SidebarComposition, V as Vela } from './contributions-Bv7AR8Ib.js';
-import { T as Translator } from './types-CEQPjecV.js';
+import { a as SymbolDescriptor, D as DataProvider, W as WallClock, V as VisibleRangePreset } from './DataProvider-DnONc_Ws.js';
+import { S as ScriptingEngine, T as TopbarComposition, d as SidebarComposition, V as Vela } from './contributions-83tnTOef.js';
+import { M as MessageLike, T as Translator } from './types-CsUd831-.js';
 
 /** The linkable dimensions. `crosshair` mirrors the pointer time onto same-group
  *  cells as GHOST crosshairs (renderers without the optional `setExternalCrosshair`
@@ -215,6 +215,92 @@ type WidgetStorage = VelaStorage;
  */
 declare function localStorageAdapter(storageKey?: string): WidgetStorage;
 
+declare function filterSymbols(list: readonly SymbolDescriptor[], query: string, limit?: number, top?: readonly string[] | false): SymbolDescriptor[];
+interface SymbolPickerCategory {
+    /** A stable, non-empty id unique within the picker. The id `all` is reserved. */
+    readonly id: string;
+    readonly label: MessageLike;
+    readonly matches: (symbol: SymbolDescriptor) => boolean;
+}
+interface SymbolPickerConfig {
+    /** Categories after All, in display order. Omit for the defaults or use [] for All alone.
+     *  Empty and reserved ids are ignored. For each other id, the first occurrence wins. */
+    categories?: readonly SymbolPickerCategory[];
+}
+interface SymbolPickerOptions extends SymbolPickerConfig {
+    /** `provider` is the venue of the chosen row — absent only for a source that has none. */
+    /** Called with the CHOSEN symbol — `EXCHANGE:`-prefixed when the row named a venue,
+     *  so the selection pins the venue the user actually pointed at. */
+    onSelect: (symbol: string) => void;
+    onOpenChange?: (open: boolean) => void;
+    host?: HTMLElement;
+    /** The row's icon URL — routed to the descriptor's OWNING provider
+     *  (`resolveSymbolIcon`). Absent or `undefined` per row ⇒ the initials badge. */
+    iconFor?: (d: SymbolDescriptor) => string | undefined;
+    /** The shell's translator. Absent: English. */
+    i18n?: Translator;
+}
+/** The built-in categories shown after All. */
+declare const SYMBOL_PICKER_DEFAULT_CATEGORIES: readonly SymbolPickerCategory[];
+declare class SymbolPicker {
+    private readonly opts;
+    private readonly dialog;
+    private readonly input;
+    private readonly list;
+    private readonly categories;
+    private source;
+    private rows;
+    private highlighted;
+    private seed;
+    private activeTab;
+    /** Group picks use the same category pool as the rendered rows. Null means All. */
+    private categoryPool;
+    private tabs;
+    private visible;
+    /** The last filter pass returned fewer raw rows than asked — the pool is drained
+     *  (checked BEFORE folding: folding shortens pages without meaning exhaustion). */
+    private exhausted;
+    /** Group rows currently expanded (venue-scoped keys) — members shown inline. */
+    private readonly expanded;
+    /** The ranked pool cache — `key` fingerprints the raw pool the ranking ran on. */
+    private ranked;
+    private ranking;
+    constructor(opts: SymbolPickerOptions);
+    /** Wire where symbols come from (re-called on every widget rebuild). */
+    setSource(source: () => readonly SymbolDescriptor[]): void;
+    open(initialQuery?: string): void;
+    get isOpen(): boolean;
+    /** Text typed at the picker that never reached its field: closed, it opens seeded
+     *  with the text; open (the field takes focus a tick after the dialog does, and a
+     *  fast typist's next key lands in that tick), it extends the query. */
+    type(text: string): void;
+    close(): void;
+    destroy(): void;
+    /** Route a row activation: a GROUP row loads its default member (the root itself is
+     *  listed, never loadable), any other row loads itself. */
+    private pick;
+    /** Expand/collapse a group row IN PLACE — same query, same page, same scroll; only
+     *  the member rows under the group appear or go. */
+    private toggleExpand;
+    private select;
+    private moveHighlight;
+    private renderHighlight;
+    /** The picker's pool: the source, shaped by the registered symbol ranking. Cached —
+     *  the hook runs when the pool CHANGES (an index lands or refreshes), never per
+     *  keystroke; an async hook resolves onto the next repaint (stale-while-revalidate
+     *  in between, the raw pool before the first resolve). */
+    private pool;
+    private tabItems;
+    /** The dialog's text in the shell's language, re-read on every open. */
+    relabel(): void;
+    private computeRows;
+    private refresh;
+    private renderRows;
+    /** Extend the rendered page while keeping row indices aligned with selection. */
+    private grow;
+    private rowEl;
+}
+
 /** What a shell (widget or workspace) accepts BEYOND the chart options themselves. */
 interface VelaShellOptions {
     /** Provider factories, keyed by provider name. The shell owns the call cycle: the
@@ -286,6 +372,8 @@ interface VelaShellOptions {
      *  topbar's symbol button still opens the menu, and a digit from 1 to 9 still opens
      *  the timeframe entry. */
     symbolMenuFromKey?: boolean;
+    /** The shared symbol picker's categories, in display order. All is always first. */
+    symbolPicker?: SymbolPickerConfig;
     /** Bring the shell back AS YOU LEFT IT: persist the full state document
      *  (`getState()`) and restore it at construction. `true` uses the shell's default
      *  key ('vela-widget' / 'vela-workspace'); a string is the storage key. */
@@ -421,4 +509,4 @@ declare class Bottombar {
  *  the status line's own right-click menu drive these. */
 type StatuslinePart = 'logo' | 'name' | 'market' | 'ohlc' | 'change';
 
-export { Bottombar as B, type CellState as C, type DrawingToolsState as D, type IndicatorLoader as I, type PanelsState as P, type ResolvedIndicator as R, type SyncSetting as S, type TrackSizes as T, type VelaStorage as V, WidgetHistory as W, type StatuslinePart as a, type RangePreset as b, type VelaShellOptions as c, type SyncOptions as d, type SyncKind as e, type WorkspaceState as f, type ChartState as g, decodeState as h, encodeState as i, type BottombarOptions as j, type IndicatorManifest as k, type IndicatorManifestEntry as l, RANGE_PRESETS as m, type WidgetStorage as n, localStorageAdapter as o, resolveIndicators as r, sanitizeState as s };
+export { Bottombar as B, type CellState as C, type DrawingToolsState as D, type IndicatorLoader as I, type PanelsState as P, type ResolvedIndicator as R, type SyncSetting as S, type TrackSizes as T, type VelaStorage as V, WidgetHistory as W, type StatuslinePart as a, type RangePreset as b, type VelaShellOptions as c, type SyncOptions as d, type SyncKind as e, type WorkspaceState as f, type ChartState as g, SYMBOL_PICKER_DEFAULT_CATEGORIES as h, type SymbolPickerCategory as i, type SymbolPickerConfig as j, decodeState as k, encodeState as l, type BottombarOptions as m, type IndicatorManifest as n, type IndicatorManifestEntry as o, RANGE_PRESETS as p, SymbolPicker as q, type SymbolPickerOptions as r, sanitizeState as s, type WidgetStorage as t, filterSymbols as u, localStorageAdapter as v, resolveIndicators as w };

@@ -1,4 +1,4 @@
-import { T as Translator, M as MessageLike, a as MessageArgs } from './types-CEQPjecV.js';
+import { T as Translator, M as MessageLike, a as MessageArgs } from './types-CsUd831-.js';
 
 /**
  * The rank of every built-in context-menu row, by zone and row id (`settings` is each

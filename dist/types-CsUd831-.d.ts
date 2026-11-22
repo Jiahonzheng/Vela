@@ -2436,6 +2436,7 @@ interface VelaCoreMessageCatalog {
     'widget.symbolPicker.search': string;
     'widget.symbolPicker.showContracts': string;
     'widget.symbolPicker.tab.all': string;
+    'widget.symbolPicker.tab.commodities': string;
     'widget.symbolPicker.tab.crypto': string;
     'widget.symbolPicker.tab.etfs': string;
     'widget.symbolPicker.tab.forex': string;
