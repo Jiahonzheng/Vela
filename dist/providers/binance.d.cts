@@ -1,4 +1,4 @@
-import { D as DataProvider, P as ProviderInfo, B as BarRange, O as OHLCV, S as SymbolInfo, a as SymbolDescriptor, U as Unsubscribe } from '../DataProvider-MSQ3fzSV.cjs';
+import { D as DataProvider, P as ProviderInfo, B as BarRange, O as OHLCV, S as SymbolInfo, a as SymbolDescriptor, U as Unsubscribe } from '../DataProvider-DqY7R0hL.cjs';
 import '../types-CsUd831-.cjs';
 import '@luxalgo/vela-ui/theme';
 

@@ -1,8 +1,8 @@
-import { O as OHLCV, V as VisibleRangePreset, b as VisibleRange, c as VelaOptions, I as InputValue, M as MarketDataFeed, d as VelaTheme, N as NativeBackend, e as MarketSession } from './DataProvider-BzFWuF0x.js';
-import { S as SyncSetting, V as VelaStorage, C as CellState, W as WidgetHistory, R as ResolvedIndicator, a as StatuslinePart, b as RangePreset, T as TrackSizes, c as VelaShellOptions, d as SyncOptions, e as SyncKind, f as WorkspaceState } from './statusline-model-Cfm58vs7.js';
-export { g as ChartState, D as DrawingToolsState, P as PanelsState, h as SYMBOL_PICKER_DEFAULT_CATEGORIES, i as SymbolPickerCategory, j as SymbolPickerConfig, k as decodeState, l as encodeState, s as sanitizeState } from './statusline-model-Cfm58vs7.js';
+import { O as OHLCV, V as VisibleRangePreset, b as VisibleRange, c as VelaOptions, I as InputValue, M as MarketDataFeed, d as VelaTheme, N as NativeBackend, e as MarketSession } from './DataProvider-CiFfigU4.js';
+import { S as SyncSetting, V as VelaStorage, C as CellState, W as WidgetHistory, R as ResolvedIndicator, a as StatuslinePart, b as RangePreset, T as TrackSizes, c as VelaShellOptions, d as SyncOptions, e as SyncKind, f as WorkspaceState } from './statusline-model-BiLjm7W4.js';
+export { g as ChartState, D as DrawingToolsState, P as PanelsState, h as SYMBOL_PICKER_DEFAULT_CATEGORIES, i as SymbolPickerCategory, j as SymbolPickerConfig, k as decodeState, l as encodeState, s as sanitizeState } from './statusline-model-BiLjm7W4.js';
 import { a as KeymapManager } from './keymap-D_nO-7mC.js';
-import { I as IndicatorHandle, S as ScriptingEngine, W as WidgetContext, V as Vela, E as ExternalIndicatorEntry, R as ReplayState, a as ReplayBounds, b as VelaEventMap, c as ScriptRun } from './contributions-Dp62Ja0w.js';
+import { I as IndicatorHandle, S as ScriptingEngine, W as WidgetContext, V as Vela, E as ExternalIndicatorEntry, R as ReplayState, a as ReplayBounds, b as VelaEventMap, c as ScriptRun } from './contributions-B4PY5QjR.js';
 import { b as LocalizationOptions, M as MessageLike, T as Translator, c as LocaleChangedEvent } from './types-CsUd831-.js';
 import '@luxalgo/vela-ui/theme';
 
@@ -251,9 +251,9 @@ declare class ChartCell {
      */
     private projectMarket;
     /**
-     * Can this cell's market offer a regular/extended session switch? Derived from
-     * the symbol's metadata. The workspace re-projects the shared bottombar when
-     * the asynchronous verdict lands or changes.
+     * Does this cell's market HAVE sessions (RTH/ETH meaningful)? Derived from the
+     * symbol's own metadata (`syminfo.session !== '24x7'`), asynchronously — the
+     * workspace re-projects the shared bottombar when the verdict lands or changes.
      */
     get sessionAvailable(): boolean;
     /** This cell's shown session (`regular` when unset — the provider default). */

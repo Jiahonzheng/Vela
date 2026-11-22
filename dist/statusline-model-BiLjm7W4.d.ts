@@ -1,5 +1,5 @@
-import { a as SymbolDescriptor, D as DataProvider, W as WallClock, V as VisibleRangePreset } from './DataProvider-BzFWuF0x.js';
-import { S as ScriptingEngine, T as TopbarComposition, d as SidebarComposition, V as Vela } from './contributions-Dp62Ja0w.js';
+import { a as SymbolDescriptor, D as DataProvider, W as WallClock, V as VisibleRangePreset } from './DataProvider-CiFfigU4.js';
+import { S as ScriptingEngine, T as TopbarComposition, d as SidebarComposition, V as Vela } from './contributions-B4PY5QjR.js';
 import { M as MessageLike, T as Translator } from './types-CsUd831-.js';
 
 /** The linkable dimensions. `crosshair` mirrors the pointer time onto same-group

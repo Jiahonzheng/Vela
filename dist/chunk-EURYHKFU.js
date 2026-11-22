@@ -6727,9 +6727,9 @@ var ChartCell = class {
     if (this.inner) this.statusline?.onChart(this.inner);
   }
   /**
-   * Can this cell's market offer a regular/extended session switch? Derived from
-   * the symbol's metadata. The workspace re-projects the shared bottombar when
-   * the asynchronous verdict lands or changes.
+   * Does this cell's market HAVE sessions (RTH/ETH meaningful)? Derived from the
+   * symbol's own metadata (`syminfo.session !== '24x7'`), asynchronously — the
+   * workspace re-projects the shared bottombar when the verdict lands or changes.
    */
   get sessionAvailable() {
     return this.sessionAvailableFlag;
@@ -6786,7 +6786,7 @@ var ChartCell = class {
         return;
       }
       if (this.state.symbol !== symbol) return;
-      const available = si?.has_extended_hours !== false && typeof si?.session === "string" && si.session !== "" && si.session !== "24x7";
+      const available = typeof si?.session === "string" && si.session !== "" && si.session !== "24x7";
       const overnight = parseSessionSpec(si)?.overnight === true;
       const zone = typeof si?.timezone === "string" && si.timezone !== "" ? si.timezone : void 0;
       const zoneChanged = zone !== this.exchangeZone;

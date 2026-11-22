@@ -1,6 +1,6 @@
 import { i as MessageDescriptor, a as MessageArgs, L as LocalePack, b as LocalizationOptions, T as Translator, M as MessageLike } from './types-CsUd831-.js';
-import { X as DrawingTypeKey, ar as DrawingStyle, g as SerializedDrawing, f as Drawing, O as OHLCV, m as SymbolFacts, bd as SeriesKind, d as VelaTheme } from './DataProvider-BzFWuF0x.js';
-import { g as DataControl, d as SidebarComposition } from './contributions-Dp62Ja0w.js';
+import { X as DrawingTypeKey, ar as DrawingStyle, g as SerializedDrawing, f as Drawing, O as OHLCV, m as SymbolFacts, bd as SeriesKind, d as VelaTheme } from './DataProvider-CiFfigU4.js';
+import { g as DataControl, d as SidebarComposition } from './contributions-B4PY5QjR.js';
 import './side-panel-DhFpj_YJ.js';
 import '@luxalgo/vela-ui/icons';
 import './keymap-D_nO-7mC.js';
