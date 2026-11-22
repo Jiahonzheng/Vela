@@ -19,8 +19,8 @@ export interface SymbolInfo {
     timezone?: string;
     /**
      * The regular trading hours, `HHMM-HHMM` in {@link timezone} (`'0930-1600'`; `2400` is
-     * the end of the day). Any other non-empty value marks a market with sessions (the
-     * regular/extended toggle, the calendar-driven market status) but shades nothing.
+     * the end of the day). A non-empty session value marks a market with calendar-driven
+     * trading hours. Session shading requires a parseable range.
      * `'24x7'`, empty or absent ⇒ a continuous market.
      */
     session?: string;
@@ -30,6 +30,12 @@ export interface SymbolInfo {
      * trading day runs from evening to evening. Absent ⇒ the whole civil day.
      */
     session_extended?: string;
+    /**
+     * `false` when the source serves no extended-hours bars for this symbol. The workspace
+     * hides its session controls while {@link session} and {@link timezone} still describe
+     * the market's regular hours. Absent or `true` ⇒ the `session` value governs the controls.
+     */
+    has_extended_hours?: boolean;
     /**
      * The timeframes the source serves for this symbol. Timeframe strings use the uppercase
      * canonical form: `'1D'` (or `'D'`), `'W'`, `'1M'` (or `'M'`), `'3M'`, `'12M'`, or bare
