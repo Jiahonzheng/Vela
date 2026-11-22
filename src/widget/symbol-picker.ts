@@ -252,7 +252,7 @@ const TEXT = {
     showContracts: msg('widget.symbolPicker.showContracts', 'Show contracts'),
 };
 
-type SymbolTab = 'all' | 'stocks' | 'etfs' | 'crypto' | 'futures' | 'forex' | 'commodities';
+type SymbolTab = 'all' | 'stocks' | 'etfs' | 'crypto' | 'futures' | 'forex';
 
 /** The type tabs, keyed by id; the label is display text only. */
 const TABS: ReadonlyArray<{ id: SymbolTab; label: MessageDescriptor }> = [
@@ -262,18 +262,18 @@ const TABS: ReadonlyArray<{ id: SymbolTab; label: MessageDescriptor }> = [
     { id: 'crypto', label: msg('widget.symbolPicker.tab.crypto', 'Crypto') },
     { id: 'futures', label: msg('widget.symbolPicker.tab.futures', 'Futures') },
     { id: 'forex', label: msg('widget.symbolPicker.tab.forex', 'Forex') },
-    { id: 'commodities', label: msg('widget.symbolPicker.tab.commodities', 'Commodities') },
 ];
 
-/** The descriptor types each tab lists (crypto adds perpetual futures, below). */
+/** The descriptor types each tab lists (Crypto also includes futures from the providers below). */
 const TAB_TYPES: Readonly<Record<Exclude<SymbolTab, 'all'>, readonly string[]>> = {
     crypto: ['crypto'],
     stocks: ['stock'],
     etfs: ['etf'],
     futures: ['futures', 'root'],
     forex: ['forex'],
-    commodities: ['commodity'],
 };
+
+const CRYPTO_FUTURES_PROVIDERS = new Set(['binanceusdm', 'binancecm', 'okxfutures', 'okxswap']);
 
 /** Rows rendered per page — the list GROWS by this much every time the scroll nears the
  *  bottom, so a 13k-symbol venue browses whole without ever rendering 13k rows up front. */
@@ -517,7 +517,11 @@ export class SymbolPicker {
     private computeRows(): SymbolDescriptor[] {
         const all = this.pool();
         const tab = this.activeTab;
-        const pool = tab === 'all' ? all : all.filter((s) => TAB_TYPES[tab].includes((s.type ?? '').toLowerCase()) || (tab === 'crypto' && (s.type ?? '').toLowerCase() === 'futures'));
+        const pool = tab === 'all' ? all : all.filter((s) => {
+            const type = s.type?.toLowerCase() ?? '';
+            return TAB_TYPES[tab].includes(type) ||
+                (tab === 'crypto' && type === 'futures' && CRYPTO_FUTURES_PROVIDERS.has(s.provider?.toLowerCase() ?? ''));
+        });
         // A registered ranking OWNS the empty-query head — the built-in majors pin
         // stands down and the pool's own order shows.
         const filtered = filterSymbols(pool, this.input.value, this.visible, symbolRanking() ? false : TOP_TICKERS);

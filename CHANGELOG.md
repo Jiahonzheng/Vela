@@ -10,6 +10,9 @@ All notable changes to Vela, newest first.
   dimmed in the menu and the mobile drawer. Unavailable favorites return when you switch
   back to a market that offers them. Quick entry explains when a timeframe is unavailable.
 
+- **Money symbol search.** Find commodities in All. Futures lists every futures provider,
+  and Crypto also includes contracts from Binance USD-M, Binance Coin-M, OKX Futures, and OKX Swap.
+
 ### Fixed
 
 - **Viewport-aware native indicators draw when added.** They receive the chart's
