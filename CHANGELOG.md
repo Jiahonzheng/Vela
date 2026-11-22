@@ -15,6 +15,11 @@ All notable changes to Vela, newest first.
 - **Viewport-aware native indicators draw when added.** They receive the chart's
   current visible range when they start, including after a timeframe change.
 
+- **Time ticks stay readable across compressed trading breaks.** The time axis and
+  grid skip clock ticks inside a break. On intraday charts, repeated dates in the
+  same break share one marker, with calendar landmarks and the reopening bar's date
+  given priority. Candle spacing is preserved.
+
 ## [0.10.14]
 
 ### Added
