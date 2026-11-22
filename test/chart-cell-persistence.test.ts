@@ -391,7 +391,7 @@ describe('ChartCell external indicators keep their id (ctx.addIndicator({ id }) 
 
 describe('ChartCell symbol metadata — the session verdict does not wait for the bars', () => {
     /** A feed whose bars are held open, so a switch stays mid-load for the whole test. */
-    function gatedFeed(sessionFacts: { has_extended_hours?: boolean } = {}): { feed: MultiProviderFeed; releaseBars: () => void; infoCalls: () => number } {
+    function gatedFeed(): { feed: MultiProviderFeed; releaseBars: () => void; infoCalls: () => number } {
         let release!: () => void;
         const gate = new Promise<void>((r) => (release = r));
         let infoCalls = 0;
@@ -403,7 +403,7 @@ describe('ChartCell symbol metadata — the session verdict does not wait for th
             listSymbols: () => Promise.resolve([{ ticker: 'BTCUSDT' }, { ticker: 'ES1!' }]),
             getSymbolInfo: (ticker) => {
                 infoCalls += 1;
-                return Promise.resolve(ticker === 'ES1!' ? { ticker, session: '0930-1600', timezone: 'America/New_York', ...sessionFacts } : { ticker, session: '24x7' });
+                return Promise.resolve(ticker === 'ES1!' ? { ticker, session: '0930-1600', timezone: 'America/New_York' } : { ticker, session: '24x7' });
             },
         };
         const feed = new MultiProviderFeed(new BarStore());
@@ -430,25 +430,6 @@ describe('ChartCell symbol metadata — the session verdict does not wait for th
         expect(cell.sessionAvailable).toBe(true); // the committed pass is idempotent
         expect(infoCalls() - beforeSwitch).toBe(1);
         cell.destroy();
-    });
-
-    it.each([false, true])('uses has_extended_hours=%s for the session controls and retains the exchange zone', async (hasExtendedHours) => {
-        const { feed, releaseBars } = gatedFeed({ has_extended_hours: hasExtendedHours });
-        const cell = makeCell({ symbol: 'LUX:ES1!' }, { feed });
-        try {
-            await settle();
-            expect(cell.exchangeTimezone).toBe('America/New_York');
-            expect(cell.session).toBe('regular');
-            expect(cell.sessionAvailable).toBe(hasExtendedHours);
-            expect(lastRenderer?.settingsSections.some((section) => section.id === 'trading-session')).toBe(hasExtendedHours);
-
-            releaseBars();
-            await settle();
-            expect(cell.sessionAvailable).toBe(hasExtendedHours);
-        } finally {
-            releaseBars();
-            cell.destroy();
-        }
     });
 
     it('drops a verdict that lands after the cell moved on', async () => {

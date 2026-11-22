@@ -148,8 +148,7 @@ stay unresolved.
 
 The chart itself reads a few typed facts from `getSymbolInfo`, all optional: `timezone` (IANA,
 default `'Etc/UTC'`), `session` (regular hours, `'0930-1600'`; `'24x7'` when continuous),
-`session_extended` (`'0400-2000'`), `has_extended_hours: false` to hide the regular/extended
-selector for a regular-only symbol, `timeframes: { finest, default?, list? }` (the finest
+`session_extended` (`'0400-2000'`), `timeframes: { finest, default?, list? }` (the finest
 timeframe served, every coarser one too unless `list` is the exhaustive set; `default` is the
 source's own frequency), `volume: false` for a symbol with no volume data, so the chart adds
 no volume indicator on its own, and `ohlc: false` for a symbol with one value per bar at every

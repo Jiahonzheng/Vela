@@ -28,9 +28,6 @@ All notable changes to Vela, newest first.
 - **Anchored VWAP panning.** Drag inside the shaded band to pan the chart and keep the anchor in
   place. Use the VWAP line, a visible band stroke, or the anchor handle to move the drawing.
 
-- **Regular-only trading hours.** The session control is hidden when the source serves only
-  regular hours. The chart keeps the symbol's regular trading schedule.
-
 ## [0.10.14]
 
 ### Added
