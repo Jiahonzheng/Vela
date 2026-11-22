@@ -504,6 +504,7 @@ silently reorder them).
 | `layoutMode` | `'auto'` | Chrome size class — see [Mobile](#mobile). |
 | `autofocus` | `false` | Focus the active chart on mount (off: an embedded workspace should not steal the page's focus). |
 | `symbolMenuFromKey` | `true` | Typing a letter or `0` on a chart opens the symbol search, seeded with it. `false` leaves those keys to the page: for a host whose own shortcuts are bare letters, or whose symbol is chosen outside the chart. The symbol button still opens the search, and a digit from 1 to 9 still opens the timeframe entry. |
+| `symbolPicker.categories` | built-in categories | Ordered symbol search tabs with host-defined membership. See [Customizing symbol search categories](#customizing-symbol-search-categories). |
 | `persist` / `storage` | off / localStorage | State persistence (see above). |
 
 **Workspace options** (the grid's own):
@@ -521,6 +522,36 @@ Contributed actions/attachments (`@luxalgo/vela/plugin`) work unchanged — `ctx
 to the ACTIVE cell's chart; grid-aware plugins additionally get `ctx.cells`,
 `ctx.activeCellId`, `ctx.setActiveCell(id)`, and `ctx.replay` (the
 [grid-wide replay](#bar-replay-across-the-grid)).
+
+### Customizing symbol search categories
+
+Pass `symbolPicker.categories` to choose the tabs that follow **All**. Omit the option for
+the built-in categories, or pass `[]` to show only **All**. Each category has a stable `id`,
+a `label` (plain text or a translatable `MessageLike`), and a `matches(symbol)` predicate over
+the existing symbol catalog. Use `SymbolDescriptor.provider` to match a registered provider
+and `prefix` to match a symbol's listing venue.
+
+Selecting a row uses its usual listing identity. If several providers serve the same
+`prefix:ticker`, the provider registry resolves the data source for that listing.
+
+Start with `SYMBOL_PICKER_DEFAULT_CATEGORIES` to retain the built-in labels and rules for the
+tabs you keep. The picker reserves `all` and uses the first category for each valid ID.
+
+```ts
+import { VelaWorkspace, SYMBOL_PICKER_DEFAULT_CATEGORIES } from '@luxalgo/vela/workspace';
+import type { SymbolPickerCategory } from '@luxalgo/vela/workspace';
+
+const categories: readonly SymbolPickerCategory[] = [
+    ...SYMBOL_PICKER_DEFAULT_CATEGORIES.filter((category) => category.id !== 'commodities'),
+    { id: 'indices', label: 'Indices', matches: (symbol) => symbol.type?.toLowerCase() === 'index' },
+];
+
+const workspace = new VelaWorkspace('#chart', { symbolPicker: { categories } });
+```
+
+The selected category limits both the results and the eligible contracts in a futures group.
+Picking a group loads its default eligible contract, or its first eligible contract when there
+is no unique default. **All** searches the existing catalog with the usual ranking and grouping.
 
 ## The indicator manifest
 

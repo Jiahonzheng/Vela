@@ -2432,6 +2432,7 @@
     "widget.symbolPicker.search": "搜索品种…",
     "widget.symbolPicker.showContracts": "显示合约",
     "widget.symbolPicker.tab.all": "全部",
+    "widget.symbolPicker.tab.commodities": "大宗商品",
     "widget.symbolPicker.tab.crypto": "加密货币",
     "widget.symbolPicker.tab.etfs": "ETF",
     "widget.symbolPicker.tab.forex": "外汇",

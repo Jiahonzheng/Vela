@@ -10,6 +10,7 @@ import type { IndicatorManifest, IndicatorLoader } from './indicators';
 import type { VelaStorage } from './persist';
 import type { TopbarComposition } from './topbar-composition';
 import type { SidebarComposition } from './sidebar-composition';
+import type { SymbolPickerConfig } from './symbol-picker';
 
 /** What a shell (widget or workspace) accepts BEYOND the chart options themselves. */
 export interface VelaShellOptions {
@@ -82,6 +83,8 @@ export interface VelaShellOptions {
      *  topbar's symbol button still opens the menu, and a digit from 1 to 9 still opens
      *  the timeframe entry. */
     symbolMenuFromKey?: boolean;
+    /** The shared symbol picker's categories, in display order. All is always first. */
+    symbolPicker?: SymbolPickerConfig;
     /** Bring the shell back AS YOU LEFT IT: persist the full state document
      *  (`getState()`) and restore it at construction. `true` uses the shell's default
      *  key ('vela-widget' / 'vela-workspace'); a string is the storage key. */

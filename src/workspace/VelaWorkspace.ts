@@ -671,6 +671,7 @@ export class VelaWorkspace {
 
         // ── shared dialogs/pickers (they act on the ACTIVE cell at call time) ──
         this.symbolPicker = new SymbolPicker({
+            ...opts.symbolPicker,
             host: this.root,
             i18n: this.localeState,
             // Row icons come from each descriptor's OWNING provider (resolveSymbolIcon).

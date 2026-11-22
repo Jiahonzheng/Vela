@@ -2432,6 +2432,7 @@
     "widget.symbolPicker.search": "銘柄を検索…",
     "widget.symbolPicker.showContracts": "限月を表示",
     "widget.symbolPicker.tab.all": "すべて",
+    "widget.symbolPicker.tab.commodities": "コモディティ",
     "widget.symbolPicker.tab.crypto": "暗号資産",
     "widget.symbolPicker.tab.etfs": "ETF",
     "widget.symbolPicker.tab.forex": "FX",

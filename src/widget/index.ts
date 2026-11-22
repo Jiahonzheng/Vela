@@ -26,7 +26,14 @@ export {
 export { Statusline, type StatuslineMenuHooks, type StatuslinePart } from './statusline';
 export { Watermark } from './watermark';
 export { Bottombar, RANGE_PRESETS, type BottombarOptions, type RangePreset } from './bottombar';
-export { SymbolPicker, filterSymbols, type SymbolPickerOptions } from './symbol-picker';
+export {
+    SymbolPicker,
+    filterSymbols,
+    SYMBOL_PICKER_DEFAULT_CATEGORIES,
+    type SymbolPickerCategory,
+    type SymbolPickerConfig,
+    type SymbolPickerOptions,
+} from './symbol-picker';
 export { IndicatorPicker, type IndicatorPickerOptions, type IndicatorRow } from './indicator-picker';
 export { TimeframeQuick, type TimeframeQuickOptions } from './timeframe-quick';
 export { localStorageAdapter, type VelaStorage, type WidgetStorage } from './persist';
