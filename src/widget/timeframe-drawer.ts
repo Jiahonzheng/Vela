@@ -68,6 +68,10 @@ const CSS = css`@layer vela.chrome {
     border-color: ${t.fg.bright};
     background: ${t.hover};
 }
+.vela-tfd-chip:disabled {
+    opacity: 0.38;
+    cursor: not-allowed;
+}
 
 }`;
 
@@ -85,6 +89,8 @@ export interface TimeframeDrawerOptions {
     currentTimeframe: () => string;
     /** Read live at open — the active range chip id, or null. */
     activeRange: () => string | null;
+    /** Read live at open — timeframes unavailable for the active symbol. */
+    unavailableTimeframes?: () => readonly string[];
     onTimeframe: (tf: string) => void;
     onRange: (preset: RangePreset) => void;
     onOpenChange?: (open: boolean) => void;
@@ -162,6 +168,7 @@ export class TimeframeDrawer {
         const tf = this.opts.currentTimeframe();
         const current = currentTimeframeChoice(this.opts.timeframes, tf, this.opts.resolveTimeframe);
         const range = this.opts.activeRange();
+        const unavailable = new Set(this.opts.unavailableTimeframes?.() ?? []);
         for (const [id, chip] of this.rangeChips) {
             if (range !== null && id === range) chip.dataset.active = '1';
             else delete chip.dataset.active;
@@ -170,6 +177,7 @@ export class TimeframeDrawer {
             chip.disabled = this.opts.resolveTimeframe(id) === null;
             if (range === null && id === current) chip.dataset.active = '1';
             else delete chip.dataset.active;
+            chip.disabled = unavailable.has(id);
         }
     }
 

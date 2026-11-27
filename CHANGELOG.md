@@ -2,31 +2,83 @@
 
 All notable changes to Vela, newest first.
 
-## [Unreleased]
-
-### Added
-
-- **Configurable symbol search categories.** Hosts can add, hide, and reorder tabs in the built-in
-  symbol picker and define which symbols each tab includes. All stays available for the whole catalog.
-
-### Changed
-
-- **Timeframe controls follow the active market.** The menu and mobile drawer dim presets
-  excluded by the symbol's timeframe declaration. Unavailable favorites return when you switch
-  back to a market that offers them. Quick entry explains when a timeframe is unavailable.
+## [0.10.19]
 
 ### Fixed
 
-- **Viewport-aware native indicators draw when added.** They receive the chart's
-  current visible range when they start, including after a timeframe change.
+- **Removing the last comparison after a reload returns the price axis to its earlier scale.** A comparison on the **Same % scale** switches the main axis to percentage mode and switches it back when the last one leaves. That way back was lost as soon as the chart was reloaded or a saved state was applied, so the axis stayed in percentage mode until you changed it by hand. The saved chart state now remembers the scale the axis was on, regular or logarithmic, and the axis returns to it after a reload, a switch between saved workspaces, or `applyState`. A chart that was already in percentage mode before the comparison stays there, as before. Charts saved by an earlier version carry no earlier scale: removing their comparisons leaves the axis in percentage mode one last time.
 
-- **Time ticks stay readable across compressed trading breaks.** The time axis and
-  grid skip clock ticks inside a break. On intraday charts, repeated dates in the
-  same break share one marker, with calendar landmarks and the reopening bar's date
-  given priority. Candle spacing is preserved.
+## [0.10.18]
 
-- **Anchored VWAP panning.** Drag inside the shaded band to pan the chart and keep the anchor in
-  place. Use the VWAP line, a visible band stroke, or the anchor handle to move the drawing.
+### Added
+
+- **Compare symbols on the main chart.** A circular `+` button beside the symbol picker in the top bar (and a Compare symbol row in the mobile menu) opens a dedicated comparison picker to overlay one or more secondary symbols as colored lines. You can place each comparison on the **Same % scale** (switching the main axis to percentage mode automatically so every series rebases to 0% at the left edge of the visible window, and restoring the previous scale when the last shared comparison is removed), on a **New price scale**, or in a **New pane**. Compared symbols display colored name and last-value badges on the price axis, per-symbol percentage readouts in the legend and data window, customizable symbol/source/scale/line settings, and full undo/redo and workspace persistence.
+- **Percentage scale quick toggle on the price axis.** A `%` button now sits beside the `L` (logarithmic) and `A` (auto) buttons at the bottom of each pane's price scale for one-click toggling between absolute prices and percentage change.
+- **Indicator value and name labels on the price scale.** Each indicator plot's value on the last bar now shows as a chip in the plot's color on the scale it draws against: the price scale, an indicator pane's scale, or a merged indicator's own column. Two new toggles under the price scale's **Labels** menu (and in Chart settings → Scales and lines) control them: **Indicator value labels** (on by default) and **Indicator name labels** (off by default), which puts the indicator's name, and the plot's name when the indicator labels more than one, in a tinted chip at the plot's edge, level with the value and readable on any chart background. Labels that would overlap are moved apart (with names on, all of a pane's labels share one set of rows), the last price label always keeps its place, and a label with no room left in its pane is left off. A plot a script keeps off the price scale (`display.priceScale: false`) gets no label. Both choices are saved with the chart settings.
+
+## [0.10.17]
+
+### Fixed
+
+- **Pressing Escape closes indicator settings even when focus is on the chart.** A chart key handler clearing the crosshair used to prevent Escape from dismissing an open indicator settings dialog, while nested dialogs (such as a symbol picker opened from a symbol input) now reliably keep Escape to themselves until closed.
+
+## [0.10.16]
+
+### Added
+
+- **Tick timeframes (`nT`) and pluggable series adapters.** Vela now recognizes tick-count timeframes (`1T`, `10T`, `100T`, `1000T`, or bare `T`) across timeframe parsing, picker sorting, and per-symbol availability gating, and exposes `registerSeriesAdapter` on the plugin SDK so extensions can supply custom or variable-duration bar series. On variable-duration series, bars carry an optional monotonic `seq` identity for same-millisecond updates, sub-minute time-axis ticks and crosshair stamps show seconds, the bar-close countdown hides automatically, and fixed-interval gap healing stands down.
+
+## [0.10.15]
+
+### Added
+
+- **Ichimoku Cloud, Correlation Coefficient, Correlation - Log, and Volatility Close-to-Close built-in indicators.**
+  Ichimoku Cloud plots Conversion Line, Base Line, backward-shifted Lagging Span, and the
+  forward-projected bullish/bearish cloud into the chart's right whitespace, with an optional
+  secondary symbol input. Correlation Coefficient and Correlation - Log compute rolling Pearson
+  correlation across instruments (prices or log returns) in their own pane and open their
+  settings dialog automatically when added from the indicator picker so you can pick the
+  symbol(s) immediately. Volatility Close-to-Close computes annualized sample standard deviation
+  of bar-to-bar close log returns.
+- **Built-in symbol picker inside indicator settings and multi-symbol support for native indicators.**
+  Symbol inputs in indicator settings now open the workspace's symbol search dialog by default
+  without dismissing the settings dialog behind it, and custom native indicators can request
+  and subscribe to secondary symbol series through `fetchSeries` and `subscribeSeries`.
+
+### Changed
+
+- **Indicators from a script list appear sooner.** When the `indicators` option lists
+  scripts by URL, the workspace now downloads them all at once instead of one after
+  another. The indicators that start switched on no longer wait for every other script
+  in the list: with 13 scripts, they appear in about half a second instead of nearly two.
+- **Hyperliquid charts start with far fewer requests.** The Hyperliquid provider builds
+  its symbol list from one request for every exchange's markets, instead of one request
+  per exchange after first asking which exchanges exist. A chart now opens with 4
+  requests instead of 14, and its first candles arrive sooner.
+- **Coinbase charts switch symbols faster.** The Coinbase provider reads a symbol's
+  details from the product list it already downloaded instead of asking Coinbase again.
+  Coinbase limits how fast requests can be sent, so the candles no longer wait behind
+  that extra request and a switch takes about half as long.
+- **Opening a Binance perpetual no longer downloads the futures list again.** The
+  provider reads each perpetual's details from the futures list it already has, instead
+  of downloading the whole list for every new perpetual you open.
+- **Binance charts start faster.** The Binance provider now asks only for actively traded
+  pairs when it builds its symbol list. The download is about six times smaller and holds
+  the same symbols, so a Binance chart shows its first candles sooner.
+- **Charts on the same market load their candles once.** When several charts in a
+  workspace open the same symbol and timeframe together, on first load or when synced
+  charts switch, they now share one download instead of each asking for the same
+  candles. The last chart fills in as fast as the first.
+
+### Fixed
+
+- **A closed symbol search no longer loads symbol icons.** With a custom symbol ranking
+  registered, closing the search before its results finished ranking still rebuilt the
+  hidden list and loaded about a hundred icons nobody could see. The list now rebuilds
+  the next time the search opens.
+- **Crossing band fills render cleanly under WebGL2.** Where two filled series cross between
+  adjacent bars (such as an Ichimoku Cloud twist), the fill now splits cleanly at the
+  intersection instead of drawing an overlapping bow-tie quad.
 
 ## [0.10.14]
 
@@ -92,6 +144,9 @@ All notable changes to Vela, newest first.
   spot on screen, over another bar and price, and the label measured from there. The
   start now stays on the time and price you clicked, through a pan, a zoom, a new bar
   or a price-scale change.
+- **Crossing band fills render cleanly under WebGL2.** Where two filled series cross between
+  adjacent bars (such as an Ichimoku Cloud twist), the fill now splits cleanly at the
+  intersection instead of drawing an overlapping bow-tie quad.
 
 ## [0.10.13]
 
