@@ -4,9 +4,9 @@
 import type { SymbolDescriptor } from '../core/ports/DataProvider';
 import { msg } from '../core/i18n/message';
 import { textOf } from '../core/i18n/text';
-import type { MessageDescriptor, Translator } from '../core/i18n/types';
+import type { MessageLike, Translator } from '../core/i18n/types';
 import { Dialog } from '@luxalgo/vela-ui/dialog';
-import { createTabs, type TabsHandle } from '@luxalgo/vela-ui/tabs';
+import { createTabs, type TabItem, type TabsHandle } from '@luxalgo/vela-ui/tabs';
 import { injectChromeStyles } from '../ui/chromeStyles';
 import { iconEl } from '@luxalgo/vela-ui/icons';
 import { tickerIconEl, baseOf } from './symbol-icon';
@@ -128,8 +128,8 @@ export function filterSymbols(list: readonly SymbolDescriptor[], query: string, 
 const STYLE_ID = 'vela-widget-symbolpicker';
 const CSS = css`@layer vela.chrome {
 
-/* The dialog body is flush (a flex column): search + market tabs are a fixed head
-   and the result list is the ONLY scroller, in both layouts. A sticky head over a
+/* The dialog body is flush (a flex column): search + category tabs are a fixed head
+   and the result list handles vertical scrolling in both layouts. A sticky head over a
    scrolling padded body is not an option — browsers pin sticky boxes to the
    scroller's content box, so the head lands one padding below the top and covers
    the first row. */
@@ -156,14 +156,14 @@ const CSS = css`@layer vela.chrome {
     text-transform: uppercase;
 }
 .vela-sp-input::placeholder { text-transform: none; }
-.vela-sp-tabs { display: flex; gap: 14px; margin: 12px 2px 0; border-bottom: 1px solid ${t.border}; padding-bottom: 8px; }
-/* Mobile (fullscreen dialog): the asset-class strip scrolls sideways instead of
-   overflowing the body, and the result list stops capping itself — it fills the
-   rest of the screen. The bottom inset (+ safe area) is the kit's: every mobile
+.vela-sp-tabs { display: flex; gap: 14px; margin: 12px 2px 0; border-bottom: 1px solid ${t.border}; padding-bottom: 8px; overflow-x: auto; }
+.vela-sp-tabs > .vela-tab { flex: none; }
+/* Mobile (fullscreen dialog): the result list fills the rest of the screen.
+   The bottom inset (+ safe area) is the kit's: every mobile
    dialog body carries it, flush or not, so the list adds none of its own. */
-[data-layout='mobile'] .vela-sp-tabs { overflow-x: auto; scrollbar-width: none; gap: 6px; }
+[data-layout='mobile'] .vela-sp-tabs { scrollbar-width: none; gap: 6px; }
 [data-layout='mobile'] .vela-sp-tabs::-webkit-scrollbar { display: none; }
-[data-layout='mobile'] .vela-sp-tabs > .vela-tab { flex: none; padding: 7px 10px; }
+[data-layout='mobile'] .vela-sp-tabs > .vela-tab { padding: 7px 10px; }
 [data-layout='mobile'] .vela-sp-list { flex: 1 1 auto; max-height: none; margin-bottom: 0; }
 .vela-sp-list {
     min-height: 0;
@@ -230,7 +230,20 @@ const CSS = css`@layer vela.chrome {
 
 }`;
 
-export interface SymbolPickerOptions {
+export interface SymbolPickerCategory {
+    /** A stable, non-empty id unique within the picker. The id `all` is reserved. */
+    readonly id: string;
+    readonly label: MessageLike;
+    readonly matches: (symbol: SymbolDescriptor) => boolean;
+}
+
+export interface SymbolPickerConfig {
+    /** Categories after All, in display order. Omit for the defaults or use [] for All alone.
+     *  Empty and reserved ids are ignored. For each other id, the first occurrence wins. */
+    categories?: readonly SymbolPickerCategory[];
+}
+
+export interface SymbolPickerOptions extends SymbolPickerConfig {
     /** `provider` is the venue of the chosen row — absent only for a source that has none. */
     /** Called with the CHOSEN symbol — `EXCHANGE:`-prefixed when the row named a venue,
      *  so the selection pins the venue the user actually pointed at. */
@@ -250,30 +263,50 @@ const TEXT = {
     noMatch: msg('widget.symbolPicker.noMatch', 'No symbols match.'),
     empty: msg('widget.symbolPicker.empty', 'No symbols available yet.'),
     showContracts: msg('widget.symbolPicker.showContracts', 'Show contracts'),
+    all: msg('widget.symbolPicker.tab.all', 'All'),
 };
 
-type SymbolTab = 'all' | 'stocks' | 'etfs' | 'crypto' | 'futures' | 'forex' | 'commodities';
+const ALL_TAB_ID = 'all';
 
-/** The type tabs, keyed by id; the label is display text only. */
-const TABS: ReadonlyArray<{ id: SymbolTab; label: MessageDescriptor }> = [
-    { id: 'all', label: msg('widget.symbolPicker.tab.all', 'All') },
-    { id: 'stocks', label: msg('widget.symbolPicker.tab.stocks', 'Stocks') },
-    { id: 'etfs', label: msg('widget.symbolPicker.tab.etfs', 'ETFs') },
-    { id: 'crypto', label: msg('widget.symbolPicker.tab.crypto', 'Crypto') },
-    { id: 'futures', label: msg('widget.symbolPicker.tab.futures', 'Futures') },
-    { id: 'forex', label: msg('widget.symbolPicker.tab.forex', 'Forex') },
-    { id: 'commodities', label: msg('widget.symbolPicker.tab.commodities', 'Commodities') },
+/** The built-in categories shown after All. */
+export const SYMBOL_PICKER_DEFAULT_CATEGORIES: readonly SymbolPickerCategory[] = [
+    {
+        id: 'stocks',
+        label: msg('widget.symbolPicker.tab.stocks', 'Stocks'),
+        matches: (symbol) => symbol.type?.toLowerCase() === 'stock',
+    },
+    {
+        id: 'etfs',
+        label: msg('widget.symbolPicker.tab.etfs', 'ETFs'),
+        matches: (symbol) => symbol.type?.toLowerCase() === 'etf',
+    },
+    {
+        id: 'crypto',
+        label: msg('widget.symbolPicker.tab.crypto', 'Crypto'),
+        matches: (symbol) => {
+            const type = symbol.type?.toLowerCase();
+            return type === 'crypto' || type === 'futures';
+        },
+    },
+    {
+        id: 'futures',
+        label: msg('widget.symbolPicker.tab.futures', 'Futures'),
+        matches: (symbol) => {
+            const type = symbol.type?.toLowerCase();
+            return type === 'futures' || type === 'root';
+        },
+    },
+    {
+        id: 'forex',
+        label: msg('widget.symbolPicker.tab.forex', 'Forex'),
+        matches: (symbol) => symbol.type?.toLowerCase() === 'forex',
+    },
+    {
+        id: 'commodities',
+        label: msg('widget.symbolPicker.tab.commodities', 'Commodities'),
+        matches: (symbol) => symbol.type?.toLowerCase() === 'commodity',
+    },
 ];
-
-/** The descriptor types each tab lists (crypto adds perpetual futures, below). */
-const TAB_TYPES: Readonly<Record<Exclude<SymbolTab, 'all'>, readonly string[]>> = {
-    crypto: ['crypto'],
-    stocks: ['stock'],
-    etfs: ['etf'],
-    futures: ['futures', 'root'],
-    forex: ['forex'],
-    commodities: ['commodity'],
-};
 
 /** Rows rendered per page — the list GROWS by this much every time the scroll nears the
  *  bottom, so a 13k-symbol venue browses whole without ever rendering 13k rows up front. */
@@ -283,11 +316,14 @@ export class SymbolPicker {
     private readonly dialog: Dialog;
     private readonly input: HTMLInputElement;
     private readonly list: HTMLElement;
+    private readonly categories = new Map<string, SymbolPickerCategory>();
     private source: () => readonly SymbolDescriptor[] = () => [];
     private rows: SymbolDescriptor[] = [];
     private highlighted = 0;
     private seed = '';
-    private activeTab: SymbolTab = 'all';
+    private activeTab = ALL_TAB_ID;
+    /** Group picks use the same category pool as the rendered rows. Null means All. */
+    private categoryPool: readonly SymbolDescriptor[] | null = null;
     private tabs!: TabsHandle;
     private visible = PAGE;
     /** The last filter pass returned fewer raw rows than asked — the pool is drained
@@ -307,6 +343,11 @@ export class SymbolPicker {
     private pickOverride: ((symbol: string) => void) | null = null;
 
     constructor(private readonly opts: SymbolPickerOptions) {
+        for (const category of opts.categories ?? SYMBOL_PICKER_DEFAULT_CATEGORIES) {
+            const { id } = category;
+            if (!id.trim() || id === ALL_TAB_ID || this.categories.has(id)) continue;
+            this.categories.set(id, category);
+        }
         const doc = (opts.host ?? document.body).ownerDocument;
         injectChromeStyles(STYLE_ID, CSS, doc);
 
@@ -317,14 +358,14 @@ export class SymbolPicker {
         const searchRow = doc.createElement('div');
         searchRow.className = 'vela-sp-searchrow';
         searchRow.append(iconEl('search', doc), this.input);
-        // The asset-class strip filters the one result list: tabs without panels.
+        // The category strip filters the one result list: tabs without panels.
         this.tabs = createTabs({
             variant: 'filled',
             className: 'vela-sp-tabs',
-            items: TABS.map((tab) => ({ value: tab.id, label: textOf(opts.i18n, tab.label) })),
+            items: this.tabItems(),
             defaultValue: this.activeTab,
             onValueChange: (id) => {
-                this.activeTab = id as SymbolTab;
+                this.activeTab = id;
                 this.refresh();
             },
         });
@@ -333,10 +374,8 @@ export class SymbolPicker {
         head.append(searchRow, this.tabs.el);
         this.list = doc.createElement('div');
         this.list.className = 'vela-sp-list';
-        // Infinite scroll: nearing the bottom grows the page and APPENDS the new rows —
-        // `filterSymbols` is a pure re-run with a larger limit whose result is a stable
-        // superset (same ranking, same order), so appended rows never reshuffle the ones
-        // already on screen. A short page (rows < visible) means the pool is exhausted.
+        // Infinite scroll grows the page near the bottom. Stable rows can stay in place.
+        // A short page (rows < visible) means the pool is exhausted.
         this.list.addEventListener('scroll', () => {
             if (this.exhausted) return;
             if (this.list.scrollTop + this.list.clientHeight < this.list.scrollHeight - 200) return;
@@ -449,8 +488,14 @@ export class SymbolPicker {
     /** Route a row activation: a GROUP row loads its default member (the root itself is
      *  listed, never loadable), any other row loads itself. */
     private pick(s: SymbolDescriptor): void {
-        const target = isGroupRow(s) ? (defaultMemberOf(this.pool(), s) ?? s) : s;
-        // Capture and clear before `select()` closes the dialog (Zag's onOpenChange runs async).
+        let target: SymbolDescriptor | null = s;
+        if (isGroupRow(s)) {
+            target = this.categoryPool === null
+                ? (defaultMemberOf(this.pool(), s) ?? s)
+                : defaultMemberOf(this.categoryPool, s);
+        }
+        if (!target) return;
+        // Capture and clear before selection closes the dialog.
         const handler = this.pickOverride ?? this.opts.onSelect;
         this.pickOverride = null;
         this.select(target.ticker, target.prefix ?? target.provider, handler);
@@ -464,11 +509,9 @@ export class SymbolPicker {
         const scrollTop = this.list.scrollTop;
         const focus = this.rows[this.highlighted];
         this.rows = this.computeRows();
-        this.list.replaceChildren();
-        this.rows.forEach((r, i) => this.list.appendChild(this.rowEl(r, i)));
         const at = focus ? this.rows.indexOf(focus) : -1;
         this.highlighted = at >= 0 ? at : Math.min(this.highlighted, Math.max(0, this.rows.length - 1));
-        this.renderHighlight();
+        this.renderRows();
         this.list.scrollTop = scrollTop;
     }
 
@@ -524,35 +567,52 @@ export class SymbolPicker {
         return this.ranked?.result ?? raw;
     }
 
-    /** The dialog's fixed text in the shell's language, re-read on every open. */
+    private tabItems(): TabItem[] {
+        const i18n = this.opts.i18n;
+        return [
+            { value: ALL_TAB_ID, label: textOf(i18n, TEXT.all) },
+            ...Array.from(this.categories, ([value, category]) => ({ value, label: textOf(i18n, category.label) })),
+        ];
+    }
+
+    /** The dialog's text in the shell's language, re-read on every open. */
     relabel(): void {
         const i18n = this.opts.i18n;
         this.dialog.titleEl.textContent = textOf(i18n, TEXT.title);
         this.dialog.setI18n(i18n ?? null);
         this.input.placeholder = textOf(i18n, TEXT.search);
-        this.tabs.setItems(TABS.map((tab) => ({ value: tab.id, label: textOf(i18n, tab.label) })));
+        this.tabs.setItems(this.tabItems());
     }
 
     private computeRows(): SymbolDescriptor[] {
         const all = this.pool();
-        const tab = this.activeTab;
-        const pool = tab === 'all' ? all : all.filter((s) => TAB_TYPES[tab].includes((s.type ?? '').toLowerCase()) || (tab === 'crypto' && (s.type ?? '').toLowerCase() === 'futures'));
+        const category = this.categories.get(this.activeTab);
+        let pool = all;
+        if (category) {
+            const matches = all.filter((s) => category.matches(s));
+            // A root can represent the category only if it has a loadable member in it.
+            const groupsWithMembers = new Set<string>();
+            for (const s of matches) {
+                if (s.group != null && !isGroupRow(s)) groupsWithMembers.add(groupKeyOf(s));
+            }
+            pool = matches.filter((s) => !isGroupRow(s) || groupsWithMembers.has(groupKeyOf(s)));
+        }
+        this.categoryPool = category ? pool : null;
         // A registered ranking OWNS the empty-query head — the built-in majors pin
         // stands down and the pool's own order shows.
         const filtered = filterSymbols(pool, this.input.value, this.visible, symbolRanking() ? false : TOP_TICKERS);
         this.exhausted = filtered.length < this.visible;
         const folded = foldGroups(filtered);
         if (!this.expanded.size) return folded;
-        // Splice each EXPANDED group's members right under its row — every member of the
-        // group (the full pool knows them all, whatever the query matched), minus any
-        // already standing on its own row elsewhere in the list.
+        // Splice each EXPANDED group's eligible members under its row, including members
+        // the query did not match. Skip members with their own row elsewhere in the list.
         const keyOf = (s: SymbolDescriptor): string => `${(s.prefix ?? s.provider ?? '').toLowerCase()}:${s.ticker.toUpperCase()}`;
         const present = new Set(folded.map(keyOf));
         const out: SymbolDescriptor[] = [];
         for (const s of folded) {
             out.push(s);
             if (!isGroupRow(s) || !this.expanded.has(groupKeyOf(s))) continue;
-            for (const m of groupMembers(all, s)) {
+            for (const m of groupMembers(pool, s)) {
                 if (present.has(keyOf(m))) continue;
                 present.add(keyOf(m));
                 out.push(m);
@@ -562,10 +622,14 @@ export class SymbolPicker {
     }
 
     private refresh(): void {
-        const doc = this.list.ownerDocument;
         this.visible = PAGE; // a new query/tab starts back at one page
         this.rows = this.computeRows();
         this.highlighted = 0;
+        this.renderRows();
+    }
+
+    private renderRows(): void {
+        const doc = this.list.ownerDocument;
         this.list.replaceChildren();
         if (!this.rows.length) {
             const empty = doc.createElement('div');
@@ -578,11 +642,24 @@ export class SymbolPicker {
         this.renderHighlight();
     }
 
-    /** Append the page the grown `visible` just uncovered — rows already on screen stay put. */
+    /** Extend the rendered page while keeping row indices aligned with selection. */
     private grow(): void {
-        const already = this.rows.length;
+        const previous = this.rows;
         this.rows = this.computeRows();
-        this.rows.slice(already).forEach((s, j) => this.list.appendChild(this.rowEl(s, already + j)));
+        const canAppend = previous.every((row, index) => {
+            const next = this.rows[index];
+            return next !== undefined && next.ticker === row.ticker && next.prefix === row.prefix &&
+                next.provider === row.provider && next.group === row.group;
+        });
+        if (!canAppend) {
+            // A category predicate or catalog can change while the picker is open.
+            const scrollTop = this.list.scrollTop;
+            this.highlighted = Math.min(this.highlighted, Math.max(0, this.rows.length - 1));
+            this.renderRows();
+            this.list.scrollTop = scrollTop;
+            return;
+        }
+        this.rows.slice(previous.length).forEach((s, index) => this.list.appendChild(this.rowEl(s, previous.length + index)));
     }
 
     private rowEl(s: SymbolDescriptor, i: number): HTMLElement {

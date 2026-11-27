@@ -2,6 +2,19 @@
 
 All notable changes to Vela, newest first.
 
+## [Unreleased]
+
+### Added
+
+- **Configurable symbol search categories.** Hosts can add, hide, and reorder tabs in the built-in
+  symbol picker and define which symbols each tab includes. All stays available for the whole catalog.
+
+### Changed
+
+- **Timeframe controls follow the active market.** Presets the source cannot serve are
+  dimmed in the menu and the mobile drawer. Unavailable favorites return when you switch
+  back to a market that offers them. Quick entry explains when a timeframe is unavailable.
+
 ## [0.10.19]
 
 ### Fixed
