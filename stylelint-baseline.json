@@ -104,7 +104,6 @@
         "vela/token-values": 3
     },
     "src/widget/timeframe-drawer.ts": {
-        "no-descending-specificity": 2,
         "vela/token-values": 1
     },
     "src/widget/timeframe-quick.ts": {

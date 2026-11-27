@@ -376,6 +376,7 @@ export class VelaWorkspace {
     private readonly regions = new Map<'column' | 'edge', HTMLElement>();
     private readonly events = new TypedEventBus<WorkspaceEventMap>();
     private readonly feed = new MultiProviderFeed();
+    private readonly offRegistryChange: () => void;
     private readonly cellsById = new Map<string, ChartCell>();
     /** The one second pulse behind every time display: the bottom-bar clock and each
      *  cell's countdown chip subscribe to it, so they can never read different seconds. */
@@ -455,6 +456,7 @@ export class VelaWorkspace {
     private toolDefsBusy = false;
     /** Favorite timeframes — the shared topbar's quick-switch chips, one set for the grid. */
     private tfFavs: string[] = [];
+    private timeframeSelectionRevision = 0;
     /** Live sync configuration (mutable copy of the option). */
     private readonly syncOpts: SyncOptions = {};
     // ── persistence (state surface + adapter plumbing) ──
@@ -735,7 +737,7 @@ export class VelaWorkspace {
             i18n: this.localeState,
             onApply: (tf) => this.setActiveTimeframe(tf),
             onOpenChange: (open) => this.trackDialog(open),
-        });
+        }, this.validateTimeframeSelection);
 
         // ── topbar (shared) — reflects the active cell; the layout dropdown reads the registry live ──
         this.topbar = new Topbar(this.root, {
@@ -780,6 +782,8 @@ export class VelaWorkspace {
                 glyph: () => layoutGlyph(this.def),
             },
             getContext: () => this.context(),
+        }, async (tf) => {
+            if (await this.validateTimeframeSelection(tf)) this.setActiveTimeframe(tf);
         });
 
         // ── main row: the shared drawing toolbar + the grid + the docked side panels ──
@@ -1016,6 +1020,11 @@ export class VelaWorkspace {
         this.relinkIdenticalDrawings(); // a persisted document's copies link again
         this.syncCellPresentation();
         this.setActiveCell(bootActive != null && this.cellsById.has(bootActive) ? bootActive : (this.order[0] ?? null));
+        this.offRegistryChange = this.feed.onRegistryChange(() => {
+            if (this.destroyed) return;
+            for (const cell of this.cellsById.values()) cell.refreshTimeframeMetadata();
+            if (this.activeId) this.projectCellTimeframes(this.activeId);
+        });
         // Shortcuts only fire while focus is INSIDE the workspace (the keymap listens
         // on the root) — autofocus makes them work before the first click.
         if (opts.autofocus) this.refocusActive();
@@ -1127,6 +1136,7 @@ export class VelaWorkspace {
 
     setActiveCell(id: string | null): void {
         if (id === this.activeId || this.destroyed) return;
+        ++this.timeframeSelectionRevision;
         const prev = this.activeId;
         if (prev) {
             const el = this.cellsById.get(prev)?.host;
@@ -1439,6 +1449,7 @@ export class VelaWorkspace {
                     const cell = this.cellsById.get(id);
                     if (!cell) continue;
                     cell.rehydrate(cs);
+                    if (st.timeframeFavorites) void cell.refreshTimeframeChoices();
                     // The document's drawings are the ones of the market it names, in
                     // place as its switch starts: nothing to wait for, and no arrival to
                     // bring in line with the peers. A document that names no drawings
@@ -1772,6 +1783,7 @@ export class VelaWorkspace {
         if (this.destroyed) return;
         this.flushPendingState(); // the user's last edit, before anything is torn down
         this.destroyed = true;
+        this.offRegistryChange();
         this.replay.destroy();
         if (this.persistKey !== null && typeof window !== 'undefined') window.removeEventListener('beforeunload', this.onUnload);
         this.resizeObserver?.disconnect();
@@ -2164,7 +2176,7 @@ export class VelaWorkspace {
                 onMarketChanged: (id) => this.onCellMarketChanged(id),
                 onPriceStyleChanged: (id) => this.onCellPriceStyleChanged(id),
                 onPriceStyleShown: (id) => this.projectCellPriceStyle(id),
-                timeframes: () => this.resolvedTimeframes(),
+                timeframes: () => [...new Set([...this.resolvedTimeframes(), ...this.tfFavs])],
                 onTimeframesShown: (id) => this.projectCellTimeframes(id),
                 onIndicatorsChanged: (id) => this.onCellIndicatorsChanged(id),
                 onStatusPrefsChanged: (id) => this.propagateStylePrefs(id),
@@ -2998,12 +3010,13 @@ export class VelaWorkspace {
         this.topbar.setPriceStyle(cell.priceStyle, cell.unavailablePriceStyles());
     }
 
-    /** The topbar timeframe menu's unavailable entries from the cell, if active. */
+    /** Project the active cell's unavailable timeframes onto the menu and favorite chips. */
     private projectCellTimeframes(id: string): void {
         if (id !== this.activeId) return;
         const cell = this.cellsById.get(id);
         if (!cell) return;
         this.topbar.setUnavailableTimeframes(cell.unavailableTimeframes());
+        this.tfDrawer?.refresh();
     }
 
     /** Configured timeframe presets: explicit host option wins, else plugin shell defaults, else built-in. */
@@ -3021,8 +3034,20 @@ export class VelaWorkspace {
         this.indicatorPicker?.sync();
     }
 
-    /** Timeframe changes routed from the topbar menu / quick entry (chip state follows). */
+    /** Check the active market before submitting a desktop shortcut. */
+    private readonly validateTimeframeSelection = async (tf: string): Promise<boolean | undefined> => {
+        const revision = ++this.timeframeSelectionRevision;
+        const id = this.activeId;
+        if (!id) return undefined;
+        const cell = this.cellsById.get(id);
+        const available = await cell?.isTimeframeAvailable(tf);
+        if (revision !== this.timeframeSelectionRevision || id !== this.activeId || cell !== this.cellsById.get(id)) return undefined;
+        return available;
+    };
+
+    /** Timeframe changes routed from the pickers and shortcuts (chip state follows). */
     private setActiveTimeframe(tf: string): void {
+        ++this.timeframeSelectionRevision;
         this.bottombar?.setActiveRange(null);
         this.active.setTimeframe(tf);
     }

@@ -11,10 +11,22 @@ All notable changes to Vela, newest first.
 
 ### Changed
 
-- **Timeframe controls follow the active market.** Presets the source cannot serve are
-  dimmed in the menu and the mobile drawer. Unavailable favorites return when you switch
-  back to a market that offers them. Quick entry explains when a timeframe is unavailable.
+- **Timeframe shortcuts follow the active symbol.** Unavailable favorites remain saved and return
+  on symbols that support them. Quick entry keeps unavailable choices open with an explanation,
+  including intervals outside the workspace presets.
+- **Minute based providers accept whole minute second intervals.** They convert intervals such as
+  120S to minutes and refuse unsupported intervals such as 90S through the existing data fallback.
 
+### Fixed
+
+- **Viewport aware native indicators draw when added.** They receive the chart's
+  current visible range when they start, including after a timeframe change.
+- **Time ticks stay readable across compressed trading breaks.** The time axis and
+  grid skip clock ticks inside a break. On intraday charts, repeated dates in the
+  same break share one marker, with calendar landmarks and the reopening bar's date
+  given priority. Candle spacing is preserved.
+- **Anchored VWAP panning.** Drag inside the shaded band to pan the chart and keep the anchor in
+  place. Use the VWAP line, a visible band stroke, or the anchor handle to move the drawing.
 ## [0.10.19]
 
 ### Fixed

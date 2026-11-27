@@ -2,7 +2,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { DataProvider } from '../src/core/ports/DataProvider';
 import type { SymbolInfo } from '../src/core/ports/MarketDataFeed';
-import { resolveTimeframeChoice } from '../src/widget/timeframe';
 import { encodeState } from '../src/workspace/persist';
 import { VelaWorkspace, type VelaWorkspaceOptions } from '../src/workspace/VelaWorkspace';
 
@@ -97,37 +96,6 @@ function quickInput(ws: VelaWorkspace): HTMLInputElement | null {
     return ws.root.querySelector<HTMLInputElement>('.vela-dialog[data-state="open"] .vela-tq-input');
 }
 
-describe('timeframe choices', () => {
-    it('treats finest as a lower bound for generic sources', () => {
-        const timeframes = { finest: '1' };
-        expect(resolveTimeframeChoice('6H', timeframes, '360')).toBe('360');
-        expect(resolveTimeframeChoice('30S', timeframes)).toBeNull();
-        expect(resolveTimeframeChoice('90S', timeframes)).toBe('90S');
-        expect(resolveTimeframeChoice('3M', timeframes, '129600')).toBe('3M');
-        expect(resolveTimeframeChoice('3M', undefined, '129600')).toBe('129600');
-    });
-
-    it('matches calendar aliases and uses the source spelling without equating calendar units', () => {
-        expect(resolveTimeframeChoice('D', { finest: '1D', list: ['1D'] })).toBe('1D');
-        expect(resolveTimeframeChoice('1D', { finest: 'D', list: ['D'] })).toBe('D');
-        expect(resolveTimeframeChoice('30D', { finest: 'M', list: ['M'] })).toBeNull();
-        expect(resolveTimeframeChoice('M', { finest: '30D', list: ['30D'] })).toBeNull();
-    });
-
-    it('distinguishes bare minutes from uppercase months and discards undocumented declarations', () => {
-        const timeframes = { finest: '3', list: ['3', '3M'] };
-        expect(resolveTimeframeChoice('3', timeframes)).toBe('3');
-        expect(resolveTimeframeChoice('3M', timeframes, '129600')).toBe('3M');
-        expect(resolveTimeframeChoice('129600', timeframes)).toBeNull();
-        expect(resolveTimeframeChoice('3', { finest: '3', list: ['3m'] })).toBeNull();
-        expect(resolveTimeframeChoice('3M', { finest: '3', list: ['3m'] })).toBeNull();
-    });
-
-    it('treats an empty symbol list as exhaustive', () => {
-        expect(resolveTimeframeChoice('60', { finest: '60', list: [] })).toBeNull();
-    });
-});
-
 describe('workspace timeframe controls', () => {
     it('uses the active market and restores a saved favorite where it is available', async () => {
         const limited = provider('limited', ['60', '1D'], async (ticker) => ({
@@ -218,7 +186,7 @@ describe('workspace timeframe controls', () => {
         press(input, 'Enter');
         await vi.waitFor(() => {
             expect(quickInput(ws)).toBe(input);
-            expect(ws.root.querySelector('.vela-tq-hint')?.textContent).toBe('This market does not offer that timeframe.');
+            expect(ws.root.querySelector('.vela-tq-hint')?.textContent).toBe('Not available for this symbol');
         });
         expect(ws.cell('c1')?.requestedTimeframe).toBe('60');
 
@@ -321,38 +289,6 @@ describe('workspace timeframe controls', () => {
         expect(disabled(menu, '240')).toBe(true);
     });
 
-    it('checks one alias and applies the advertised spelling from a desktop row', async () => {
-        const limited = provider('limited', undefined, async (ticker) => ({
-            ticker, timeframes: { finest: '3', list: ['3', '1D', '3M'] },
-        }));
-        const ws = mount({
-            symbol: 'limited:PLAIN', timeframe: '1D', timeframes: ['D', '01D', '3', '3M', '240'],
-            providers: { limited: () => limited },
-        });
-        const menu = await openMenu(ws);
-        await vi.waitFor(() => expect(disabled(menu, '240')).toBe(true));
-        expect(row(menu, 'D').hasAttribute('data-checked')).toBe(true);
-        expect(row(menu, '01D').hasAttribute('data-checked')).toBe(false);
-        expect(row(menu, '3').textContent).toBe('3m');
-        expect(row(menu, '3M').textContent).toBe('3M');
-        row(menu, '3M').click();
-        await vi.waitFor(() => expect(ws.active.requestedTimeframe).toBe('3M'));
-        const reopened = await openMenu(ws);
-        row(reopened, 'D').click();
-        await vi.waitFor(() => expect(ws.active.requestedTimeframe).toBe('1D'));
-
-        press(ws.root, '3');
-        const input = await vi.waitFor(() => {
-            expect(quickInput(ws)).not.toBeNull();
-            return quickInput(ws)!;
-        });
-        input.value = '3M';
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        expect(ws.root.querySelector('.vela-tq-hint')?.textContent).toBe('3 months');
-        press(input, 'Enter');
-        expect(ws.active.requestedTimeframe).toBe('3M');
-    });
-
     it('allows quick entry of 90S on a custom source whose finest timeframe is 1 minute', async () => {
         const custom = provider('custom', ['1'], async (ticker) => ({ ticker, timeframes: { finest: '1' } }));
         const ws = mount({ symbol: 'custom:PLAIN', providers: { custom: () => custom } });
@@ -366,7 +302,7 @@ describe('workspace timeframe controls', () => {
         input.dispatchEvent(new Event('input', { bubbles: true }));
         expect(ws.root.querySelector('.vela-tq-hint')?.textContent).toBe('90 seconds');
         press(input, 'Enter');
-        expect(ws.active.requestedTimeframe).toBe('90S');
+        await vi.waitFor(() => expect(ws.active.requestedTimeframe).toBe('90S'));
     });
 
     it('delivers the same calendar choice from the desktop menu and quick entry with a finest-only declaration', async () => {
@@ -392,7 +328,7 @@ describe('workspace timeframe controls', () => {
         input.dispatchEvent(new Event('input', { bubbles: true }));
         expect(ws.root.querySelector('.vela-tq-hint')?.textContent).toBe('3 months');
         press(input, 'Enter');
-        expect(ws.active.requestedTimeframe).toBe('3M');
+        await vi.waitFor(() => expect(ws.active.requestedTimeframe).toBe('129600'));
     });
 
     it('keeps choices available for an offline chart with a provider-qualified label', async () => {
@@ -458,7 +394,7 @@ describe('workspace timeframe controls', () => {
         buttons[3]!.click();
         await vi.waitFor(() => {
             expect(drawer.getAttribute('data-state')).toBe('closed');
-            expect(ws.cell('c1')?.requestedTimeframe).toBe('1D');
+            expect(ws.cell('c1')?.requestedTimeframe).toBe('D');
         });
     });
 });

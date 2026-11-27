@@ -8,7 +8,7 @@ import type { MessageLike, Translator } from '../core/i18n/types';
 import { Drawer } from '@luxalgo/vela-ui/drawer';
 import { injectChromeStyles } from '../ui/chromeStyles';
 import { rangeLabel, type RangePreset } from './bottombar';
-import { currentTimeframeChoice, workspaceTimeframeLabel, type TimeframeChoiceResolver } from './timeframe';
+import { timeframeLabel } from './timeframe';
 import { css } from '@luxalgo/vela-ui/css';
 import { t } from '@luxalgo/vela-ui/t';
 
@@ -23,8 +23,6 @@ const CSS = css`@layer vela.chrome {
     text-transform: uppercase;
     color: ${t.fg.bright};
 }
-.vela-tfd-heading + .vela-tfd-ranges,
-.vela-tfd-heading + .vela-tfd-grid { padding-top: 0; }
 .vela-tfd-ranges {
     display: flex;
     gap: 6px;
@@ -41,6 +39,8 @@ const CSS = css`@layer vela.chrome {
     gap: 6px;
     padding-bottom: 4px;
 }
+.vela-tfd-heading + .vela-tfd-ranges,
+.vela-tfd-heading + .vela-tfd-grid { padding-top: 0; }
 .vela-tfd-chip {
     all: unset;
     box-sizing: border-box;
@@ -59,18 +59,14 @@ const CSS = css`@layer vela.chrome {
     -webkit-tap-highlight-color: transparent;
 }
 .vela-tfd-chip:disabled {
-    opacity: 0.45;
-    cursor: default;
+    opacity: 0.38;
+    cursor: not-allowed;
 }
 .vela-tfd-chip:enabled:active { background: ${t.hover}; }
 .vela-tfd-chip[data-active='1'] {
     color: ${t.fg.bright};
     border-color: ${t.fg.bright};
     background: ${t.hover};
-}
-.vela-tfd-chip:disabled {
-    opacity: 0.38;
-    cursor: not-allowed;
 }
 
 }`;
@@ -83,7 +79,6 @@ const TEXT = {
 export interface TimeframeDrawerOptions {
     host: HTMLElement;
     timeframes: readonly string[];
-    resolveTimeframe: TimeframeChoiceResolver;
     ranges: readonly RangePreset[];
     /** Read live at open — the current timeframe (highlights its chip). */
     currentTimeframe: () => string;
@@ -137,9 +132,8 @@ export class TimeframeDrawer {
             const chip = doc.createElement('button');
             chip.className = 'vela-tfd-chip';
             chip.addEventListener('click', () => {
-                const choice = opts.resolveTimeframe(tf);
-                if (choice === null) return;
-                opts.onTimeframe(choice);
+                if (chip.disabled) return;
+                opts.onTimeframe(tf);
                 this.drawer.hide();
             });
             this.tfChips.set(tf, chip);
@@ -155,7 +149,7 @@ export class TimeframeDrawer {
         const i18n = this.opts.i18n;
         for (const { el, text } of this.headings) el.textContent = textOf(i18n, text);
         for (const [id, chip] of this.rangeChips) chip.textContent = rangeLabel(id, i18n);
-        for (const [tf, chip] of this.tfChips) chip.textContent = workspaceTimeframeLabel(tf, i18n);
+        for (const [tf, chip] of this.tfChips) chip.textContent = timeframeLabel(tf, i18n);
     }
 
     open(): void {
@@ -166,7 +160,6 @@ export class TimeframeDrawer {
 
     refresh(): void {
         const tf = this.opts.currentTimeframe();
-        const current = currentTimeframeChoice(this.opts.timeframes, tf, this.opts.resolveTimeframe);
         const range = this.opts.activeRange();
         const unavailable = new Set(this.opts.unavailableTimeframes?.() ?? []);
         for (const [id, chip] of this.rangeChips) {
@@ -174,8 +167,7 @@ export class TimeframeDrawer {
             else delete chip.dataset.active;
         }
         for (const [id, chip] of this.tfChips) {
-            chip.disabled = this.opts.resolveTimeframe(id) === null;
-            if (range === null && id === current) chip.dataset.active = '1';
+            if (range === null && id === tf) chip.dataset.active = '1';
             else delete chip.dataset.active;
             chip.disabled = unavailable.has(id);
         }

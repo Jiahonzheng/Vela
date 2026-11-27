@@ -13,6 +13,7 @@ import type { VisibleRangePreset } from '../core/visible-range';
 import type { VisibleRange } from '../core/ports/IChartRenderer';
 import type { DrawingsOption } from '../core/drawings';
 import type { MarketDataFeed, SymbolInfo } from '../core/ports/MarketDataFeed';
+import { MultiProviderFeed } from '../data/MultiProviderFeed';
 import { isTickTimeframe } from '../data/timeframe';
 import { matchSeriesAdapter } from '../data/series-adapters';
 import type { ScriptingEngine } from '../core/ports/ScriptingEngine';
@@ -224,7 +225,7 @@ export interface CellDeps {
     /** What the cell can draw changed with its symbol's facts — the drawn style, the greyed
      *  styles — while the chosen style did not: refresh the style chrome, nothing to save. */
     onPriceStyleShown?(id: string): void;
-    /** The workspace's configured timeframe presets, for per-symbol availability checks. */
+    /** The workspace's timeframe presets and favorites, for per-symbol availability checks. */
     timeframes?(): readonly string[];
     /** Per-symbol timeframe availability changed — refresh the timeframe chrome, nothing to save. */
     onTimeframesShown?(id: string): void;
@@ -311,8 +312,11 @@ export class ChartCell {
     /** Latched: the symbol's own trading zone (`SymbolInfo.timezone`) — what the exchange
      *  rule resolves to on this cell. Undefined until metadata lands or when none is declared. */
     private exchangeZone: string | undefined;
-    /** Timeframe presets the active symbol's source cannot serve (greyed in pickers). */
-    private unavailableTfs: string[] = [];
+    /** The current symbol's metadata, shared by the pickers and quick entry. */
+    private timeframeMetadata: { symbol: string; market: string | null; info: SymbolInfo | undefined } | null = null;
+    private timeframeChoicesRevision = 0;
+    /** Timeframe choices the active symbol's source cannot serve. */
+    private unavailableTfs: { symbol: string; session: MarketSession; choices: string[] } | null = null;
 
     private inner: Vela | null;
     /** The live app theme — seeded from deps, updated on `theme:changed` (the base the
@@ -765,7 +769,9 @@ export class ChartCell {
         const chart = this.inner;
         if (!chart || !symbol) return;
         this.metadataProbeSymbol = symbol; // last ask wins — a slow probe must not overwrite a newer verdict
-        void chart.data.symbolInfo(symbol).then((si) => {
+        const market = this.timeframeInfoSymbol(symbol);
+        const infoSymbol = market ?? symbol;
+        void chart.data.symbolInfo(infoSymbol).then((si) => {
             if (this.inner !== chart || this.metadataProbeSymbol !== symbol) return;
             if (si === undefined && retry) {
                 // Nothing resolved the symbol yet: the EARLY pass can precede the provider
@@ -775,6 +781,10 @@ export class ChartCell {
                 void chart.data.ready().then(() => {
                     if (this.inner === chart && this.metadataProbeSymbol === symbol) this.refreshSymbolMetadata(symbol, false);
                 });
+                return;
+            }
+            if (this.timeframeInfoSymbol(symbol) !== market) {
+                this.refreshSymbolMetadata(symbol, false);
                 return;
             }
             // The cell's own state may not carry this symbol yet — host code calling
@@ -796,16 +806,27 @@ export class ChartCell {
                 this.pushSettingsSections(); // the Trading session group follows the symbol
             }
             this.refreshSessionShading();
-            void this.refreshTimeframeAvailability(chart, symbol, si);
+            this.timeframeMetadata = { symbol, market, info: market === null ? undefined : si };
+            void this.refreshTimeframeChoices();
         });
     }
 
-    /** Compute which workspace timeframe presets are unavailable for `(symbol, si)` and notify
-     *  the shell if the set changed. Checks registered series adapters first, then symbol metadata. */
-    private async refreshTimeframeAvailability(chart: Vela, symbol: string, si: SymbolInfo | undefined): Promise<void> {
-        const list = this.deps.timeframes?.();
-        if (!list || list.length === 0) return;
-        const resolved = chart.data.resolve(symbol);
+    /** Re-probe provider metadata after the shared provider registry changes. */
+    refreshTimeframeMetadata(): void {
+        this.refreshSymbolMetadata();
+    }
+
+    /** Resolve a provider-qualified metadata key when the current listing is unambiguous. */
+    private timeframeInfoSymbol(symbol: string): string | null {
+        const feed = this.deps.feed;
+        if (!this.inner || this.inner.market.offline || !(feed instanceof MultiProviderFeed)) return null;
+        const resolved = feed.resolveUnambiguousSymbol(symbol);
+        return resolved ? `${resolved.provider}:${resolved.ticker}` : null;
+    }
+
+    /** Registered series adapters take precedence over the provider's symbol metadata. */
+    private timeframeAvailabilityFor(chart: Vela, market: string | null, si: SymbolInfo | undefined, session: MarketSession): (tf: string) => Promise<boolean> {
+        const resolved = market ? chart.data.resolve(market) : null;
         const provider = resolved ? chart.data.providerInstance(resolved.provider) : undefined;
         const providerInfo = provider?.info?.();
         const providerHasTicks = providerInfo?.supportedTimeframes?.some((t) => isTickTimeframe(t)) === true;
@@ -813,47 +834,87 @@ export class ChartCell {
         const siFinestMs = si?.timeframes?.finest !== undefined ? timeframeMs(si.timeframes.finest) : NaN;
         const siHasTicks = si?.timeframes?.ticks === true || si?.['has_ticks'] === true;
 
-        const next: string[] = [];
-        for (const tf of list) {
+        return async (tf) => {
             const adapter = resolved && provider ? matchSeriesAdapter(tf, provider, resolved.provider) : undefined;
             if (adapter?.supports && resolved && provider) {
-                let ok = true;
                 try {
-                    ok = await adapter.supports(
+                    return await adapter.supports(
                         {
                             providerName: resolved.provider,
                             provider,
                             ticker: resolved.ticker,
-                            session: this.session,
+                            session,
                             symbolInfo: async () => si,
                         },
                         tf,
                     );
                 } catch {
-                    ok = false;
+                    return false;
                 }
-                if (this.inner !== chart || this.metadataProbeSymbol !== symbol) return;
-                if (!ok) next.push(tf);
-                continue;
             }
             if (isTickTimeframe(tf)) {
                 const inList = siList?.includes(chartTimeframeOf(tf) ?? tf) === true;
-                if (si !== undefined && !siHasTicks && !inList && !providerHasTicks) next.push(tf);
-                continue;
+                return si === undefined || siHasTicks || inList || providerHasTicks;
             }
-            if (siList) {
-                const canon = chartTimeframeOf(tf) ?? tf;
-                if (!siList.includes(canon)) next.push(tf);
-            } else if (Number.isFinite(siFinestMs)) {
-                const tfMs = timeframeMs(tf);
-                if (Number.isFinite(tfMs) && tfMs < siFinestMs) next.push(tf);
+            if (siList) return siList.includes(chartTimeframeOf(tf) ?? tf);
+            const tfMs = timeframeMs(tf);
+            return !(Number.isFinite(siFinestMs) && Number.isFinite(tfMs) && tfMs < siFinestMs);
+        };
+    }
+
+    /** @internal Reproject workspace presets and favorites after metadata or saved choices change. */
+    async refreshTimeframeChoices(): Promise<void> {
+        const chart = this.inner;
+        const metadata = this.timeframeMetadata;
+        const symbol = this.symbol;
+        if (!chart || metadata?.symbol !== symbol) return;
+        const session = this.session;
+        if (chart.market.offline) {
+            if (this.unavailableTimeframes().length > 0) {
+                this.unavailableTfs = { symbol, session, choices: [] };
+                this.deps.onTimeframesShown?.(this.id);
             }
+            return;
         }
-        if (this.inner !== chart || this.metadataProbeSymbol !== symbol) return;
-        const same = next.length === this.unavailableTfs.length && next.every((v, i) => v === this.unavailableTfs[i]);
-        if (same) return;
-        this.unavailableTfs = next;
+        const revision = ++this.timeframeChoicesRevision;
+        const isAvailable = this.timeframeAvailabilityFor(chart, metadata.market, metadata.info, session);
+        const next: string[] = [];
+        for (const tf of this.deps.timeframes?.() ?? []) {
+            if (!await isAvailable(tf)) next.push(tf);
+            if (revision !== this.timeframeChoicesRevision || this.inner !== chart || this.metadataProbeSymbol !== symbol || this.session !== session) return;
+        }
+        const previous = this.unavailableTimeframes();
+        if (next.length === previous.length && next.every((v, i) => v === previous[i])) return;
+        this.unavailableTfs = { symbol, session, choices: next };
         this.deps.onTimeframesShown?.(this.id);
+    }
+
+    /** @internal Check a shortcut, including an unlisted choice. Undefined if the market changed. */
+    async isTimeframeAvailable(tf: string): Promise<boolean | undefined> {
+        const chart = this.inner;
+        if (!chart) return undefined;
+        const symbol = this.symbol;
+        const chartMarket = chart.market;
+        // A direct chart.setMarket already targets the new symbol while the cell
+        // still projects the previous one. Wait for the cell to catch up.
+        if ((chartMarket.symbol ?? symbol) !== symbol) return undefined;
+        const isCurrent = () => {
+            const current = chart.market;
+            return this.inner === chart && this.symbol === symbol
+                && current.symbol === chartMarket.symbol && current.session === chartMarket.session
+                && current.timeframe === chartMarket.timeframe && current.offline === chartMarket.offline;
+        };
+        if (chartMarket.offline) return isCurrent() ? true : undefined;
+        // The existing symbol-info cache also shares an in-flight metadata request.
+        let sourceMarket = this.timeframeInfoSymbol(symbol);
+        if (symbol && sourceMarket === null && !chart.data.resolve(symbol)) await chart.data.ready();
+        if (!isCurrent()) return undefined;
+        sourceMarket = this.timeframeInfoSymbol(symbol);
+        const info = sourceMarket === null ? undefined : await chart.data.symbolInfo(sourceMarket).catch(() => undefined);
+        if (!isCurrent() || this.timeframeInfoSymbol(symbol) !== sourceMarket) return undefined;
+        const isAvailable = this.timeframeAvailabilityFor(chart, sourceMarket, info, chartMarket.session ?? 'regular');
+        const available = await isAvailable(tf);
+        return isCurrent() && this.timeframeInfoSymbol(symbol) === sourceMarket ? available : undefined;
     }
 
     /** (Re)derive the pre/post-market shading bands for this cell's market. The bands
@@ -1180,9 +1241,10 @@ export class ChartCell {
         return typeof live === 'string' ? live : (this.state.priceStyle ?? 'candles');
     }
 
-    /** The timeframe presets the cell's current symbol cannot serve (greyed in pickers). */
+    /** The workspace timeframe choices the cell's current symbol cannot serve. */
     unavailableTimeframes(): readonly string[] {
-        return this.unavailableTfs;
+        const unavailable = this.unavailableTfs;
+        return unavailable?.symbol === this.symbol && unavailable.session === this.session ? unavailable.choices : [];
     }
 
     /** The style ids the symbol's data cannot draw — greyed in the style pickers. Empty while
