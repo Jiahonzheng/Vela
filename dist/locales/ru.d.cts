@@ -1,4 +1,4 @@
-import { L as LocalePack } from '../types-CsUd831-.cjs';
+import { L as LocalePack } from '../types-DXVlW2vL.cjs';
 
 declare const ru: LocalePack;
 

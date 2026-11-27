@@ -1,9 +1,9 @@
-import { i as MessageDescriptor, a as MessageArgs, L as LocalePack, b as LocalizationOptions, T as Translator, M as MessageLike } from './types-CsUd831-.cjs';
-import { X as DrawingTypeKey, ar as DrawingStyle, g as SerializedDrawing, f as Drawing, O as OHLCV, m as SymbolFacts, bd as SeriesKind, d as VelaTheme } from './DataProvider-DqY7R0hL.cjs';
-import { g as DataControl, d as SidebarComposition } from './contributions-CYrk3HKz.cjs';
-import './side-panel-DfLMHSx9.cjs';
+import { i as MessageDescriptor, a as MessageArgs, L as LocalePack, b as LocalizationOptions, T as Translator, M as MessageLike } from './types-DXVlW2vL.js';
+import { X as DrawingTypeKey, ar as DrawingStyle, h as SerializedDrawing, g as Drawing, O as OHLCV, n as SymbolFacts, D as DataProvider, S as SymbolInfo, B as BarRange, U as Unsubscribe, bd as SeriesKind, d as VelaTheme } from './DataProvider-CyaRCe6l.js';
+import { g as DataControl, a as SidebarComposition } from './contributions-CxPEBGOq.js';
+import './side-panel-fkNtWL1d.js';
 import '@luxalgo/vela-ui/icons';
-import './keymap-Nk4cb7Tm.cjs';
+import './keymap-Tee7NROM.js';
 import '@luxalgo/vela-ui/palette';
 
 /** Values a message interpolates. */
@@ -614,6 +614,75 @@ declare function chartTypes(): ChartTypeDefinition[];
 /** Ids that act as extended-ticker modifiers (`"SYM;id"`). */
 declare function tickerModifierIds(): string[];
 
+/**
+ * Parse a tick-count timeframe (`1T`, `100T`, `1000T`, or bare `T` ⇒ `1`). Returns the
+ * positive integer tick count, or `null` for any non-tick timeframe.
+ */
+declare function parseTickTimeframe(timeframe: string): number | null;
+/** Whether `timeframe` is a tick-count resolution (`1T`, `100T`, …). */
+declare function isTickTimeframe(timeframe: string): boolean;
+/**
+ * Whether bars on `timeframe` have no fixed wall-clock duration (tick bars, etc.).
+ * Fixed-duration assumptions — time-based gap healing, bar-close countdowns, and
+ * time-keyed deduplication — stand down for these series.
+ */
+declare function isVariableDurationTimeframe(timeframe: string): boolean;
+/**
+ * Bar duration in ms for a Vela timeframe: a bare number is **minutes** (Pine
+ * resolution — `60` = 1h, `240` = 4h), `D`/`W`/`M` are the named periods, also with a
+ * count (`1D`, `2W`, `3M`, `12M`), `S` counts seconds (`30S`), and the `15m`/`4h`/`1d`/`1w`
+ * aliases are also accepted. Letters are case-insensitive except `M` (month) vs `m`
+ * (minute). Falls back to 1h for anything unparsed.
+ */
+declare function timeframeToMs(timeframe: string): number;
+
+/**
+ * Context handed to a {@link SeriesAdapter} for one `(provider, ticker, timeframe)` request.
+ * Everything needed to read base data, metadata, or extended provider surfaces without
+ * reaching into feed internals.
+ */
+interface SeriesAdapterContext {
+    /** Registered provider name (e.g. `'binance'`). */
+    readonly providerName: string;
+    /** The registered provider instance (narrow with a type guard for extended feeds). */
+    readonly provider: DataProvider;
+    /** Provider-scoped ticker (without the `provider:` prefix). */
+    readonly ticker: string;
+    /** Requested chart timeframe (e.g. `'100T'`). */
+    readonly timeframe: string;
+    /** Trading session (`'regular'` | `'extended'`), when declared. */
+    readonly session?: string;
+    /** Cached per-symbol metadata from the owning provider, when available. */
+    symbolInfo(): Promise<SymbolInfo | undefined>;
+}
+/**
+ * A pluggable series adapter for custom or synthetic timeframe families (tick bars, volume
+ * bars, range bars, derived resolutions). Registered globally through
+ * {@link registerSeriesAdapter}; `MultiProviderFeed` consults registered adapters before
+ * calling a provider's `getBars`/`subscribe` directly.
+ */
+interface SeriesAdapter {
+    /** Stable id — re-registering an id replaces the previous adapter. */
+    readonly id: string;
+    /** Return true when this adapter handles `(timeframe, provider)` (first match wins). */
+    matches(timeframe: string, provider: DataProvider, providerName: string): boolean;
+    /** Fetch historical bars for the adapted series. Throw `DataUnavailableError` to refuse permanently. */
+    getBars(ctx: SeriesAdapterContext, range: BarRange): Promise<OHLCV[]>;
+    /** Stream live updates for the adapted series. Absent ⇒ the feed polls `getBars`. */
+    subscribe?(ctx: SeriesAdapterContext, onBar: (bar: OHLCV) => void): Unsubscribe;
+    /** Optional per-symbol availability check powering timeframe picker gating. */
+    supports?(ctx: Omit<SeriesAdapterContext, 'timeframe'>, timeframe: string): boolean | Promise<boolean>;
+}
+/**
+ * Register a {@link SeriesAdapter}. Re-registering the same `id` replaces it. Returns a
+ * disposer that removes this registration (leaving any later replacement intact).
+ */
+declare function registerSeriesAdapter(adapter: SeriesAdapter): () => void;
+/** Remove a registered series adapter by id. */
+declare function unregisterSeriesAdapter(id: string): void;
+/** All currently registered series adapters, in registration order. */
+declare function seriesAdapters(): readonly SeriesAdapter[];
+
 /** Things that need a stable id within an indicator instance. */
 type IdentifiableKind = SeriesKind | 'fill' | 'background' | 'hline' | 'line' | 'box' | 'label' | 'polyline' | 'linefill' | 'table';
 /**
@@ -668,6 +737,8 @@ declare function rendererDefaults(): Record<string, unknown>;
 interface ShellDefaults {
     /** The right-edge toolbar (`sidebar`), as a shell option takes it. */
     sidebar?: boolean | SidebarComposition;
+    /** Default timeframe presets for shells constructed without an explicit `timeframes` option. */
+    timeframes?: readonly string[];
 }
 /**
  * Register defaults for shell options. Every shell built afterwards uses one where its host
@@ -768,4 +839,4 @@ declare function unregisterRendererLayer(id: string): void;
 /** Every registered layer definition (registration order). */
 declare function rendererLayers(): RendererLayerDefinition[];
 
-export { unregisterShellDefaults as $, normalizeSettingsRow as A, type BarTransform as B, type ChartTypeDefinition as C, type DrawingTypeMeta as D, priceStyleApplies as E, registerChartType as F, registerDrawingType as G, registerLocale as H, type IdentifiableKind as I, registerRendererDefaults as J, registerRendererLayer as K, registerShellDefaults as L, type MessageValues as M, type NormalizedSettingsRow as N, registeredLocales as O, rendererDefaults as P, rendererLayers as Q, type RendererLayerArgs as R, type SettingsSelectOption as S, settingsRowValueKeys as T, shellDefaults as U, shownPriceStyle as V, stableSeriesId as W, tickerModifierIds as X, unregisterChartType as Y, unregisterRendererDefaults as Z, unregisterRendererLayer as _, type BasePaintingModulation as a, withValues as a0, type ChartTypeSettingsInstance as b, type ChartTypeSettingsSection as c, type ChartTypeSettingsSubsection as d, type RendererLayerDefinition as e, type RendererLayerInstance as f, type SeriesDataEngine as g, type SeriesDataEngineHost as h, type SettingsInlineControl as i, type SettingsRowCondition as j, type SettingsRowDescriptor as k, type SettingsRowInlineNumber as l, type SettingsRowSwatch as m, type SettingsRowValueKey as n, type SettingsRowWhen as o, type SettingsRowWidth as p, type SettingsValueRow as q, type ShellDefaults as r, chartType as s, chartTypes as t, createDrawing as u, createTranslator as v, deserializeDrawing as w, drawingTypes as x, getDrawingType as y, msg as z };
+export { shellDefaults as $, getDrawingType as A, type BarTransform as B, type ChartTypeDefinition as C, type DrawingTypeMeta as D, isTickTimeframe as E, isVariableDurationTimeframe as F, msg as G, normalizeSettingsRow as H, type IdentifiableKind as I, parseTickTimeframe as J, priceStyleApplies as K, registerChartType as L, type MessageValues as M, type NormalizedSettingsRow as N, registerDrawingType as O, registerLocale as P, registerRendererDefaults as Q, type RendererLayerArgs as R, type SettingsSelectOption as S, registerRendererLayer as T, registerSeriesAdapter as U, registerShellDefaults as V, registeredLocales as W, rendererDefaults as X, rendererLayers as Y, seriesAdapters as Z, settingsRowValueKeys as _, type BasePaintingModulation as a, shownPriceStyle as a0, stableSeriesId as a1, tickerModifierIds as a2, timeframeToMs as a3, unregisterChartType as a4, unregisterRendererDefaults as a5, unregisterRendererLayer as a6, unregisterSeriesAdapter as a7, unregisterShellDefaults as a8, withValues as a9, type ChartTypeSettingsInstance as b, type ChartTypeSettingsSection as c, type ChartTypeSettingsSubsection as d, type RendererLayerDefinition as e, type RendererLayerInstance as f, type SeriesAdapter as g, type SeriesAdapterContext as h, type SeriesDataEngine as i, type SeriesDataEngineHost as j, type SettingsInlineControl as k, type SettingsRowCondition as l, type SettingsRowDescriptor as m, type SettingsRowInlineNumber as n, type SettingsRowSwatch as o, type SettingsRowValueKey as p, type SettingsRowWhen as q, type SettingsRowWidth as r, type SettingsValueRow as s, type ShellDefaults as t, chartType as u, chartTypes as v, createDrawing as w, createTranslator as x, deserializeDrawing as y, drawingTypes as z };

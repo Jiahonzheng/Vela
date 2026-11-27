@@ -1,12 +1,11 @@
-import { VelaWorkspace } from './chunk-EURYHKFU.js';
-export { Bottombar, ChartContextMenu, DataWindow, IndicatorPicker, ObjectTree, PanelDock, RANGE_PRESETS, SYMBOL_PICKER_DEFAULT_CATEGORIES, ShortcutsHelp, Statusline, SymbolPicker, TimeframeQuick, Topbar, Watermark, dataWindowSections, decimalsFor, decodeState, encodeState, filterSymbols, fmtChange, fmtPrice, localStorageAdapter, parseTimeframe, priceStyleLabel, resolveIndicators, sanitizeState, timeframeLabel, timeframeMs } from './chunk-EURYHKFU.js';
-import './chunk-OSXGWMCA.js';
-export { CONTEXT_MENU_BUILTIN_ORDER, DEFAULT_PANEL_MAX_WIDTH, DEFAULT_PANEL_MIN_WIDTH, DEFAULT_PANEL_ORDER, DEFAULT_PANEL_WIDTH, OVERRIDABLE_TOPBAR_IDS, SIDEBAR_ACTIONS_SLOT, SIDEBAR_DEFAULT_BOTTOM, SIDEBAR_DEFAULT_TOP, SIDEBAR_PANELS_SLOT, SIDEBAR_SEPARATOR, SidePanel, TIMEZONES, TOPBAR_BUILTIN_IDS, TOPBAR_DEFAULT_LEFT, TOPBAR_DEFAULT_RIGHT, clampPanelWidth, composeSidebar, normalizeTimezone, pinnedTopbarActionIds, registerSidePanel, registerStatePersistence, registerSymbolRanking, registerWidgetAction, registerWidgetAttachment, resolveTopbarComposition, sidePanels, statePersistenceHandlers, symbolRanking, topbarActionOverride, topbarHas, tzButtonLabel, tzMenuLabel, tzOffset, unregisterSidePanel, unregisterStatePersistence, unregisterWidgetAction, unregisterWidgetAttachment, widgetActions, widgetAttachments } from './chunk-VDJ63WNL.js';
-import './chunk-ARGBUJLO.js';
-import './chunk-VCYHJS6Q.js';
+import { VelaWorkspace } from './chunk-BRDNHHKB.js';
+export { Bottombar, ChartContextMenu, DataWindow, IndicatorPicker, ObjectTree, PanelDock, RANGE_PRESETS, SYMBOL_PICKER_DEFAULT_CATEGORIES, ShortcutsHelp, Statusline, SymbolPicker, TimeframeQuick, Topbar, Watermark, chartTimeframeOf, dataWindowSections, decimalsFor, decodeState, encodeState, filterSymbols, fmtChange, fmtPrice, localStorageAdapter, parseTimeframe, priceStyleLabel, resolveIndicators, sanitizeState, timeframeLabel, timeframeMs } from './chunk-BRDNHHKB.js';
+import './chunk-JH6BYKFA.js';
+export { CONTEXT_MENU_BUILTIN_ORDER, DEFAULT_PANEL_MAX_WIDTH, DEFAULT_PANEL_MIN_WIDTH, DEFAULT_PANEL_ORDER, DEFAULT_PANEL_WIDTH, OVERRIDABLE_TOPBAR_IDS, SIDEBAR_ACTIONS_SLOT, SIDEBAR_DEFAULT_BOTTOM, SIDEBAR_DEFAULT_TOP, SIDEBAR_PANELS_SLOT, SIDEBAR_SEPARATOR, SidePanel, TIMEZONES, TOPBAR_BUILTIN_IDS, TOPBAR_DEFAULT_LEFT, TOPBAR_DEFAULT_RIGHT, clampPanelWidth, composeSidebar, normalizeTimezone, pinnedTopbarActionIds, registerSidePanel, registerStatePersistence, registerSymbolRanking, registerWidgetAction, registerWidgetAttachment, resolveTopbarComposition, sidePanels, statePersistenceHandlers, symbolRanking, topbarActionOverride, topbarHas, tzButtonLabel, tzMenuLabel, tzOffset, unregisterSidePanel, unregisterStatePersistence, unregisterWidgetAction, unregisterWidgetAttachment, widgetActions, widgetAttachments } from './chunk-E6BPBCTQ.js';
+import './chunk-452ETMSN.js';
+import './chunk-TU3IUIQG.js';
 import './chunk-W4EJWLEO.js';
-import './chunk-IXLGXG62.js';
-import './chunk-UGLBJVMQ.js';
+import './chunk-MZKXDQ4O.js';
 
 // src/widget/VelaWidget.ts
 var deprecationWarned = false;

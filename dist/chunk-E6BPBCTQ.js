@@ -1,4 +1,4 @@
-import { msg, sourceText, textOf, localizeNumberText, englishTranslator, withValues } from './chunk-VCYHJS6Q.js';
+import { msg, sourceText, textOf, localizeNumberText, englishTranslator, withValues } from './chunk-TU3IUIQG.js';
 import { NEUTRAL, BEARISH, WARNING, BULLISH, INFO, ACCENT_BRIGHT, VALID, INVALID, MARKER, ACCENT } from '@luxalgo/vela-ui/palette';
 export { ACCENT, ACCENT_BRIGHT, BEARISH, BULLISH, CATEGORICAL, CHIP_PLATE, CROSSHAIR, HIGHLIGHT, INFO, INVALID, MARKER, NEUTRAL, SERIES_LINE, SESSION_OFF, SESSION_POST, SESSION_PRE, SLATE, SLATE_DEEP, TRADE_EXIT, TRADE_LONG, TRADE_SHORT, VALID, WARNING, categoricalColor } from '@luxalgo/vela-ui/palette';
 import { svg24, iconEl } from '@luxalgo/vela-ui/icons';
@@ -8,6 +8,18 @@ import { announceSurface } from '@luxalgo/vela-ui/surface-events';
 import { holdForExit } from '@luxalgo/vela-ui/surface-exit';
 import { css } from '@luxalgo/vela-ui/css';
 import { t } from '@luxalgo/vela-ui/t';
+
+// src/core/model/ohlcv.ts
+function isSameBar(a, b) {
+  if (a.time !== b.time) return false;
+  if (a.seq !== void 0 && b.seq !== void 0) return a.seq === b.seq;
+  return true;
+}
+function isNewerBar(bar, last) {
+  if (bar.time > last.time) return true;
+  if (bar.time === last.time && bar.seq !== void 0 && last.seq !== void 0) return bar.seq > last.seq;
+  return false;
+}
 
 // src/core/model/series.ts
 function isLineLikeSeries(spec) {
@@ -6597,6 +6609,27 @@ function rendererDefaults() {
   return Object.fromEntries(defaults5);
 }
 
+// src/data/series-adapters.ts
+var adapters = /* @__PURE__ */ new Map();
+function registerSeriesAdapter(adapter) {
+  adapters.set(adapter.id, adapter);
+  return () => {
+    if (adapters.get(adapter.id) === adapter) adapters.delete(adapter.id);
+  };
+}
+function unregisterSeriesAdapter(id) {
+  adapters.delete(id);
+}
+function seriesAdapters() {
+  return [...adapters.values()];
+}
+function matchSeriesAdapter(timeframe, provider, providerName) {
+  for (const adapter of adapters.values()) {
+    if (adapter.matches(timeframe, provider, providerName)) return adapter;
+  }
+  return void 0;
+}
+
 // src/chart-types/applicability.ts
 var OHLC_BUILTINS = /* @__PURE__ */ new Set(["candles", "bars"]);
 var PRICE_STYLE_FALLBACKS = ["linemarkers", "line"];
@@ -6801,8 +6834,8 @@ function shellDefaults() {
 }
 
 // src/widget/topbar-composition.ts
-var TOPBAR_BUILTIN_IDS = ["symbol", "timeframes", "style", "layout", "indicators", "actions", "undo-redo", "alerts", "panels", "screenshot", "fullscreen"];
-var TOPBAR_DEFAULT_LEFT = ["symbol", "timeframes", "style", "layout", "indicators", "actions", "undo-redo"];
+var TOPBAR_BUILTIN_IDS = ["symbol", "compare", "timeframes", "style", "layout", "indicators", "actions", "undo-redo", "alerts", "panels", "screenshot", "fullscreen"];
+var TOPBAR_DEFAULT_LEFT = ["symbol", "compare", "timeframes", "style", "layout", "indicators", "actions", "undo-redo"];
 var TOPBAR_DEFAULT_RIGHT = ["actions", "alerts", "panels", "screenshot", "fullscreen"];
 function resolveTopbarComposition(opt) {
   const seen = /* @__PURE__ */ new Set();
@@ -6859,7 +6892,7 @@ function unregisterSidePanel(id) {
 function sidePanels() {
   return [...panels.values()].sort((a, b) => (a.order ?? DEFAULT_PANEL_ORDER) - (b.order ?? DEFAULT_PANEL_ORDER));
 }
-var OVERRIDABLE_TOPBAR_IDS = ["indicators", "screenshot"];
+var OVERRIDABLE_TOPBAR_IDS = ["indicators", "screenshot", "compare"];
 var overridableSet = new Set(OVERRIDABLE_TOPBAR_IDS);
 var builtinTopbarSet = new Set(TOPBAR_BUILTIN_IDS);
 function topbarActionOverride(id) {
@@ -7080,6 +7113,8 @@ var TEXT = {
   axisLabels: msg("widget.contextMenu.axisLabels", "Price axis labels"),
   priceLabel: msg("widget.contextMenu.priceLabel", "Last price label"),
   countdown: msg("widget.contextMenu.countdown", "Countdown to bar close"),
+  indicatorValueLabels: msg("widget.contextMenu.indicatorValueLabels", "Indicator value labels"),
+  indicatorNameLabels: msg("widget.contextMenu.indicatorNameLabels", "Indicator name labels"),
   levels: msg("widget.contextMenu.levels", "Levels"),
   priceLine: msg("widget.contextMenu.priceLine", "Last price line"),
   moreSettings: msg("widget.contextMenu.moreSettings", "More settings…"),
@@ -7157,7 +7192,9 @@ function priceAxisItems(s, i18n) {
       submenu: [
         { id: "toggle:axisLabels", label: t2(TEXT.axisLabels), checked: s.axisLabels },
         { id: "toggle:priceLabel", label: t2(TEXT.priceLabel), checked: s.priceLabel },
-        { id: "toggle:countdown", label: t2(TEXT.countdown), checked: s.countdown }
+        { id: "toggle:countdown", label: t2(TEXT.countdown), checked: s.countdown },
+        { id: "toggle:indicatorValueLabels", label: t2(TEXT.indicatorValueLabels), checked: s.indicatorValueLabels },
+        { id: "toggle:indicatorNameLabels", label: t2(TEXT.indicatorNameLabels), checked: s.indicatorNameLabels }
       ]
     },
     {
@@ -7628,4 +7665,4 @@ var SidePanel = class {
   }
 };
 
-export { AnchoredVwap, ArrowMark, Box, CONTEXT_MENU_BUILTIN_ORDER, Callout, CalloutBase, Comment, DEDEKIND_CURVATURE_OPTIONS, DEFAULT_DRAWING_COLOR, DEFAULT_PANEL_MAX_WIDTH, DEFAULT_PANEL_MIN_WIDTH, DEFAULT_PANEL_ORDER, DEFAULT_PANEL_WIDTH, DIRECTION_OPTIONS, DedekindTessellation, Drawing, FIB_PRESETS, FibLevels, FibRatios, FibRetracement, FibSpiral, FixedRangeVolumeProfile, GANN_SQUARE_ARCS, GLYPH_OPTIONS, GannSquare, GlyphStamp, LINE_STYLE_OPTIONS, Liquidity, MACH_NUMBER_OPTIONS, MACH_WAVE_COUNT_OPTIONS, MachFigure, Magnifier, MeasureBox, Note, OVERRIDABLE_TOPBAR_IDS, PatternDrawing, PositionTool, PriceActionZone, PriceLabel, PriceNote, RadialFib, RegressionChannel, SIDEBAR_ACTIONS_SLOT, SIDEBAR_DEFAULT_BOTTOM, SIDEBAR_DEFAULT_TOP, SIDEBAR_PANELS_SLOT, SIDEBAR_SEPARATOR, STAMP_SIZE_OPTIONS, SegmentDrawing, SidePanel, Signpost, TEXT_SIZE_OPTIONS, TIMEFRAME_BANDS, TIMEZONES, TOPBAR_BUILTIN_IDS, TOPBAR_DEFAULT_LEFT, TOPBAR_DEFAULT_RIGHT, TextLabel, TrendLine, bodyItems, chartType, chartTypes, clampPanelWidth, composeMenu, composeSidebar, createDrawing, defaultText, deserializeDrawing, drawingActions, drawingActionsProviderFor, drawingTypeEntries, drawingTypeEntry, drawingTypes, foldBaseModulation, getDrawingType, getNativeIndicator, injectChromeStyles, inputDeltas, inputVisible, invertWrite, isExchangeTimezone, isLineLikeSeries, isTransparentStrokeColor, joinMultiValue, legendActions, legendActionsProviderFor, legendCallouts, legendCalloutsProviderFor, lineSegmentIntersection, magnifierTimeframeLabel, magnifierTimeframesBelow, matchFibPreset, mobilePlacement, nativeIndicatorDescriptors, nativeIndicatorEntries, nativeIndicatorEntry, nativeIndicatorTypes, nativeInstanceChannel, normalizeSettingsRow, normalizeTimezone, paneScaleAt, parseMultiValue, pinnedTopbarActionIds, priceAxisItems, priceOnlyState, priceStyleApplies, registerChartType, registerDefaultEngine, registerDrawingAction, registerDrawingType, registerLegendAction, registerLegendCallout, registerNativeIndicator, registerRendererDefaults, registerRendererLayer, registerShellDefaults, registerSidePanel, registerStatePersistence, registerSymbolRanking, registerWidgetAction, registerWidgetAttachment, rendererDefaults, rendererLayers, resetDrawingSettings, resolveEngines, resolveTimezone, resolveTopbarComposition, sanitizeShowOn, scaleChoiceOf, scaleWrites, seriesInScale, seriesShownOn, settingsRowValueKeys, settingsRowVisible, settingsSectionOf, shellDefaults, shownOnTimeframe, shownPriceStyle, sidePanels, stableSeriesId, statePersistenceHandlers, symbolRanking, tickerModifierIds, timeAxisItems, timeframeBandOf, timezoneMenuRows, topbarActionOverride, topbarHas, tzButtonLabel, tzMenuLabel, tzOffset, unregisterChartType, unregisterDefaultEngine, unregisterDrawingAction, unregisterLegendAction, unregisterLegendCallout, unregisterNativeIndicator, unregisterRendererDefaults, unregisterRendererLayer, unregisterShellDefaults, unregisterSidePanel, unregisterStatePersistence, unregisterWidgetAction, unregisterWidgetAttachment, widgetActions, widgetAttachments };
+export { AnchoredVwap, ArrowMark, Box, CONTEXT_MENU_BUILTIN_ORDER, Callout, CalloutBase, Comment, DEDEKIND_CURVATURE_OPTIONS, DEFAULT_DRAWING_COLOR, DEFAULT_PANEL_MAX_WIDTH, DEFAULT_PANEL_MIN_WIDTH, DEFAULT_PANEL_ORDER, DEFAULT_PANEL_WIDTH, DIRECTION_OPTIONS, DedekindTessellation, Drawing, FIB_PRESETS, FibLevels, FibRatios, FibRetracement, FibSpiral, FixedRangeVolumeProfile, GANN_SQUARE_ARCS, GLYPH_OPTIONS, GannSquare, GlyphStamp, LINE_STYLE_OPTIONS, Liquidity, MACH_NUMBER_OPTIONS, MACH_WAVE_COUNT_OPTIONS, MachFigure, Magnifier, MeasureBox, Note, OVERRIDABLE_TOPBAR_IDS, PatternDrawing, PositionTool, PriceActionZone, PriceLabel, PriceNote, RadialFib, RegressionChannel, SIDEBAR_ACTIONS_SLOT, SIDEBAR_DEFAULT_BOTTOM, SIDEBAR_DEFAULT_TOP, SIDEBAR_PANELS_SLOT, SIDEBAR_SEPARATOR, STAMP_SIZE_OPTIONS, SegmentDrawing, SidePanel, Signpost, TEXT_SIZE_OPTIONS, TIMEFRAME_BANDS, TIMEZONES, TOPBAR_BUILTIN_IDS, TOPBAR_DEFAULT_LEFT, TOPBAR_DEFAULT_RIGHT, TextLabel, TrendLine, bodyItems, chartType, chartTypes, clampPanelWidth, composeMenu, composeSidebar, createDrawing, defaultText, deserializeDrawing, drawingActions, drawingActionsProviderFor, drawingTypeEntries, drawingTypeEntry, drawingTypes, foldBaseModulation, getDrawingType, getNativeIndicator, injectChromeStyles, inputDeltas, inputVisible, invertWrite, isExchangeTimezone, isLineLikeSeries, isNewerBar, isSameBar, isTransparentStrokeColor, joinMultiValue, legendActions, legendActionsProviderFor, legendCallouts, legendCalloutsProviderFor, lineSegmentIntersection, magnifierTimeframeLabel, magnifierTimeframesBelow, matchFibPreset, matchSeriesAdapter, mobilePlacement, nativeIndicatorDescriptors, nativeIndicatorEntries, nativeIndicatorEntry, nativeIndicatorTypes, nativeInstanceChannel, normalizeSettingsRow, normalizeTimezone, paneScaleAt, parseMultiValue, pinnedTopbarActionIds, priceAxisItems, priceOnlyState, priceStyleApplies, registerChartType, registerDefaultEngine, registerDrawingAction, registerDrawingType, registerLegendAction, registerLegendCallout, registerNativeIndicator, registerRendererDefaults, registerRendererLayer, registerSeriesAdapter, registerShellDefaults, registerSidePanel, registerStatePersistence, registerSymbolRanking, registerWidgetAction, registerWidgetAttachment, rendererDefaults, rendererLayers, resetDrawingSettings, resolveEngines, resolveTimezone, resolveTopbarComposition, sanitizeShowOn, scaleChoiceOf, scaleWrites, seriesAdapters, seriesInScale, seriesShownOn, settingsRowValueKeys, settingsRowVisible, settingsSectionOf, shellDefaults, shownOnTimeframe, shownPriceStyle, sidePanels, stableSeriesId, statePersistenceHandlers, symbolRanking, tickerModifierIds, timeAxisItems, timeframeBandOf, timezoneMenuRows, topbarActionOverride, topbarHas, tzButtonLabel, tzMenuLabel, tzOffset, unregisterChartType, unregisterDefaultEngine, unregisterDrawingAction, unregisterLegendAction, unregisterLegendCallout, unregisterNativeIndicator, unregisterRendererDefaults, unregisterRendererLayer, unregisterSeriesAdapter, unregisterShellDefaults, unregisterSidePanel, unregisterStatePersistence, unregisterWidgetAction, unregisterWidgetAttachment, widgetActions, widgetAttachments };

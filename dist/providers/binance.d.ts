@@ -1,5 +1,5 @@
-import { D as DataProvider, P as ProviderInfo, B as BarRange, O as OHLCV, S as SymbolInfo, a as SymbolDescriptor, U as Unsubscribe } from '../DataProvider-CiFfigU4.js';
-import '../types-CsUd831-.js';
+import { D as DataProvider, P as ProviderInfo, B as BarRange, O as OHLCV, S as SymbolInfo, a as SymbolDescriptor, U as Unsubscribe } from '../DataProvider-CyaRCe6l.js';
+import '../types-DXVlW2vL.js';
 import '@luxalgo/vela-ui/theme';
 
 /**
@@ -20,6 +20,9 @@ declare class BinanceProvider implements DataProvider {
     private spotBaseProbe;
     /** Cached symbol enumeration (exchangeInfo is large; fetch once). */
     private symbolsPromise;
+    /** The futures `exchangeInfo` (every contract, ~1.2 MB), shared by the symbol list and
+     *  per-symbol info so it downloads once per {@link FUTURES_INFO_TTL_MS}, not per symbol. */
+    private futuresInfo;
     info(): ProviderInfo;
     getBars(ticker: string, timeframe: string, range: BarRange): Promise<OHLCV[]>;
     getSymbolInfo(ticker: string): Promise<SymbolInfo | undefined>;
@@ -45,6 +48,9 @@ declare class BinanceProvider implements DataProvider {
     /** Poll the forming candle (for aggregated timeframes Binance has no native kline stream for). */
     private pollBars;
     private listSpot;
+    /** The futures exchangeInfo: one request shared by every concurrent and later asker
+     *  within {@link FUTURES_INFO_TTL_MS}. A failed request is not remembered. */
+    private futuresExchangeInfo;
     private listFutures;
     /** Fetch klines, paginating past Binance's 1000-row cap. */
     private fetchKlines;

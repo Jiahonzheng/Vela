@@ -52,6 +52,7 @@ var SPOT_WS = "wss://stream.binance.com:9443";
 var SPOT_WS_US = "wss://stream.binance.us:9443";
 var FUTURES_WS = "wss://fstream.binance.com";
 var STREAM_STALL_MS = 15e3;
+var FUTURES_INFO_TTL_MS = 10 * 6e4;
 var STREAM_RECONNECT_MS = 2e3;
 var TF_TO_INTERVAL = {
   "1": "1m",
@@ -161,6 +162,9 @@ var BinanceProvider = class {
     this.spotBaseProbe = null;
     /** Cached symbol enumeration (exchangeInfo is large; fetch once). */
     this.symbolsPromise = null;
+    /** The futures `exchangeInfo` (every contract, ~1.2 MB), shared by the symbol list and
+     *  per-symbol info so it downloads once per {@link FUTURES_INFO_TTL_MS}, not per symbol. */
+    this.futuresInfo = null;
   }
   info() {
     return {
@@ -198,9 +202,7 @@ var BinanceProvider = class {
   }
   async getSymbolInfo(ticker) {
     const { apiSymbol, isFutures } = parseTicker(ticker);
-    const base = isFutures ? FUTURES_BASE : await this.spotBase();
-    const url = isFutures ? `${base}/exchangeInfo` : `${base}/exchangeInfo?symbol=${apiSymbol}`;
-    const data = await this.json(url).catch(() => null);
+    const data = isFutures ? await this.futuresExchangeInfo().catch(() => null) : await this.json(`${await this.spotBase()}/exchangeInfo?symbol=${apiSymbol}`).catch(() => null);
     const symbols = data?.symbols ?? [];
     const s = isFutures ? symbols.find((x) => x.symbol === apiSymbol) : symbols[0];
     if (!s) return void 0;
@@ -346,11 +348,25 @@ var BinanceProvider = class {
   }
   async listSpot() {
     const base = await this.spotBase();
-    const data = await this.json(`${base}/exchangeInfo`);
+    const data = await this.json(`${base}/exchangeInfo?symbolStatus=TRADING&showPermissionSets=false`);
     return (data.symbols ?? []).filter((s) => s.status === "TRADING").map((s) => ({ ticker: s.symbol, description: `${s.baseAsset} / ${s.quoteAsset}`, type: "crypto" }));
   }
+  /** The futures exchangeInfo: one request shared by every concurrent and later asker
+   *  within {@link FUTURES_INFO_TTL_MS}. A failed request is not remembered. */
+  futuresExchangeInfo() {
+    const now = Date.now();
+    if (!this.futuresInfo || now - this.futuresInfo.at >= FUTURES_INFO_TTL_MS) {
+      const data = this.json(`${FUTURES_BASE}/exchangeInfo`);
+      const entry = { at: now, data };
+      this.futuresInfo = entry;
+      data.catch(() => {
+        if (this.futuresInfo === entry) this.futuresInfo = null;
+      });
+    }
+    return this.futuresInfo.data;
+  }
   async listFutures() {
-    const data = await this.json(`${FUTURES_BASE}/exchangeInfo`);
+    const data = await this.futuresExchangeInfo();
     return (data.symbols ?? []).filter((s) => s.contractType === "PERPETUAL" && s.status === "TRADING").map((s) => ({ ticker: `${s.symbol}.P`, description: `${s.baseAsset} / ${s.quoteAsset} Perpetual`, type: "futures" }));
   }
   /** Fetch klines, paginating past Binance's 1000-row cap. */

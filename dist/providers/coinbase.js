@@ -1,6 +1,5 @@
 import { ledgerCryptoIconUrl, baseOf } from '../chunk-W4EJWLEO.js';
-import { minuteBarTimeframe } from '../chunk-IXLGXG62.js';
-import '../chunk-UGLBJVMQ.js';
+import { minuteBarTimeframe } from '../chunk-MZKXDQ4O.js';
 
 // src/data/providers/coinbase/RequestGate.ts
 var REAL_CLOCK = {
@@ -72,6 +71,7 @@ var LIVE_RESEED_MS = 5e3;
 var MAX_CANDLES_PER_REQ = 300;
 var REST_CONCURRENCY = 4;
 var REST_MIN_INTERVAL_MS = 120;
+var PRODUCTS_INFO_TTL_MS = 10 * 6e4;
 var REQUEST_MAX_RETRIES = 4;
 var BACKOFF_BASE_MS = 600;
 var BACKOFF_JITTER_MS = 400;
@@ -170,6 +170,9 @@ var CoinbaseProvider = class {
   constructor() {
     /** Cached symbol enumeration (the products list is large; fetch once). */
     this.symbolsPromise = null;
+    /** The products list once it has LANDED, by id — per-symbol info reads it instead of
+     *  spending a gated request (and the gate's spacing) on `/products/{id}`. */
+    this.products = null;
     /** Shared request gate: caps concurrency, spaces request starts, honors 429 backoff. */
     this.gate = new RequestGate(REST_CONCURRENCY, REST_MIN_INTERVAL_MS);
   }
@@ -211,7 +214,8 @@ var CoinbaseProvider = class {
   }
   async getSymbolInfo(ticker) {
     const product = parseProductId(ticker);
-    const p = await this.json(`${REST_BASE}/products/${product}`).catch(() => null);
+    const listed = this.products && Date.now() - this.products.at < PRODUCTS_INFO_TTL_MS ? this.products.byId.get(product) : void 0;
+    const p = listed ?? await this.json(`${REST_BASE}/products/${product}`).catch(() => null);
     if (!p || !p.id) return void 0;
     const tickSize = p.quote_increment != null ? parseFloat(p.quote_increment) : 0.01;
     const mintick = tickSize > 0 ? tickSize : 0.01;
@@ -249,7 +253,9 @@ var CoinbaseProvider = class {
   // ── internals ────────────────────────────────────────────────────────
   async fetchProducts() {
     const data = await this.json(`${REST_BASE}/products`);
-    return Array.isArray(data) ? data : [];
+    const list = Array.isArray(data) ? data : [];
+    this.products = { at: Date.now(), byId: new Map(list.filter((p) => p && typeof p.id === "string").map((p) => [p.id, p])) };
+    return list;
   }
   /**
    * Fetch candles for a count (most-recent `limit`) or a `[from, to]` range, paginating past the

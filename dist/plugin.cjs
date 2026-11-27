@@ -174,14 +174,18 @@ function dateFormat(settings, options) {
   }
   return dtf;
 }
-function clockOptions(settings) {
-  if (settings.hourCycle === "h23") return { hour: "2-digit", minute: "2-digit", hourCycle: "h23" };
-  if (settings.hourCycle === "h12") return { hour: "numeric", minute: "2-digit", hourCycle: "h12" };
-  return { hour: "numeric", minute: "2-digit" };
+function clockOptions(settings, withSeconds = false) {
+  const sec = withSeconds ? { second: "2-digit" } : {};
+  if (settings.hourCycle === "h23") return { hour: "2-digit", minute: "2-digit", ...sec, hourCycle: "h23" };
+  if (settings.hourCycle === "h12") return { hour: "numeric", minute: "2-digit", ...sec, hourCycle: "h12" };
+  return { hour: "numeric", minute: "2-digit", ...sec };
 }
-function englishClock(wall, settings) {
-  if (settings.hourCycle === "h23") return localizeAscii(`${pad2(wall.getUTCHours())}:${pad2(wall.getUTCMinutes())}`, settings);
-  return stripBidiMarks(dateFormat(settings, clockOptions(settings)).format(wall));
+function englishClock(wall, settings, withSeconds = false) {
+  if (settings.hourCycle === "h23") {
+    const base = `${pad2(wall.getUTCHours())}:${pad2(wall.getUTCMinutes())}`;
+    return localizeAscii(withSeconds ? `${base}:${pad2(wall.getUTCSeconds())}` : base, settings);
+  }
+  return stripBidiMarks(dateFormat(settings, clockOptions(settings, withSeconds)).format(wall));
 }
 var TICK_OPTIONS = {
   year: { year: "numeric" },
@@ -192,27 +196,29 @@ var isClockUnit = (unit) => unit === "hour" || unit === "minute" || unit === "se
 function formatTimeTick(ms, options, settings) {
   const wall = new Date(ms + (options.offsetMs ?? 0));
   const unit = options.unit;
+  const withSeconds = unit === "second";
   if (settings.english) {
-    if (isClockUnit(unit)) return englishClock(wall, settings);
+    if (isClockUnit(unit)) return englishClock(wall, settings, withSeconds);
     const month = EN_MONTHS_SHORT[wall.getUTCMonth()];
     if (unit === "year") return localizeAscii(String(wall.getUTCFullYear()), settings);
     if (unit === "month") return month;
     return localizeAscii(`${month} ${wall.getUTCDate()}`, settings);
   }
-  const opts = isClockUnit(unit) ? clockOptions(settings) : TICK_OPTIONS[unit];
+  const opts = isClockUnit(unit) ? clockOptions(settings, withSeconds) : TICK_OPTIONS[unit];
   return stripBidiMarks(dateFormat(settings, opts).format(wall));
 }
 function formatTimeStamp(ms, options, settings) {
   const wall = new Date(ms + zoneOffsetMs(ms, options?.timeZone ?? "UTC"));
   const withTime = options?.withTime ?? true;
+  const withSeconds = options?.withSeconds === true;
   if (settings.english) {
     const date = localizeAscii(
       `${EN_WEEKDAYS_SHORT[wall.getUTCDay()]} ${wall.getUTCDate()} ${EN_MONTHS_SHORT[wall.getUTCMonth()]} '${pad2(wall.getUTCFullYear() % 100)}`,
       settings
     );
-    return withTime ? `${date} ${englishClock(wall, settings)}` : date;
+    return withTime ? `${date} ${englishClock(wall, settings, withSeconds)}` : date;
   }
-  const opts = { weekday: "short", day: "numeric", month: "short", year: "2-digit", ...withTime ? clockOptions(settings) : {} };
+  const opts = { weekday: "short", day: "numeric", month: "short", year: "2-digit", ...withTime ? clockOptions(settings, withSeconds) : {} };
   return stripBidiMarks(dateFormat(settings, opts).format(wall));
 }
 function countdownText(ms) {
@@ -336,7 +342,7 @@ function resolveFormatters(settings, overrides) {
     timeStamp(ms, options) {
       const fallback = () => base.timeStamp(ms, options);
       if (typeof o.timeStamp !== "function") return fallback();
-      return viaHost(o.timeStamp, ms, { ...ctx(options?.surface, "crosshair", options?.timeZone, fallback), withTime: options?.withTime ?? true }, fallback);
+      return viaHost(o.timeStamp, ms, { ...ctx(options?.surface, "crosshair", options?.timeZone, fallback), withTime: options?.withTime ?? true, ...options?.withSeconds !== void 0 ? { withSeconds: options.withSeconds } : {} }, fallback);
     },
     duration(ms, options) {
       const fallback = () => base.duration(ms, options);
@@ -1063,7 +1069,7 @@ function rendererLayers() {
 }
 
 // src/widget/topbar-composition.ts
-var TOPBAR_BUILTIN_IDS = ["symbol", "timeframes", "style", "layout", "indicators", "actions", "undo-redo", "alerts", "panels", "screenshot", "fullscreen"];
+var TOPBAR_BUILTIN_IDS = ["symbol", "compare", "timeframes", "style", "layout", "indicators", "actions", "undo-redo", "alerts", "panels", "screenshot", "fullscreen"];
 
 // src/widget/contributions.ts
 var registry3 = /* @__PURE__ */ new Map();
@@ -1094,7 +1100,7 @@ function unregisterSidePanel(id) {
 function sidePanels() {
   return [...panels.values()].sort((a, b) => (a.order ?? DEFAULT_PANEL_ORDER) - (b.order ?? DEFAULT_PANEL_ORDER));
 }
-var OVERRIDABLE_TOPBAR_IDS = ["indicators", "screenshot"];
+var OVERRIDABLE_TOPBAR_IDS = ["indicators", "screenshot", "compare"];
 var overridableSet = new Set(OVERRIDABLE_TOPBAR_IDS);
 var builtinTopbarSet = new Set(TOPBAR_BUILTIN_IDS);
 function topbarActionOverride(id) {
@@ -7775,6 +7781,21 @@ registerDrawingType({
   create: (init) => new Liquidity(init)
 });
 
+// src/data/series-adapters.ts
+var adapters = /* @__PURE__ */ new Map();
+function registerSeriesAdapter(adapter) {
+  adapters.set(adapter.id, adapter);
+  return () => {
+    if (adapters.get(adapter.id) === adapter) adapters.delete(adapter.id);
+  };
+}
+function unregisterSeriesAdapter(id) {
+  adapters.delete(id);
+}
+function seriesAdapters() {
+  return [...adapters.values()];
+}
+
 // src/core/data-unavailable.ts
 var NAME = "DataUnavailableError";
 var DataUnavailableError = class extends Error {
@@ -7803,6 +7824,46 @@ function isDataUnavailableError(e) {
   if (typeof e !== "object" || e === null) return false;
   const o = e;
   return o.name === NAME && typeof o.reason === "string" && typeof o.message === "string" && optionalString(o.symbol) && optionalString(o.timeframe) && optionalString(o.finest) && optionalString(o.default);
+}
+
+// src/data/timeframe.ts
+var NAMED_TF_MS = { D: 864e5, W: 6048e5, M: 2592e6 };
+var UNIT_MS = { s: 1e3, m: 6e4, h: 36e5, d: 864e5, w: 6048e5, M: 2592e6 };
+function parseTickTimeframe(timeframe) {
+  const tf = timeframe.trim();
+  const m = /^(\d*)\s*[tT]$/.exec(tf);
+  if (!m) return null;
+  const count = m[1] === "" ? 1 : parseInt(m[1], 10);
+  return Number.isFinite(count) && count >= 1 ? count : null;
+}
+function isTickTimeframe(timeframe) {
+  return parseTickTimeframe(timeframe) !== null;
+}
+function isVariableDurationTimeframe(timeframe) {
+  return isTickTimeframe(timeframe);
+}
+function timeframeToMs(timeframe) {
+  const tf = timeframe.trim();
+  if (NAMED_TF_MS[tf]) return NAMED_TF_MS[tf];
+  const m = /^(\d+)\s*([a-zA-Z])?$/.exec(tf);
+  if (m) {
+    const letter = m[2] ?? "m";
+    const mult = UNIT_MS[letter === "M" ? "M" : letter.toLowerCase()];
+    if (mult !== void 0) return parseInt(m[1], 10) * mult;
+  }
+  return 36e5;
+}
+
+// src/core/model/ohlcv.ts
+function isSameBar(a, b) {
+  if (a.time !== b.time) return false;
+  if (a.seq !== void 0 && b.seq !== void 0) return a.seq === b.seq;
+  return true;
+}
+function isNewerBar(bar, last) {
+  if (bar.time > last.time) return true;
+  if (bar.time === last.time && bar.seq !== void 0 && last.seq !== void 0) return bar.seq > last.seq;
+  return false;
 }
 
 // src/core/model/inputs.ts
@@ -7959,11 +8020,16 @@ exports.getNativeIndicator = getNativeIndicator;
 exports.inputDeltas = inputDeltas;
 exports.inputVisible = inputVisible;
 exports.isDataUnavailableError = isDataUnavailableError;
+exports.isNewerBar = isNewerBar;
+exports.isSameBar = isSameBar;
+exports.isTickTimeframe = isTickTimeframe;
+exports.isVariableDurationTimeframe = isVariableDurationTimeframe;
 exports.legendActions = legendActions;
 exports.legendCallouts = legendCallouts;
 exports.msg = msg;
 exports.nativeIndicatorTypes = nativeIndicatorTypes;
 exports.normalizeSettingsRow = normalizeSettingsRow;
+exports.parseTickTimeframe = parseTickTimeframe;
 exports.priceStyleApplies = priceStyleApplies;
 exports.registerChartType = registerChartType;
 exports.registerDefaultEngine = registerDefaultEngine;
@@ -7974,6 +8040,7 @@ exports.registerLocale = registerLocale;
 exports.registerNativeIndicator = registerNativeIndicator;
 exports.registerRendererDefaults = registerRendererDefaults;
 exports.registerRendererLayer = registerRendererLayer;
+exports.registerSeriesAdapter = registerSeriesAdapter;
 exports.registerShellDefaults = registerShellDefaults;
 exports.registerSidePanel = registerSidePanel;
 exports.registerStatePersistence = registerStatePersistence;
@@ -7984,6 +8051,7 @@ exports.registeredLocales = registeredLocales;
 exports.rendererDefaults = rendererDefaults;
 exports.rendererLayers = rendererLayers;
 exports.resolveEngines = resolveEngines;
+exports.seriesAdapters = seriesAdapters;
 exports.seriesInScale = seriesInScale;
 exports.seriesShownOn = seriesShownOn;
 exports.settingsRowValueKeys = settingsRowValueKeys;
@@ -7994,6 +8062,7 @@ exports.stableSeriesId = stableSeriesId;
 exports.statePersistenceHandlers = statePersistenceHandlers;
 exports.symbolRanking = symbolRanking;
 exports.tickerModifierIds = tickerModifierIds;
+exports.timeframeToMs = timeframeToMs;
 exports.topbarActionOverride = topbarActionOverride;
 exports.unregisterChartType = unregisterChartType;
 exports.unregisterDefaultEngine = unregisterDefaultEngine;
@@ -8003,6 +8072,7 @@ exports.unregisterLegendCallout = unregisterLegendCallout;
 exports.unregisterNativeIndicator = unregisterNativeIndicator;
 exports.unregisterRendererDefaults = unregisterRendererDefaults;
 exports.unregisterRendererLayer = unregisterRendererLayer;
+exports.unregisterSeriesAdapter = unregisterSeriesAdapter;
 exports.unregisterShellDefaults = unregisterShellDefaults;
 exports.unregisterSidePanel = unregisterSidePanel;
 exports.unregisterStatePersistence = unregisterStatePersistence;

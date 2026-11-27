@@ -1,4 +1,4 @@
-import { M as MessageLike, T as Translator, m as TextDirection, b as LocalizationOptions } from './types-CsUd831-.cjs';
+import { M as MessageLike, T as Translator, m as TextDirection, b as LocalizationOptions } from './types-DXVlW2vL.cjs';
 import { ThemeSettings, UiTheme } from '@luxalgo/vela-ui/theme';
 
 /**
@@ -18,7 +18,18 @@ interface OHLCV {
     low: number;
     close: number;
     volume?: number;
+    /**
+     * Optional monotonic bar identity within a series, for variable-duration series
+     * (such as tick bars) where distinct bars may open in the same millisecond. When
+     * present on both bars, updates match by `(time, seq)` instead of `time` alone so a
+     * new bar in the same millisecond appends rather than overwriting the closed bar.
+     */
+    seq?: number;
 }
+/** Whether `a` and `b` address the same bar slot (live refinement of the forming bar). */
+declare function isSameBar(a: OHLCV, b: OHLCV): boolean;
+/** Whether `bar` opens strictly after `last` (a new bar to append). */
+declare function isNewerBar(bar: OHLCV, last: OHLCV): boolean;
 
 /** Value-series kinds drawn as a connected/point series. */
 type LineLikeKind = 'line' | 'area' | 'step' | 'histogram' | 'columns' | 'circles' | 'cross';
@@ -539,6 +550,9 @@ interface InputSchema {
     /** A help mark beside this input's `group` heading (see {@link InputGroupHelp}). The first
      *  input of a group that carries one sets it; an input without a `group` shows none. */
     groupHelp?: InputGroupHelp;
+    /** Prompt the user to configure this input on add when its value is empty (for example a
+     *  required secondary symbol on a multi-symbol study). */
+    confirm?: boolean;
 }
 /**
  * The DELTAS of a value bag against its schema's declaration defaults — what state
@@ -630,6 +644,20 @@ interface IndicatorModel {
      * a moving average keep sharing the price scale).
      */
     ownScale?: boolean;
+    /**
+     * How this indicator's values normalize when its pane is in `'percent'` or
+     * `'indexed'` scale mode. `'pane'` (the default) uses the pane's master baseline
+     * (appropriate for studies in the main series' own price units, such as a moving
+     * average). `'own'` normalizes against this indicator's OWN first visible value
+     * (appropriate for an independent instrument overlaid for comparison, so both
+     * series start at 0% / 100 at the left edge of the visible window).
+     */
+    percentBaseline?: 'pane' | 'own';
+    /**
+     * When true, the renderer draws a colored last-value chip (with the series name)
+     * on the price axis for this indicator's primary visible price-scale series.
+     */
+    priceAxisLabel?: boolean;
     /**
      * Chart time (epoch ms) of the execution's FIRST bar. Index-aligned payloads —
      * dense series point/bar arrays and `bar_index` drawing coordinates — count from
@@ -1828,10 +1856,13 @@ interface IChartRenderer {
      * Replace all price bars. By default re-frames the view (a fresh series). Pass
      * `{ preserveView: true }` to keep the current viewport — used when extending the
      * same series in place (e.g. swapping a quick preview for the full history) so
-     * candles don't jump.
+     * candles don't jump. Pass `{ variableDuration: true }` for series whose bars have
+     * no fixed wall-clock period (tick bars, etc.): duplicate-millisecond bars are
+     * preserved, time-based bar countdowns stay hidden, and sub-minute stamps show seconds.
      */
     setBars(bars: OHLCV[], opts?: {
         preserveView?: boolean;
+        variableDuration?: boolean;
     }): void;
     /** Append a new bar or replace the forming (last) bar, decided by time. */
     updateBar(bar: OHLCV): void;
@@ -1850,6 +1881,11 @@ interface IChartRenderer {
      * renderer without it draws whatever style is set.
      */
     setSymbolFacts?(facts: SymbolFacts | null): void;
+    /**
+     * Set the active symbol's short display name (bare ticker, e.g. `'AAPL'`), used when
+     * the price axis labels multiple instruments side by side. Optional.
+     */
+    setSymbolName?(name: string | undefined): void;
     /**
      * Push a bespoke NATIVE-LAYER render payload, keyed by layer `type`. Visuals that aren't
      * ordinary series/fills draw through a dedicated renderer layer instead of the model; this is
@@ -2191,6 +2227,9 @@ interface MarketSwitch {
     session?: MarketSession;
     data?: OHLCV[];
     visibleRange?: VisibleRangePreset | VisibleRange;
+    /** Force a full in-place reload even when symbol/timeframe/session strings did not
+     *  change (for example after changing an external series adapter's parameters). */
+    force?: boolean;
 }
 /**
  * The chart's current market identity — `chart.market`, the read counterpart of
@@ -2557,6 +2596,8 @@ interface SymbolInfo {
         default?: string;
         /** When present, the EXHAUSTIVE list of timeframes served. */
         list?: readonly string[];
+        /** True when the source serves tick-based timeframes (`nT`) for this symbol. */
+        ticks?: boolean;
     };
     /**
      * `false` when the source has no volume data for this symbol: the chart then does not
@@ -2820,4 +2861,4 @@ interface DataProvider {
     capabilitiesFor?(ticker: string): ProviderCapabilities;
 }
 
-export { type MarketSnapshot as $, type AxisLongPressEvent as A, type BarRange as B, type CrosshairEvent as C, type DataProvider as D, type MarkGroup as E, type MarkClickEvent as F, type VisibleRangeOptions as G, type DataWindowReadout as H, type InputValue as I, type IDrawingsRendererPort as J, type Millis as K, type LineStyle as L, type MarketDataFeed as M, type NativeBackend as N, type OHLCV as O, type ProviderInfo as P, type SnapMode as Q, type RendererCapabilities as R, type SymbolInfo as S, type ThemeId as T, type Unsubscribe as U, type VisibleRangePreset as V, type WallClock as W, type DrawingTypeKey as X, type ToolbarDefinition as Y, type ProviderCapabilities as Z, type MarketConfig as _, type SymbolDescriptor as a, type PaneKind as a$, type AddIndicatorOptions as a0, type AnimationConfig as a1, type Background as a2, type BoxFontFamily as a3, type BoxHAlign as a4, type BoxTextSize as a5, type BoxVAlign as a6, type CandleBarColor as a7, type CandleSeries as a8, type CandleStyle as a9, type IndicatorMeta as aA, type InputCondition as aB, type InputDisplay as aC, type InputGroupHelp as aD, type InputMultiple as aE, type InputSchema as aF, type InputType as aG, type InputWhen as aH, type IntroAnimation as aI, type IntroConfig as aJ, type IntroStyle as aK, type LabelStyle as aL, type LabelYLoc as aM, type LineLikeKind as aN, type LineLikeSeries as aO, type LineLikeStyle as aP, type MarkContent as aQ, type MarkContentSource as aR, type MarkGlyph as aS, type MarkPanelItem as aT, type MarkShape as aU, type MarkerPoint as aV, type MarkerSeries as aW, type MarketSwitch as aX, type PaneAxis as aY, type PaneAxisBand as aZ, type PaneHint as a_, ClockCorrection as aa, type DataWindowGroup as ab, type DataWindowOHLC as ac, type DataWindowRow as ad, type DirtyRange as ae, type DrawingBox as af, type DrawingExtend as ag, type DrawingIntent as ah, type DrawingLabel as ai, type DrawingLine as aj, type DrawingLinefill as ak, type DrawingMode as al, type DrawingPoint as am, type DrawingPolyline as an, type DrawingSeriesBar as ao, type DrawingSeriesGateway as ap, type DrawingSeriesState as aq, type DrawingStyle as ar, type DrawingTable as as, type DrawingText as at, type DrawingXLoc as au, type DrawingsOption as av, type Fill as aw, type FillGradientStop as ax, type FreePanEvent as ay, type FreePanTrigger as az, type VisibleRange as b, type PolylinePoint as b0, type PriceAxisOptions as b1, type PriceAxisTick as b2, type PriceAxisTickContext as b3, type PriceAxisTicksFn as b4, type PriceLine as b5, type Projector as b6, type ProviderName as b7, type RendererConstructor as b8, type Scene as b9, type DrawingToolDefaults as bA, type DrawingToolTemplate as bB, type SchemaPatch as ba, SecondClock as bb, type SeriesDisplay as bc, type SeriesKind as bd, type SeriesPoint as be, type SeriesSpec as bf, type SeriesSurface as bg, type SeriesValueDelta as bh, type SettingsField as bi, type SettingsSchema as bj, type SettingsVisibilityPolicy as bk, type TableCell as bl, type TableMerge as bm, type TablePosition as bn, type ThemeName as bo, type ToolbarGroupConfig as bp, type TradeExecution as bq, type ValuePatch as br, buildToolbar as bs, clockCorrection as bt, defaultToolbar as bu, inputDeltas as bv, inputVisible as bw, seriesInScale as bx, seriesShownOn as by, type PaneInfo as bz, type VelaOptions as c, type VelaTheme as d, type MarketSession as e, Drawing as f, type SerializedDrawing as g, type PriceStyle as h, type IChartRenderer as i, type RendererDisplayOptions as j, type IndicatorRenderHandle as k, type IndicatorStatus as l, type SymbolFacts as m, type RendererRootAttributes as n, type Pane as o, type PaneAction as p, type MoveTarget as q, type IndicatorModel as r, type ScenePatch as s, type SymbolPickerFn as t, type LegendActionView as u, type DrawingActionView as v, type LegendCalloutView as w, type InputChangeEvent as x, type ClickEvent as y, type TimelineMark as z };
+export { type MarketSnapshot as $, type AxisLongPressEvent as A, type BarRange as B, type CrosshairEvent as C, type DataProvider as D, type MarkGroup as E, type MarkClickEvent as F, type VisibleRangeOptions as G, type DataWindowReadout as H, type InputValue as I, type IDrawingsRendererPort as J, type Millis as K, type LineStyle as L, type MarketDataFeed as M, type NativeBackend as N, type OHLCV as O, type ProviderInfo as P, type SnapMode as Q, type RendererCapabilities as R, type SymbolInfo as S, type ThemeId as T, type Unsubscribe as U, type VisibleRangePreset as V, type WallClock as W, type DrawingTypeKey as X, type ToolbarDefinition as Y, type ProviderCapabilities as Z, type MarketConfig as _, type SymbolDescriptor as a, type PaneKind as a$, type AddIndicatorOptions as a0, type AnimationConfig as a1, type Background as a2, type BoxFontFamily as a3, type BoxHAlign as a4, type BoxTextSize as a5, type BoxVAlign as a6, type CandleBarColor as a7, type CandleSeries as a8, type CandleStyle as a9, type IndicatorMeta as aA, type InputCondition as aB, type InputDisplay as aC, type InputGroupHelp as aD, type InputMultiple as aE, type InputSchema as aF, type InputType as aG, type InputWhen as aH, type IntroAnimation as aI, type IntroConfig as aJ, type IntroStyle as aK, type LabelStyle as aL, type LabelYLoc as aM, type LineLikeKind as aN, type LineLikeSeries as aO, type LineLikeStyle as aP, type MarkContent as aQ, type MarkContentSource as aR, type MarkGlyph as aS, type MarkPanelItem as aT, type MarkShape as aU, type MarkerPoint as aV, type MarkerSeries as aW, type MarketSwitch as aX, type PaneAxis as aY, type PaneAxisBand as aZ, type PaneHint as a_, ClockCorrection as aa, type DataWindowGroup as ab, type DataWindowOHLC as ac, type DataWindowRow as ad, type DirtyRange as ae, type DrawingBox as af, type DrawingExtend as ag, type DrawingIntent as ah, type DrawingLabel as ai, type DrawingLine as aj, type DrawingLinefill as ak, type DrawingMode as al, type DrawingPoint as am, type DrawingPolyline as an, type DrawingSeriesBar as ao, type DrawingSeriesGateway as ap, type DrawingSeriesState as aq, type DrawingStyle as ar, type DrawingTable as as, type DrawingText as at, type DrawingXLoc as au, type DrawingsOption as av, type Fill as aw, type FillGradientStop as ax, type FreePanEvent as ay, type FreePanTrigger as az, type VisibleRange as b, type PolylinePoint as b0, type PriceAxisOptions as b1, type PriceAxisTick as b2, type PriceAxisTickContext as b3, type PriceAxisTicksFn as b4, type PriceLine as b5, type Projector as b6, type ProviderName as b7, type RendererConstructor as b8, type Scene as b9, seriesShownOn as bA, type PaneInfo as bB, type DrawingToolDefaults as bC, type DrawingToolTemplate as bD, type SchemaPatch as ba, SecondClock as bb, type SeriesDisplay as bc, type SeriesKind as bd, type SeriesPoint as be, type SeriesSpec as bf, type SeriesSurface as bg, type SeriesValueDelta as bh, type SettingsField as bi, type SettingsSchema as bj, type SettingsVisibilityPolicy as bk, type TableCell as bl, type TableMerge as bm, type TablePosition as bn, type ThemeName as bo, type ToolbarGroupConfig as bp, type TradeExecution as bq, type ValuePatch as br, buildToolbar as bs, clockCorrection as bt, defaultToolbar as bu, inputDeltas as bv, inputVisible as bw, isNewerBar as bx, isSameBar as by, seriesInScale as bz, type VelaOptions as c, type VelaTheme as d, type SymbolPickerFn as e, type MarketSession as f, Drawing as g, type SerializedDrawing as h, type PriceStyle as i, type IChartRenderer as j, type RendererDisplayOptions as k, type IndicatorRenderHandle as l, type IndicatorStatus as m, type SymbolFacts as n, type RendererRootAttributes as o, type Pane as p, type PaneAction as q, type MoveTarget as r, type IndicatorModel as s, type ScenePatch as t, type LegendActionView as u, type DrawingActionView as v, type LegendCalloutView as w, type InputChangeEvent as x, type ClickEvent as y, type TimelineMark as z };

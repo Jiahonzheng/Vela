@@ -1,6 +1,6 @@
-import { a as SymbolDescriptor, D as DataProvider, W as WallClock, V as VisibleRangePreset } from './DataProvider-DqY7R0hL.cjs';
-import { S as ScriptingEngine, T as TopbarComposition, d as SidebarComposition, V as Vela } from './contributions-CYrk3HKz.cjs';
-import { M as MessageLike, T as Translator } from './types-CsUd831-.cjs';
+import { a as SymbolDescriptor, D as DataProvider, W as WallClock, V as VisibleRangePreset } from './DataProvider-CyaRCe6l.js';
+import { S as ScriptingEngine, T as TopbarComposition, a as SidebarComposition, V as Vela } from './contributions-CxPEBGOq.js';
+import { M as MessageLike, T as Translator } from './types-DXVlW2vL.js';
 
 /** The linkable dimensions. `crosshair` mirrors the pointer time onto same-group
  *  cells as GHOST crosshairs (renderers without the optional `setExternalCrosshair`
@@ -80,6 +80,14 @@ interface CellState {
     /** The status line's segments, by part, as the settings dialog's Status line tab and
      *  the status line's right-click menu leave them — a per-chart display pref. */
     statuslineParts?: Partial<Record<'logo' | 'name' | 'market' | 'ohlc' | 'change', boolean>>;
+    /** The price scale the chart was on before a comparison sharing the percent scale
+     *  switched it to percent — what the axis returns to when the last such comparison
+     *  leaves. Present only while one holds the axis there; a chart that was already on a
+     *  percent or indexed scale never writes it, and its axis is left alone. */
+    scaleBeforeCompare?: {
+        mode: string;
+        log: boolean;
+    };
     /** The renderer's cosmetic config document (`renderer.getConfig()`). */
     rendererConfig?: unknown;
     /** The user-drawings document (`drawings.toJSON()`). */
@@ -265,10 +273,22 @@ declare class SymbolPicker {
     /** The ranked pool cache — `key` fingerprints the raw pool the ranking ran on. */
     private ranked;
     private ranking;
+    /** The dialog is showing, by its own open/close callbacks (set before the open-time
+     *  rebuild runs). A ranking that lands while it is closed repaints nothing: the next
+     *  open rebuilds the rows, so no row icons load for a list nobody sees. */
+    private shown;
+    /** One-shot selection override when opened for an indicator's symbol input rather than
+     *  the main chart; cleared as soon as the dialog closes. */
+    private pickOverride;
     constructor(opts: SymbolPickerOptions);
     /** Wire where symbols come from (re-called on every widget rebuild). */
     setSource(source: () => readonly SymbolDescriptor[]): void;
-    open(initialQuery?: string): void;
+    open(initialQuery?: string, opts?: {
+        onSelect?: (symbol: string) => void;
+    }): void;
+    /** True while open for a one-shot caller override (e.g. an indicator's symbol input)
+     *  rather than switching the active chart's symbol. */
+    get isPicking(): boolean;
     get isOpen(): boolean;
     /** Text typed at the picker that never reached its field: closed, it opens seeded
      *  with the text; open (the field takes focus a tick after the dialog does, and a

@@ -1,4 +1,4 @@
-import { M as MessageLike, T as Translator } from './types-CsUd831-.cjs';
+import { M as MessageLike, T as Translator } from './types-DXVlW2vL.js';
 
 interface KeyBindingDescriptor {
     /** Stable id, e.g. `'chart.toggle-log-scale'`. Re-registering an id replaces it. */

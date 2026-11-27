@@ -1,7 +1,6 @@
-import { icon, iconAt, WARNING, ACCENT, NEUTRAL, INFO, BULLISH, BEARISH, sanitizeShowOn, deserializeDrawing, chartTypes, chartType, priceStyleApplies, rendererLayers, shownPriceStyle, isLineLikeSeries, seriesShownOn, foldBaseModulation, registerChartType, rendererDefaults, drawingTypeEntry, normalizeTimezone, settingsRowVisible, normalizeSettingsRow, TIMEZONES, tzMenuLabel, injectChromeStyles, Magnifier, TextLabel, Callout, shownOnTimeframe, getDrawingType, resetDrawingSettings, registerNativeIndicator, nativeIndicatorEntry, nativeIndicatorEntries, nativeInstanceChannel, drawingTypeEntries, SERIES_LINE, CHIP_PLATE, CROSSHAIR, TRADE_EXIT, TRADE_SHORT, TRADE_LONG, iconMarkup, settingsRowValueKeys, RegressionChannel, FixedRangeVolumeProfile, DEFAULT_DRAWING_COLOR, SegmentDrawing, ArrowMark, GlyphStamp, RadialFib, FibSpiral, DedekindTessellation, MachFigure, GannSquare, FibRatios, MeasureBox, PositionTool, AnchoredVwap, PriceActionZone, Liquidity, PatternDrawing, Comment, PriceNote, Signpost, Note, PriceLabel, Box, TrendLine, GANN_SQUARE_ARCS, SLATE_DEEP, magnifierTimeframeLabel, isTransparentStrokeColor, lineSegmentIntersection, VALID, INVALID, SLATE, TEXT_SIZE_OPTIONS, LINE_STYLE_OPTIONS, GLYPH_OPTIONS, STAMP_SIZE_OPTIONS, magnifierTimeframesBelow, DEDEKIND_CURVATURE_OPTIONS, MACH_NUMBER_OPTIONS, MACH_WAVE_COUNT_OPTIONS, createDrawing, defaultText, parseMultiValue, seriesInScale, tickerModifierIds, CalloutBase, FibRetracement, FIB_PRESETS, matchFibPreset, FibLevels, timeframeBandOf, TIMEFRAME_BANDS, svg24, inputVisible, stableSeriesId, svg24Solid, joinMultiValue, DIRECTION_OPTIONS } from './chunk-VDJ63WNL.js';
-import { msg, withValues, textOf, upperCase, englishTranslator, tickDecimals, ENGLISH_FORMAT, LocaleState, pickLocalization, sourceText, localizeNumberText, sliceGraphemes, zoneOffsetMs, textSegmenter } from './chunk-VCYHJS6Q.js';
-import { timeframeToMs } from './chunk-IXLGXG62.js';
-import { isDataUnavailableError, DataUnavailableError, dataUnavailableMessage } from './chunk-UGLBJVMQ.js';
+import { icon, iconAt, WARNING, ACCENT, NEUTRAL, INFO, BULLISH, BEARISH, CATEGORICAL, sanitizeShowOn, deserializeDrawing, matchSeriesAdapter, chartTypes, chartType, priceStyleApplies, rendererLayers, isSameBar, isNewerBar, shownPriceStyle, isLineLikeSeries, seriesShownOn, foldBaseModulation, registerChartType, stableSeriesId, rendererDefaults, drawingTypeEntry, normalizeTimezone, settingsRowVisible, normalizeSettingsRow, TIMEZONES, tzMenuLabel, injectChromeStyles, Magnifier, TextLabel, Callout, shownOnTimeframe, getDrawingType, resetDrawingSettings, registerNativeIndicator, nativeIndicatorEntry, nativeIndicatorEntries, nativeInstanceChannel, drawingTypeEntries, SERIES_LINE, CHIP_PLATE, CROSSHAIR, TRADE_EXIT, TRADE_SHORT, TRADE_LONG, iconMarkup, settingsRowValueKeys, RegressionChannel, FixedRangeVolumeProfile, DEFAULT_DRAWING_COLOR, SegmentDrawing, ArrowMark, GlyphStamp, RadialFib, FibSpiral, DedekindTessellation, MachFigure, GannSquare, FibRatios, MeasureBox, PositionTool, AnchoredVwap, PriceActionZone, Liquidity, PatternDrawing, Comment, PriceNote, Signpost, Note, PriceLabel, Box, TrendLine, GANN_SQUARE_ARCS, SLATE_DEEP, magnifierTimeframeLabel, isTransparentStrokeColor, lineSegmentIntersection, VALID, INVALID, SLATE, TEXT_SIZE_OPTIONS, LINE_STYLE_OPTIONS, GLYPH_OPTIONS, STAMP_SIZE_OPTIONS, magnifierTimeframesBelow, DEDEKIND_CURVATURE_OPTIONS, MACH_NUMBER_OPTIONS, MACH_WAVE_COUNT_OPTIONS, createDrawing, defaultText, parseMultiValue, seriesInScale, tickerModifierIds, CalloutBase, FibRetracement, FIB_PRESETS, matchFibPreset, FibLevels, timeframeBandOf, TIMEFRAME_BANDS, svg24, inputVisible, svg24Solid, joinMultiValue, DIRECTION_OPTIONS } from './chunk-E6BPBCTQ.js';
+import { msg, withValues, sourceText, textOf, upperCase, englishTranslator, tickDecimals, ENGLISH_FORMAT, LocaleState, pickLocalization, localizeNumberText, sliceGraphemes, zoneOffsetMs, textSegmenter } from './chunk-TU3IUIQG.js';
+import { isVariableDurationTimeframe, timeframeToMs, isDataUnavailableError, DataUnavailableError, dataUnavailableMessage } from './chunk-MZKXDQ4O.js';
 import { DARK_CHART, LIGHT_CHART, applyTheme } from '@luxalgo/vela-ui/theme';
 import { announceSurface } from '@luxalgo/vela-ui/surface-events';
 import { holdForExit } from '@luxalgo/vela-ui/surface-exit';
@@ -785,8 +784,8 @@ function groupMembers(pool, groupRow) {
 }
 function defaultMemberOf(pool, groupRow) {
   const members = groupMembers(pool, groupRow);
-  const defaults = members.filter((m) => m.default);
-  return (defaults.length === 1 ? defaults[0] : members[0]) ?? null;
+  const defaults2 = members.filter((m) => m.default);
+  return (defaults2.length === 1 ? defaults2[0] : members[0]) ?? null;
 }
 
 // src/data/ProviderRegistry.ts
@@ -1053,14 +1052,26 @@ var CachingDataFeed = class {
   constructor(inner, store = sharedBarStore) {
     this.inner = inner;
     this.store = store;
+    /** Loads in flight, keyed by series + depth: charts loading the same series at once (a
+     *  workspace's first boot, symbol- or timeframe-synced cells) share one request. */
+    this.loadInflight = /* @__PURE__ */ new Map();
   }
   async load(cfg) {
-    if (cfg.data && cfg.data.length > 0) return this.inner.load(cfg);
+    if (cfg.data && cfg.data.length > 0 || isVariableDurationTimeframe(cfg.timeframe ?? "")) return this.inner.load(cfg);
     const symbol = cfg.symbol ?? "TEST";
     const key = cacheKey(symbol, cfg.timeframe ?? "60", cfg.session);
+    const n = cfg.bars ?? 500;
+    const flightKey = `${key}|${n}`;
+    let flight = this.loadInflight.get(flightKey);
+    if (!flight) {
+      flight = this.loadSeries(cfg, symbol, key, n).finally(() => this.loadInflight.delete(flightKey));
+      this.loadInflight.set(flightKey, flight);
+    }
+    return (await flight).map((b) => ({ ...b }));
+  }
+  async loadSeries(cfg, symbol, key, n) {
     this.store.retainSymbol(symbol);
     const cached = this.store.get(key);
-    const n = cfg.bars ?? 500;
     const lastCached = cached?.[cached.length - 1];
     if (cached && lastCached && cached.length >= n - 1 && this.inner.loadRange) {
       const { bars: tail } = await this.fetchRange(cfg, { from: lastCached.time });
@@ -1081,6 +1092,7 @@ var CachingDataFeed = class {
   async loadProgressive(cfg, onBatch, opts) {
     if (cfg.data && cfg.data.length > 0) return this.inner.load(cfg);
     if (!this.inner.loadProgressive) return null;
+    if (isVariableDurationTimeframe(cfg.timeframe ?? "")) return this.inner.loadProgressive(cfg, onBatch, opts);
     const symbol = cfg.symbol ?? "TEST";
     const key = cacheKey(symbol, cfg.timeframe ?? "60", cfg.session);
     const cached = this.store.get(key);
@@ -1108,6 +1120,7 @@ var CachingDataFeed = class {
    */
   async loadRange(cfg, range) {
     if (!this.inner.loadRange) return this.inner.load(cfg);
+    if (isVariableDurationTimeframe(cfg.timeframe ?? "")) return this.inner.loadRange(cfg, range);
     const key = cacheKey(cfg.symbol ?? "TEST", cfg.timeframe ?? "60", cfg.session);
     let cached = this.store.get(key);
     let newest = cached?.[cached.length - 1];
@@ -1228,7 +1241,10 @@ var MultiProviderFeed = class {
     this.symInfoCache = /* @__PURE__ */ new Map();
     /** Requests in flight, keyed like the cache — every concurrent asker shares one round trip. */
     this.symInfoInflight = /* @__PURE__ */ new Map();
-    this.cache = new CachingDataFeed(new RegistryFetchFeed(this.registry), store);
+    this.cache = new CachingDataFeed(
+      new RegistryFetchFeed(this.registry, (resolved2) => this.fetchSymbolInfo(resolved2)),
+      store
+    );
   }
   // ── Registry surface (driven by chart.data / DataControl) ──────────────
   registerProvider(name, provider) {
@@ -1419,26 +1435,52 @@ function refusalOf(e, ticker, tf) {
   const details = { reason: e.reason, symbol: e.symbol ?? ticker, timeframe: e.timeframe ?? tf, finest: e.finest, default: e.default };
   return new DataUnavailableError(details, e.message === dataUnavailableMessage(e) ? void 0 : e.message);
 }
+async function safeAdapterBars(adapter, ctx, range) {
+  try {
+    return await adapter.getBars(ctx, range);
+  } catch (e) {
+    if (isDataUnavailableError(e)) throw refusalOf(e, ctx.ticker, ctx.timeframe);
+    console.warn(`[vela] series adapter "${adapter.id}" fetch failed for ${ctx.ticker} ${ctx.timeframe} — ${e instanceof Error ? e.message : String(e)}`);
+    return [];
+  }
+}
 var RegistryFetchFeed = class {
-  constructor(registry2) {
+  constructor(registry2, readSymbolInfo) {
     this.registry = registry2;
+    this.readSymbolInfo = readSymbolInfo;
+  }
+  adapterContext(name, provider, ticker, timeframe, session) {
+    return {
+      providerName: name,
+      provider,
+      ticker,
+      timeframe,
+      ...session !== void 0 ? { session } : {},
+      symbolInfo: () => this.readSymbolInfo({ provider: name, ticker })
+    };
   }
   load(cfg) {
     const { provider: name, ticker } = parseSymbol(cfg.symbol ?? "");
     const provider = this.registry.get(name ?? "");
     if (!provider) return Promise.resolve([]);
-    return safeBars(provider, ticker, cfg.timeframe ?? "60", { limit: cfg.bars ?? 500, session: cfg.session });
+    const tf = cfg.timeframe ?? "60";
+    const range = { limit: cfg.bars ?? 500, session: cfg.session };
+    const adapter = matchSeriesAdapter(tf, provider, name ?? "");
+    if (adapter) return safeAdapterBars(adapter, this.adapterContext(name ?? "", provider, ticker, tf, cfg.session), range);
+    return safeBars(provider, ticker, tf, range);
   }
   async loadProgressive(cfg, onBatch, opts) {
     const { provider: name, ticker } = parseSymbol(cfg.symbol ?? "");
     const provider = this.registry.get(name ?? "");
     if (!provider) return [];
+    const tf = cfg.timeframe ?? "60";
+    if (matchSeriesAdapter(tf, provider, name ?? "")) return null;
     if (!provider.getBarsProgressive) return null;
     try {
-      return await provider.getBarsProgressive(ticker, cfg.timeframe ?? "60", { limit: cfg.bars ?? 500, session: cfg.session }, onBatch, opts);
+      return await provider.getBarsProgressive(ticker, tf, { limit: cfg.bars ?? 500, session: cfg.session }, onBatch, opts);
     } catch (e) {
-      if (isDataUnavailableError(e)) throw refusalOf(e, ticker, cfg.timeframe ?? "60");
-      console.warn(`[vela] progressive fetch failed for ${ticker} ${cfg.timeframe ?? "60"} — ${e instanceof Error ? e.message : String(e)}`);
+      if (isDataUnavailableError(e)) throw refusalOf(e, ticker, tf);
+      console.warn(`[vela] progressive fetch failed for ${ticker} ${tf} — ${e instanceof Error ? e.message : String(e)}`);
       return [];
     }
   }
@@ -1446,7 +1488,11 @@ var RegistryFetchFeed = class {
     const { provider: name, ticker } = parseSymbol(cfg.symbol ?? "");
     const provider = this.registry.get(name ?? "");
     if (!provider) return Promise.resolve([]);
-    return safeBars(provider, ticker, cfg.timeframe ?? "60", { ...range, session: cfg.session });
+    const tf = cfg.timeframe ?? "60";
+    const mergedRange = { ...range, session: cfg.session };
+    const adapter = matchSeriesAdapter(tf, provider, name ?? "");
+    if (adapter) return safeAdapterBars(adapter, this.adapterContext(name ?? "", provider, ticker, tf, cfg.session), mergedRange);
+    return safeBars(provider, ticker, tf, mergedRange);
   }
   subscribe(cfg, onBar) {
     const { provider: name, ticker } = parseSymbol(cfg.symbol ?? "");
@@ -1454,13 +1500,22 @@ var RegistryFetchFeed = class {
     if (!provider) return () => {
     };
     const tf = cfg.timeframe ?? "60";
+    const adapter = matchSeriesAdapter(tf, provider, name ?? "");
+    if (adapter) {
+      const ctx = this.adapterContext(name ?? "", provider, ticker, tf, cfg.session);
+      if (adapter.subscribe) return adapter.subscribe(ctx, onBar);
+      return this.poll(() => adapter.getBars(ctx, { limit: 2, session: cfg.session }), onBar);
+    }
     if (provider.subscribe) return provider.subscribe(ticker, tf, onBar, cfg.session ? { session: cfg.session } : void 0);
+    return this.poll(() => provider.getBars(ticker, tf, { limit: 2, session: cfg.session }), onBar);
+  }
+  poll(fetchLatest, onBar) {
     let stopped = false;
     let timer = null;
     const poll = async () => {
       if (stopped) return;
       try {
-        const bars = await provider.getBars(ticker, tf, { limit: 2, session: cfg.session });
+        const bars = await fetchLatest();
         if (stopped) return;
         for (const b of bars) onBar(b);
       } catch (e) {
@@ -2026,11 +2081,11 @@ function captureToolDefaults(d) {
   if (props !== void 0) out.props = clonePlain(props);
   return out;
 }
-function applyToolDefaults(d, defaults) {
-  if (!defaults) return;
-  if (defaults.style) d.style = { ...d.style, ...defaults.style };
-  if (defaults.text) d.text = { ...d.text ?? defaultText(), ...defaults.text, value: d.text?.value ?? "" };
-  if (defaults.props) d.applyProps(clonePlain(defaults.props));
+function applyToolDefaults(d, defaults2) {
+  if (!defaults2) return;
+  if (defaults2.style) d.style = { ...d.style, ...defaults2.style };
+  if (defaults2.text) d.text = { ...d.text ?? defaultText(), ...defaults2.text, value: d.text?.value ?? "" };
+  if (defaults2.props) d.applyProps(clonePlain(defaults2.props));
 }
 function sameToolDefaults(a, b) {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -2232,8 +2287,8 @@ var DrawingController = class {
     if (!this.port) return;
     const changed = type !== this.activeTool;
     this.activeTool = type;
-    const defaults = type ? this.defaults.get(type) : void 0;
-    this.port.setActiveTool(type, defaults?.style, defaults);
+    const defaults2 = type ? this.defaults.get(type) : void 0;
+    this.port.setActiveTool(type, defaults2?.style, defaults2);
     if (changed) this.events.emit("drawing:tool", { type });
   }
   getTool() {
@@ -2399,7 +2454,7 @@ var DrawingController = class {
   // ── programmatic CRUD (facade-facing) ── each is one undo step
   add(type, init = {}) {
     if (!this.enabled) return null;
-    const defaults = this.defaults.get(type);
+    const defaults2 = this.defaults.get(type);
     const d = createDrawing(type, {
       id: this.store.nextId(),
       paneId: init.paneId ?? "price",
@@ -2408,7 +2463,7 @@ var DrawingController = class {
       zIndex: init.zIndex ?? this.startZ(type, init.paneId ?? "price")
     });
     if (!d) return null;
-    applyToolDefaults(d, defaults);
+    applyToolDefaults(d, defaults2);
     if (init.style) d.style = { ...d.style, ...init.style };
     if (init.text) d.text = { ...d.text ?? init.text, ...init.text };
     if (init.props) d.applyProps(init.props);
@@ -3763,6 +3818,13 @@ var IndicatorInputsDialog = class {
     this.calendarAnchor = null;
     this.onDialogKey = (e) => {
       if (e.key === "Escape") {
+        const targetDialog = e.target?.closest('[role="dialog"]');
+        if (targetDialog && targetDialog !== this.dialog) return;
+        const doc = this.dialog?.ownerDocument ?? document;
+        const hasDialogAbove = [...doc.querySelectorAll('[role="dialog"][data-state="open"]')].some(
+          (el) => el !== this.dialog && (!this.dialog || !!(this.dialog.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING))
+        );
+        if (hasDialogAbove) return;
         e.preventDefault();
         if (isPopoverOpen()) {
           closeOpenPopovers();
@@ -4053,11 +4115,12 @@ var IndicatorInputsDialog = class {
       }));
     }
     const fit = isFitControl(lead);
+    const controlWidth = fit ? void 0 : lead.type === "symbol" ? SYMBOL_CONTROL_PX : CONTROL_PX;
     return append(fieldRow({
       label: nameOf(lead, this.i18n),
       id,
       fit,
-      controlWidth: fit ? void 0 : CONTROL_PX,
+      controlWidth,
       info,
       control: this.buildControl(row2, lead, id)
     }));
@@ -4528,13 +4591,17 @@ var IndicatorInputsDialog = class {
     btn.id = id;
     btn.style.cssText = `${this.ctrlStyle()}display:flex;align-items:center;cursor:pointer;text-align:left;`;
     const label = document.createElement("span");
-    label.textContent = value || this.t(TEXT2.selectSymbol);
+    const syncLabel = () => {
+      label.textContent = value || this.t(TEXT2.selectSymbol);
+      label.style.color = value ? "" : "var(--vela-fg-muted)";
+    };
     label.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+    syncLabel();
     btn.append(label);
     btn.addEventListener("click", () => picker(value, (picked) => {
       if (!picked) return;
       value = picked;
-      label.textContent = picked;
+      syncLabel();
       emit(picked);
     }));
     return btn;
@@ -4552,6 +4619,7 @@ var IndicatorInputsDialog = class {
   }
 };
 var CONTROL_PX = 100;
+var SYMBOL_CONTROL_PX = 160;
 function isSelectInput(inp) {
   return inp.type !== "bool" && ((inp.options?.length ?? 0) > 0 || inp.type === "source" || inp.type === "timeframe");
 }
@@ -5868,14 +5936,17 @@ function axisColumnX(dataW, column) {
 var TEXT5 = {
   auto: msg("chart.axisButtons.auto", "Auto (fits data to screen)"),
   log: msg("chart.axisButtons.log", "Logarithmic scale"),
+  percent: msg("chart.axisButtons.percent", "Percentage scale"),
   /** The auto button's letter: the first of "Auto". */
   autoLetter: msg("chart.axisButtons.autoLetter", "A"),
   /** The log button's letter: the first of "Logarithmic". */
-  logLetter: msg("chart.axisButtons.logLetter", "L")
+  logLetter: msg("chart.axisButtons.logLetter", "L"),
+  /** The percent button's symbol. */
+  percentLetter: msg("chart.axisButtons.percentLetter", "%")
 };
 var STYLE_ID3 = "vela-axis-scale-buttons";
 var BTN_PX = 18;
-var BTN_GAP = 4;
+var BTN_GAP = 3;
 var AXIS_BORDER = 1;
 var CLUSTER_W = AXIS_MASTER_W - AXIS_BORDER;
 var PAD_TOP = 8;
@@ -5939,9 +6010,10 @@ var AxisScaleButtons = class {
       pointerEvents: "auto"
     });
     this.applyTheme();
-    this.autoBtn = this.button(TEXT5.autoLetter, TEXT5.auto, () => this.deps.onToggleAuto(this.hoverPaneId ?? ""));
+    this.percentBtn = this.button(TEXT5.percentLetter, TEXT5.percent, () => this.deps.onTogglePercent(this.hoverPaneId ?? ""));
     this.logBtn = this.button(TEXT5.logLetter, TEXT5.log, () => this.deps.onToggleLog(this.hoverPaneId ?? ""));
-    this.cluster.append(this.autoBtn, this.logBtn);
+    this.autoBtn = this.button(TEXT5.autoLetter, TEXT5.auto, () => this.deps.onToggleAuto(this.hoverPaneId ?? ""));
+    this.cluster.append(this.percentBtn, this.logBtn, this.autoBtn);
     this.plot.appendChild(this.cluster);
     this.plot.addEventListener("pointermove", this.onPlotMove);
     this.plot.addEventListener("pointerleave", this.onPlotLeave);
@@ -5951,8 +6023,10 @@ var AxisScaleButtons = class {
   }
   /** Re-read the buttons' labels in the current language (tooltips read it live). */
   relabel() {
+    this.percentBtn.setAttribute("aria-label", this.t(TEXT5.percent));
     this.autoBtn.setAttribute("aria-label", this.t(TEXT5.auto));
     this.logBtn.setAttribute("aria-label", this.t(TEXT5.log));
+    this.percentBtn.textContent = this.t(TEXT5.percentLetter);
     this.autoBtn.textContent = this.t(TEXT5.autoLetter);
     this.logBtn.textContent = this.t(TEXT5.logLetter);
   }
@@ -6002,10 +6076,11 @@ var AxisScaleButtons = class {
     this.cluster.style.display = "flex";
     this.sync();
   }
-  /** Reflect the hovered pane's current auto/log state on the buttons. */
+  /** Reflect the hovered pane's current auto/log/percent state on the buttons. */
   sync() {
     const pane = this.deps.panes().find((p) => p.id === this.hoverPaneId);
     if (!pane) return;
+    this.percentBtn.classList.toggle("vela-axis-on", pane.percent);
     this.autoBtn.classList.toggle("vela-axis-on", pane.auto);
     this.logBtn.classList.toggle("vela-axis-on", pane.log);
   }
@@ -6348,28 +6423,28 @@ function factoryResetConfig(factory, priceStyle = factory.series.style) {
   for (const t9 of chartTypes()) {
     const section = t9.settings;
     if (!section) continue;
-    const defaults = {};
+    const defaults2 = {};
     const addRows = (rows) => {
       for (const r of rows ?? []) {
-        for (const k of settingsRowValueKeys(r)) defaults[k.key] = k.defval;
+        for (const k of settingsRowValueKeys(r)) defaults2[k.key] = k.defval;
       }
     };
     for (const inst of section.instances ?? []) {
-      if (inst.enableKey) defaults[inst.enableKey] = false;
+      if (inst.enableKey) defaults2[inst.enableKey] = false;
       addRows(inst.rows);
     }
     for (const sub2 of section.subsections ?? []) {
-      if (sub2.enableKey) defaults[sub2.enableKey] = false;
+      if (sub2.enableKey) defaults2[sub2.enableKey] = false;
       addRows(sub2.rows);
     }
     if (!section.instances) addRows(section.rows);
-    bag[t9.id] = defaults;
+    bag[t9.id] = defaults2;
   }
   for (const t9 of chartTypes()) {
     if (!hasOwnCandlePaint(t9.id)) continue;
-    const defaults = bag[t9.id] ?? {};
-    for (const key of CANDLE_OVERRIDE_KEYS) defaults[key] = null;
-    bag[t9.id] = defaults;
+    const defaults2 = bag[t9.id] ?? {};
+    for (const key of CANDLE_OVERRIDE_KEYS) defaults2[key] = null;
+    bag[t9.id] = defaults2;
   }
   for (const [typeId, vals] of Object.entries(factory.chartTypes)) {
     bag[typeId] = { ...bag[typeId] ?? {}, ...vals };
@@ -6443,6 +6518,8 @@ function mergeConfig(base, patch) {
       currentPriceLine: isBool(ps.currentPriceLine) ? ps.currentPriceLine : base.priceScale.currentPriceLine,
       priceLabel: isBool(ps.priceLabel) ? ps.priceLabel : base.priceScale.priceLabel,
       countdown: isBool(ps.countdown) ? ps.countdown : base.priceScale.countdown,
+      indicatorValueLabels: isBool(ps.indicatorValueLabels) ? ps.indicatorValueLabels : base.priceScale.indicatorValueLabels,
+      indicatorNameLabels: isBool(ps.indicatorNameLabels) ? ps.indicatorNameLabels : base.priceScale.indicatorNameLabels,
       animateLastPrice: isBool(ps.animateLastPrice) ? ps.animateLastPrice : base.priceScale.animateLastPrice
     },
     animations: {
@@ -7286,20 +7363,22 @@ var WebGL2Backend = class {
   /** The "neon" elements that glow: line/area/step lines + point markers (not candles/fills/bars).
    *  Routing mirrors the main pass: own series per pane, force_overlay series on the price pane. */
   emitGlowSources(b, scene, pane, coords, i0, i1) {
-    const emitOne = (s, off) => {
+    const emitOne = (s, mp, off) => {
       if (!isLineLikeSeries(s) || !seriesShownOn(s, "pane")) return;
       if (s.kind === "histogram" || s.kind === "columns") return;
-      if (s.kind === "circles" || s.kind === "cross") this.emitPointMarkers(b, s, pane, coords, i0, i1, off);
-      else this.emitPolyline(b, s, pane, coords, i0, i1, s.kind === "step", off);
+      if (s.kind === "circles" || s.kind === "cross") this.emitPointMarkers(b, s, mp, coords, i0, i1, off);
+      else this.emitPolyline(b, s, mp, coords, i0, i1, s.kind === "step", off);
     };
     for (const m of scene.indicatorsForPane(pane.id)) {
       const off = scene.offsetOf(m.id);
-      for (const s of m.series) if (s.overlay !== true) emitOne(s, off);
+      const sc = scene.scaleFor(m, pane);
+      const mp = sc === pane.scale ? pane : { ...pane, scale: sc };
+      for (const s of m.series) if (s.overlay !== true) emitOne(s, mp, off);
     }
     if (pane.kind === "price") {
       for (const m of scene.indicators.values()) {
         const off = scene.offsetOf(m.id);
-        for (const s of m.series) if (s.overlay === true) emitOne(s, off);
+        for (const s of m.series) if (s.overlay === true) emitOne(s, pane, off);
       }
     }
   }
@@ -7351,6 +7430,9 @@ var WebGL2Backend = class {
       const bPrev = coords.priceToY(b0.value, pane.scale, pane.bounds);
       const tCur = coords.priceToY(a1.value, pane.scale, pane.bounds);
       const bCur = coords.priceToY(b1.value, pane.scale, pane.bounds);
+      const dPrev = tPrev - bPrev;
+      const dCur = tCur - bCur;
+      const crosses = dPrev * dCur < 0;
       const grad = fill2.gradient?.[i - 1 - off];
       if (grad) {
         const yTop = coords.priceToY(grad.topValue, pane.scale, pane.bounds);
@@ -7360,11 +7442,29 @@ var WebGL2Backend = class {
         const bc = parseColor(grad.bottomColor);
         const span = yBot - yTop;
         const at = (y) => lerpColor(tc, bc, clamp01((y - yTop) / span));
-        b.quad4(xPrev, tPrev, at(tPrev), xCur, tCur, at(tCur), xCur, bCur, at(bCur), xPrev, bPrev, at(bPrev));
+        if (crosses) {
+          const frac = dPrev / (dPrev - dCur);
+          const xCross = xPrev + frac * (xCur - xPrev);
+          const yCross = tPrev + frac * (tCur - tPrev);
+          const cCross = at(yCross);
+          b.tri(xPrev, tPrev, at(tPrev), xCross, yCross, cCross, xPrev, bPrev, at(bPrev));
+          b.tri(xCross, yCross, cCross, xCur, tCur, at(tCur), xCur, bCur, at(bCur));
+        } else {
+          b.quad4(xPrev, tPrev, at(tPrev), xCur, tCur, at(tCur), xCur, bCur, at(bCur), xPrev, bPrev, at(bPrev));
+        }
       } else {
         const color = fill2.colors ? fill2.colors[i - 1 - off] : fill2.color;
         if (!color) continue;
-        b.quad(xPrev, tPrev, xCur, tCur, xCur, bCur, xPrev, bPrev, parseColor(color));
+        const c = parseColor(color);
+        if (crosses) {
+          const frac = dPrev / (dPrev - dCur);
+          const xCross = xPrev + frac * (xCur - xPrev);
+          const yCross = tPrev + frac * (tCur - tPrev);
+          b.tri(xPrev, tPrev, c, xCross, yCross, c, xPrev, bPrev, c);
+          b.tri(xCross, yCross, c, xCur, tCur, c, xCur, bCur, c);
+        } else {
+          b.quad(xPrev, tPrev, xCur, tCur, xCur, bCur, xPrev, bPrev, c);
+        }
       }
     }
   }
@@ -9076,6 +9176,14 @@ var SceneGraph = class {
      *  also shown, the two merge into one stacked block (countdown under the label);
      *  when either shows alone it's centered on the latest price level. */
     this.showCountdown = true;
+    /** Draw each indicator plot's latest value as a chip on its pane's price scale. */
+    this.showIndicatorValueLabels = true;
+    /** Draw each tagged plot's name in a tinted chip just inside the plot, beside its value chip. */
+    this.showIndicatorNameLabels = false;
+    /** True while the active series has variable bar durations (tick charts, etc.):
+     *  suppresses the wall-clock bar countdown, preserves same-millisecond bars, and
+     *  formats crosshair stamps with seconds. */
+    this.variableDuration = false;
     /** Logarithmic price scale on the price pane. */
     this.logScale = false;
     /** Inverted price axis on the price pane (high at the bottom). Study panes carry their own. */
@@ -9087,11 +9195,16 @@ var SceneGraph = class {
      *  price-axis decimals — the instrument's true precision instead of the zoom-derived
      *  formula. Undefined until symbol metadata loads (the formula is the fallback). */
     this.priceMintick = void 0;
+    /** Active symbol's short display name (bare ticker, e.g. `'AAPL'`), shown beside the
+     *  main last-price chip when compared instruments are also labeled on the price axis. */
+    this.symbolName = void 0;
     /** Price-axis mode on the price pane: `'price'` (absolute) or `'percent'` (change
      *  vs `percentBaseline`). Gridlines, axis labels and crosshair chip all follow it. */
     this.scaleMode = "price";
     /** Reference price for percent mode (first visible bar's close); recomputed per frame. */
     this.percentBaseline = 0;
+    /** Per-model visible percent baseline for `percentBaseline: 'own'` models (recomputed per frame). */
+    this.modelPercentBaselines = /* @__PURE__ */ new Map();
     /** IANA time zone for the time axis + crosshair/data-window stamps (`'UTC'` default). */
     this.timezone = "UTC";
     /** The chart's formatters (`chart.i18n.format`) for axis labels, chips and readouts;
@@ -9196,11 +9309,24 @@ var SceneGraph = class {
   dropIndicatorScale(id) {
     this.indicatorScales.delete(id);
   }
-  /** The price window a model renders on: its own scale when merged (`ownScale`), else the pane's. */
+  /** The price window a model renders on: its own scale when merged (`ownScale`), an
+   *  affine-rebased window when `percentBaseline === 'own'` in percent/indexed mode so its
+   *  first visible bar aligns with the pane's 0% / 100 baseline, else the pane's master scale. */
   scaleFor(model, pane) {
     if (model.ownScale === true) {
       const s = this.indicatorScales.get(model.id);
       if (s) return s.scale;
+    }
+    if (model.percentBaseline === "own") {
+      const pct = percentScaleFor(this, pane);
+      const ownBase = this.modelPercentBaselines.get(model.id);
+      if (pct && ownBase != null && Number.isFinite(ownBase) && ownBase !== 0) {
+        const ratio = ownBase / pct.baseline;
+        if (ratio < 0) {
+          return { ...pane.scale, min: pane.scale.max * ratio, max: pane.scale.min * ratio, invert: !pane.scale.invert };
+        }
+        return { ...pane.scale, min: pane.scale.min * ratio, max: pane.scale.max * ratio };
+      }
     }
     return pane.scale;
   }
@@ -9338,6 +9464,19 @@ function percentScaleFor(scene, pane) {
   const baseline = pane.percentBaseline;
   if (!Number.isFinite(baseline) || baseline === 0) return void 0;
   return { baseline, indexed: mode === "indexed" };
+}
+function percentScaleForModel(scene, pane, model) {
+  if (model.ownScale === true) return void 0;
+  const pct = percentScaleFor(scene, pane);
+  if (!pct) return void 0;
+  if (model.percentBaseline === "own") {
+    const ownBase = scene.modelPercentBaselines.get(model.id);
+    if (ownBase != null && Number.isFinite(ownBase) && ownBase !== 0) {
+      return { baseline: ownBase, indexed: pct.indexed };
+    }
+    return void 0;
+  }
+  return pct;
 }
 
 // src/renderers/native/backend/Canvas2dBackend.ts
@@ -10100,6 +10239,120 @@ function mergeBarColors2(indicators) {
     if (m.barColors) for (const bc of m.barColors) map2.set(bc.time, bc.color);
   }
   return map2;
+}
+
+// src/renderers/native/chrome/axisTags.ts
+function spreadAxisTags(slots, minTop, maxBottom) {
+  const order = slots.map((_, i) => i).sort((a, b) => slots[a].top - slots[b].top || Number(slots[b].fixed === true) - Number(slots[a].fixed === true) || a - b);
+  let clusters = order.map((i) => ({ items: [i], top: slots[i].top, height: slots[i].height }));
+  const place = (c) => {
+    let offset = 0;
+    let fixedTop = null;
+    let sum2 = 0;
+    for (const i of c.items) {
+      const s = slots[i];
+      if (s.fixed && fixedTop === null) fixedTop = s.top - offset;
+      sum2 += s.top - offset;
+      offset += s.height;
+    }
+    c.height = offset;
+    if (fixedTop !== null) {
+      c.top = fixedTop;
+      return;
+    }
+    const top = sum2 / c.items.length;
+    const room = maxBottom - minTop;
+    c.top = c.height > room ? minTop : Math.min(Math.max(top, minTop), maxBottom - c.height);
+  };
+  clusters.forEach(place);
+  for (; ; ) {
+    let merged = false;
+    const next = [];
+    for (const c of clusters) {
+      const prev2 = next[next.length - 1];
+      if (prev2 && prev2.top + prev2.height > c.top + 1e-6) {
+        prev2.items.push(...c.items);
+        place(prev2);
+        merged = true;
+      } else {
+        next.push(c);
+      }
+    }
+    clusters = next;
+    if (!merged) break;
+  }
+  const out = new Array(slots.length);
+  for (const c of clusters) {
+    let y = c.top;
+    for (const i of c.items) {
+      out[i] = y;
+      y += slots[i].height;
+    }
+  }
+  return out;
+}
+
+// src/renderers/native/chrome/tagColors.ts
+var clamp012 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+var alphaOf = (v) => v === void 0 ? 1 : clamp012(v.endsWith("%") ? parseFloat(v) / 100 : parseFloat(v));
+function hslToRgb(h, s, l) {
+  const hue = (h % 360 + 360) % 360 / 360;
+  if (s === 0) return [l, l, l];
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const channel = (t0) => {
+    const t9 = t0 < 0 ? t0 + 1 : t0 > 1 ? t0 - 1 : t0;
+    if (t9 < 1 / 6) return p + (q - p) * 6 * t9;
+    if (t9 < 1 / 2) return q;
+    if (t9 < 2 / 3) return p + (q - p) * (2 / 3 - t9) * 6;
+    return p;
+  };
+  return [channel(hue + 1 / 3), channel(hue), channel(hue - 1 / 3)];
+}
+function cssRgba(css11) {
+  const s = css11.trim().toLowerCase();
+  if (s === "transparent") return [0, 0, 0, 0];
+  const hex = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/.exec(s);
+  if (hex) {
+    let h = hex[1];
+    if (h.length <= 4) h = [...h].map((c) => c + c).join("");
+    const byte = (i) => parseInt(h.slice(i, i + 2), 16) / 255;
+    return [byte(0), byte(2), byte(4), h.length === 8 ? byte(6) : 1];
+  }
+  const rgb = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+%?)\s*)?\)$/.exec(s);
+  if (rgb) return [clamp012(+rgb[1] / 255), clamp012(+rgb[2] / 255), clamp012(+rgb[3] / 255), alphaOf(rgb[4])];
+  const hsl = /^hsla?\(\s*(-?[\d.]+)(?:deg)?\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%\s*(?:,\s*([\d.]+%?)\s*)?\)$/.exec(s);
+  if (hsl) return [...hslToRgb(+hsl[1], clamp012(+hsl[2] / 100), clamp012(+hsl[3] / 100)), alphaOf(hsl[4])];
+  return parseColor(css11);
+}
+function rgbaCss(color, alpha) {
+  const byte = (v) => Math.round(clamp012(v) * 255);
+  return `rgba(${byte(color[0])}, ${byte(color[1])}, ${byte(color[2])}, ${alpha})`;
+}
+function blend(under, over, alpha) {
+  const mix2 = (a, b) => a * (1 - alpha) + b * alpha;
+  return [mix2(under[0], over[0]), mix2(under[1], over[1]), mix2(under[2], over[2]), 1];
+}
+function luminance(c) {
+  const lin = (v) => v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  return 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);
+}
+function contrastRatio(a, b) {
+  const la = luminance(a);
+  const lb = luminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+var READABLE_CONTRAST = 4.5;
+function readableInk(color, background) {
+  if (contrastRatio(color, background) >= READABLE_CONTRAST) return color;
+  const black = [0, 0, 0, 1];
+  const white = [1, 1, 1, 1];
+  const toward = contrastRatio(black, background) >= contrastRatio(white, background) ? black : white;
+  for (let step = 1; step <= 20; step += 1) {
+    const ink = blend(color, toward, step / 20);
+    if (contrastRatio(ink, background) >= READABLE_CONTRAST) return ink;
+  }
+  return toward;
 }
 
 // src/renderers/shared/drawing-geometry.ts
@@ -11013,8 +11266,9 @@ var STEP_LADDER = [
   3 * MONTH,
   YEAR
 ];
-function formatTimeStamp(ms, timeZone, barIntervalMs, fmt = ENGLISH_FORMAT, surface = "crosshair") {
-  return fmt.timeStamp(ms, { timeZone: displayZone(timeZone, barIntervalMs), withTime: barIntervalMs < DAY, surface });
+function formatTimeStamp(ms, timeZone, barIntervalMs, fmt = ENGLISH_FORMAT, surface = "crosshair", withSeconds) {
+  const showSeconds = withSeconds ?? (barIntervalMs > 0 && barIntervalMs < MIN);
+  return fmt.timeStamp(ms, { timeZone: displayZone(timeZone, barIntervalMs), withTime: barIntervalMs < DAY, withSeconds: showSeconds, surface });
 }
 function pickStep(targetMs) {
   for (const step of STEP_LADDER) if (step >= targetMs) return step;
@@ -11164,8 +11418,8 @@ var PriceAxisTickSource = class {
     if (m && m.kind === pane.kind && m.min === s.min && m.max === s.max && m.log === !!s.log && m.invert === !!s.invert && m.height === height && m.baseline === pct?.baseline && m.indexed === !!pct?.indexed && m.mintick === scene.priceMintick && m.format === format && m.fmt === scene.format && m.fontSize === fontSize) {
       return m.ticks;
     }
-    const defaults = paneAxisTicks(s, height, pct, scene.priceMintick, format, scene.format);
-    const ticks = this.callHook(fn, scene, pane, coords, defaults, pct?.baseline, pct ? pct.indexed ? "indexed" : "percent" : "price");
+    const defaults2 = paneAxisTicks(s, height, pct, scene.priceMintick, format, scene.format);
+    const ticks = this.callHook(fn, scene, pane, coords, defaults2, pct?.baseline, pct ? pct.indexed ? "indexed" : "percent" : "price");
     this.memo.set(pane, {
       kind: pane.kind,
       min: s.min,
@@ -11183,7 +11437,7 @@ var PriceAxisTickSource = class {
     });
     return ticks;
   }
-  callHook(fn, scene, pane, coords, defaults, baseline, mode) {
+  callHook(fn, scene, pane, coords, defaults2, baseline, mode) {
     const scale = { min: pane.scale.min, max: pane.scale.max, log: !!pane.scale.log, invert: !!pane.scale.invert };
     const bounds = { top: 0, height: pane.bounds.height };
     const ctx = {
@@ -11197,19 +11451,19 @@ var PriceAxisTickSource = class {
       mintick: scene.priceMintick,
       fontSize: scene.style.fontSize,
       priceToY: (price) => coords.priceToY(price, scale, bounds),
-      defaults
+      defaults: defaults2
     };
     let out;
     try {
       out = fn(ctx);
     } catch (err) {
       this.warnOnce("threw", err);
-      return defaults;
+      return defaults2;
     }
-    if (out == null) return defaults;
+    if (out == null) return defaults2;
     if (!Array.isArray(out)) {
       this.warnOnce("returned a non-array", out);
-      return defaults;
+      return defaults2;
     }
     const ticks = [];
     for (const t9 of out) {
@@ -11580,6 +11834,25 @@ function standaloneSvg(markup, ink, px) {
 
 // src/renderers/native/chrome/ChromeRenderer.ts
 var MINOR_LABEL_ALPHA = 0.5;
+var TAG_H = 16;
+var TAG_PAD = 8;
+var NAME_MAX_W = 160;
+var NAME_TINT = 0.18;
+var NAME_BORDER_ALPHA = 0.55;
+function taggedPlots(m, index) {
+  const out = [];
+  for (const s of m.series) {
+    if (!isLineLikeSeries(s) || !seriesShownOn(s, "priceScale")) continue;
+    const p = s.points[index];
+    if (!p || p.value === null || !Number.isFinite(p.value)) continue;
+    const css11 = p.color ?? s.style.color;
+    if (!css11) continue;
+    const [r, g, b, a] = cssRgba(css11);
+    if (!(a > 0)) continue;
+    out.push({ series: s, value: p.value, color: [r, g, b, 1] });
+  }
+  return out;
+}
 var ChromeRenderer = class {
   /** `axisTicks` is shared with the backdrop layer, so price labels and gridlines agree. */
   constructor(axisTicks = new PriceAxisTickSource()) {
@@ -11598,6 +11871,8 @@ var ChromeRenderer = class {
     /** Bar open times of the current series, rebuilt only when the array or its length changes (a live tick keeps both). */
     this.barTimesSrc = null;
     this.barTimesCache = [];
+    /** The chart's translator, for the indicator name labels (English when absent). */
+    this.i18n = null;
   }
   mount(canvas) {
     this.canvas = canvas;
@@ -11684,6 +11959,7 @@ var ChromeRenderer = class {
     this.drawPriceAxes(ctx, scene, coords, theme, dataW, panes);
     this.drawMergedScaleColumns(ctx, scene, coords, dataW);
     this.drawPaneSeparators(ctx, scene, theme, fullW, panes);
+    this.drawIndicatorTags(ctx, scene, coords, theme, dataW, fullW, panes, pricePane);
     this.drawPriceLineAndCountdown(ctx, scene, coords, theme, dataW, pricePane);
     this.drawTimeAxis(ctx, scene, coords, theme, dataW, dataH, fullH);
     this.drawMarkLane(ctx, scene, coords, theme, dataW, dataH);
@@ -11846,6 +12122,133 @@ var ChromeRenderer = class {
     ctx.textAlign = "start";
   }
   /**
+   * Indicator value tags: each indicator plot's value on the last bar, as a chip in its
+   * plot color on the scale it draws against (the pane's master scale, or its own merged
+   * column), with its name in a tinted chip at the plot's right edge when name labels are on.
+   *
+   * Chips that would overlap are spread apart; the last-price chip keeps its place and the
+   * tags make room around it. Each scale column spreads its own chips, except with name
+   * labels on: the names all sit at the plot's edge, whatever column their value is in, so
+   * the pane's tags then share one set of rows and every name sits level with its own value.
+   * A tag pushed out of its pane (crowded against an edge, or a pane too short for them all)
+   * is left off, and each pane draws clipped to its own band.
+   *
+   * A plot gets no tag when it is off the price scale (`display.priceScale`), has no value or
+   * an invisible color on the last bar (`color = na`, a fill anchor), or sits outside its pane.
+   */
+  drawIndicatorTags(ctx, scene, coords, theme, dataW, fullW, panes, pricePane) {
+    const showValues = scene.showIndicatorValueLabels;
+    const showNames = scene.showIndicatorNameLabels;
+    const hasOptIn = scene.showPriceLabel && [...scene.indicators.values()].some((m) => m.priceAxisLabel === true);
+    if (!showValues && !showNames && !hasOptIn) return;
+    const last = scene.bars.length - 1;
+    if (last < 0) return;
+    const background = cssRgba(theme.background);
+    const nameMaxW = Math.min(NAME_MAX_W, dataW * 0.4);
+    const labelled = /* @__PURE__ */ new Map();
+    for (const m of scene.indicators.values()) labelled.set(m.id, taggedPlots(m, last - scene.offsetOf(m.id)));
+    for (const pane of panes) {
+      if (pane.collapsed || !(pane.bounds.height > 0)) continue;
+      const top = pane.bounds.top;
+      const bottom = top + pane.bounds.height;
+      const own = scene.ownScaleIndicatorsForPane(pane.id);
+      const tags = [];
+      const add = (m, plot, column, scale, master) => {
+        const solidPill = m.priceAxisLabel === true && scene.showPriceLabel;
+        if (!showValues && !showNames && !solidPill) return;
+        const y = coords.priceToY(plot.value, scale, pane.bounds);
+        if (!(y >= top && y <= bottom)) return;
+        const mintick = m.percentBaseline === "own" ? void 0 : scene.priceMintick;
+        const text = master ? formatAxisValue(scale, pane.bounds.height, plot.value, percentScaleForModel(scene, pane, m), mintick, pane.axisFormat, scene.format, solidPill ? "lastPrice" : "priceAxis") : formatAxisValue(scale, pane.bounds.height, plot.value, void 0, mintick, void 0, scene.format, solidPill ? "lastPrice" : "priceAxis");
+        if (!text) return;
+        const name = solidPill ? plot.series.title || this.tagName(m, plot.series, labelled.get(m.id).length) : this.tagName(m, plot.series, labelled.get(m.id).length);
+        tags.push({ column, slot: { top: y - TAG_H / 2, height: TAG_H }, text, color: plot.color, name, ...solidPill ? { solidPill: true } : {} });
+      };
+      for (const m of scene.orderedIndicatorsForPane(pane.id)) {
+        const k = m.ownScale === true ? own.indexOf(m) : -1;
+        for (const plot of labelled.get(m.id)) if (plot.series.overlay !== true) add(m, plot, k + 1, scene.scaleFor(m, pane), k < 0);
+      }
+      if (pane === pricePane) {
+        for (const m of scene.indicators.values()) for (const plot of labelled.get(m.id)) if (plot.series.overlay === true) add(m, plot, 0, pane.scale, true);
+      }
+      if (tags.length === 0) continue;
+      const priceChip = pane === pricePane ? this.priceChipSlot(scene, coords, pane) : null;
+      const anyEdgeNames = showNames || tags.some((t9) => t9.solidPill && t9.column === 0);
+      const groups = /* @__PURE__ */ new Map();
+      for (const t9 of tags) {
+        const key = anyEdgeNames ? 0 : t9.column;
+        const group = groups.get(key);
+        if (group) group.push(t9);
+        else groups.set(key, [t9]);
+      }
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, top, fullW, bottom - top);
+      ctx.clip();
+      ctx.textBaseline = "middle";
+      ctx.textAlign = "center";
+      for (const [key, group] of groups) {
+        const slots = group.map((t9) => t9.slot);
+        if (priceChip && key === 0) slots.push(priceChip);
+        const tops = spreadAxisTags(slots, top, bottom);
+        group.forEach((t9, i) => {
+          const chipTop = tops[i];
+          if (chipTop < top || chipTop + TAG_H > bottom) return;
+          const y = chipTop + TAG_H / 2;
+          const fill2 = rgbaCss(t9.color, 1);
+          if (showValues || t9.solidPill) {
+            const x = axisColumnX(dataW, t9.column) + 1;
+            const w = ctx.measureText(t9.text).width + TAG_PAD;
+            ctx.fillStyle = fill2;
+            ctx.fillRect(x, chipTop, w, TAG_H);
+            ctx.fillStyle = tagTextColor(fill2, theme.background);
+            ctx.fillText(t9.text, x + w / 2, y);
+          }
+          if (t9.solidPill && t9.column === 0 && t9.name) {
+            const name = fitText(ctx, t9.name, nameMaxW);
+            drawAxisNameTag(ctx, name, dataW, y, fill2, tagTextColor(fill2, theme.background));
+            ctx.textAlign = "center";
+          } else if (showNames && t9.name) {
+            const name = fitText(ctx, t9.name, nameMaxW);
+            const w = ctx.measureText(name).width + TAG_PAD;
+            const x = dataW - w - 2;
+            const chip = blend(background, t9.color, NAME_TINT);
+            ctx.fillStyle = rgbaCss(chip, 1);
+            ctx.fillRect(x, chipTop, w, TAG_H);
+            ctx.strokeStyle = rgbaCss(t9.color, NAME_BORDER_ALPHA);
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x + 0.5, chipTop + 0.5, w - 1, TAG_H - 1);
+            ctx.fillStyle = rgbaCss(readableInk(t9.color, chip), 1);
+            ctx.fillText(name, x + w / 2, y);
+          }
+        });
+      }
+      ctx.restore();
+    }
+    ctx.textAlign = "start";
+  }
+  /** What a plot's name label reads: the indicator's short name, plus the plot's own name
+   *  when the indicator tags more than one plot (`BB Upper`, `BB Basis`). */
+  tagName(m, s, plots) {
+    const short = m.displayShorttitle ?? m.shorttitle;
+    const indicator = textOf(this.i18n, short ?? m.displayTitle ?? m.title);
+    if (plots <= 1) return indicator;
+    const plot = s.displayTitle ? textOf(this.i18n, s.displayTitle) : s.title;
+    return plot && plot !== indicator ? `${indicator} ${plot}` : indicator;
+  }
+  /** The band the last-price chip (and the countdown merged under it) takes on the price
+   *  scale, or null when neither shows — the slot indicator tags make room around. */
+  priceChipSlot(scene, coords, pricePane) {
+    const n = scene.bars.length;
+    if (n === 0 || scene.candlesHidden) return null;
+    const last = scene.bars[n - 1];
+    const y = coords.priceToY(last.close, pricePane.scale, pricePane.bounds);
+    if (y < pricePane.bounds.top || y > pricePane.bounds.top + pricePane.bounds.height) return null;
+    const countdown = scene.showCountdown && !scene.variableDuration && countdownText(last.time, coords.barInterval, clockCorrection.now(), scene.format) !== null;
+    if (!scene.showPriceLabel && !countdown) return null;
+    return { top: y - 8, height: scene.showPriceLabel && countdown ? 32 : 16, fixed: true };
+  }
+  /**
    * The latest-price chrome on the price pane, all colored with the price element's own
    * color (candle/bar up-down, line, area, or baseline side) and white text:
    *  - the dashed current-price LINE (`showPriceLine`) — fully independent of the label,
@@ -11874,7 +12277,7 @@ var ChromeRenderer = class {
       ctx.stroke();
       setDash2(ctx, "solid");
     }
-    const cdText = scene.showCountdown ? countdownText(last.time, coords.barInterval, clockCorrection.now(), scene.format) : null;
+    const cdText = scene.showCountdown && !scene.variableDuration ? countdownText(last.time, coords.barInterval, clockCorrection.now(), scene.format) : null;
     const showCountdown = cdText !== null;
     const showLabel = scene.showPriceLabel;
     if (!showLabel && !showCountdown) return;
@@ -11883,6 +12286,10 @@ var ChromeRenderer = class {
     const x = dataW + 1;
     const textColor = tagTextColor(color, theme.background);
     ctx.textBaseline = "middle";
+    const hasLabeledOverlay = showLabel && !!scene.symbolName && scene.indicatorsForPane(pricePane.id).some((m) => m.priceAxisLabel === true && m.ownScale !== true && taggedPlots(m, n - 1 - scene.offsetOf(m.id)).length > 0);
+    if (hasLabeledOverlay && scene.symbolName) {
+      drawAxisNameTag(ctx, scene.symbolName, dataW, y, color, textColor);
+    }
     if (showLabel && cdText !== null) {
       const w2 = Math.max(ctx.measureText(priceText).width, ctx.measureText(cdText).width) + PAD;
       const top = y - 8;
@@ -11938,6 +12345,29 @@ function unionRange(a, b) {
   if (!b) return a;
   return { min: Math.min(a.min, b.min), max: Math.max(a.max, b.max) };
 }
+function drawAxisNameTag(ctx, name, dataW, y, fill2, textColor) {
+  const PAD_X2 = 6;
+  const H = 16;
+  const w = Math.ceil(ctx.measureText(name).width) + PAD_X2 * 2;
+  const x = dataW - w - 1;
+  const top = y - H / 2;
+  const r = 2;
+  ctx.fillStyle = fill2;
+  ctx.beginPath();
+  ctx.moveTo(x + r, top);
+  ctx.lineTo(x + w, top);
+  ctx.lineTo(x + w, top + H);
+  ctx.lineTo(x + r, top + H);
+  ctx.quadraticCurveTo(x, top + H, x, top + H - r);
+  ctx.lineTo(x, top + r);
+  ctx.quadraticCurveTo(x, top, x + r, top);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = textColor;
+  ctx.textAlign = "center";
+  ctx.fillText(name, x + w / 2, y);
+  ctx.textAlign = "start";
+}
 function setDash2(ctx, style) {
   if (style === "dashed") ctx.setLineDash([6, 4]);
   else if (style === "dotted") ctx.setLineDash([2, 3]);
@@ -11973,6 +12403,12 @@ function priceElementColor(scene, coords, theme, last) {
       return body;
     }
   }
+}
+function fitText(ctx, text, maxW) {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let s = text;
+  while (s.length > 1 && ctx.measureText(`${s}…`).width > maxW) s = s.slice(0, -1);
+  return `${s.trimEnd()}…`;
 }
 
 // src/renderers/native/chrome/LabelTooltip.ts
@@ -12112,7 +12548,8 @@ var CrosshairRenderer = class {
       const price = coords.yToPrice(ch.y, pane.scale, pane.bounds);
       this.chip(ctx, dataW + 1, ch.y, formatAxisValue(pane.scale, pane.bounds.height, price, percentScaleFor(scene, pane), scene.priceMintick, pane.axisFormat, scene.format, "crosshair"), chipBg, "left", false, theme.background);
     }
-    if (vertical) this.chip(ctx, x, dataH + 1, formatTimeStamp(coords.logicalToTime(logical), scene.timezone, coords.barInterval, scene.format), chipBg, "center", true, theme.background);
+    const showSeconds = scene.variableDuration || coords.barInterval > 0 && coords.barInterval < 6e4;
+    if (vertical) this.chip(ctx, x, dataH + 1, formatTimeStamp(coords.logicalToTime(logical), scene.timezone, coords.barInterval, scene.format, "crosshair", showSeconds), chipBg, "center", true, theme.background);
   }
   destroy() {
     this.canvas = null;
@@ -12170,7 +12607,8 @@ var CrosshairRenderer = class {
         this.chip(ctx, dataW + 1, ext.y, formatAxisValue(pane.scale, pane.bounds.height, ext.price, percentScaleFor(scene, pane), scene.priceMintick, pane.axisFormat, scene.format, "crosshair"), chipBg, "left", false, theme.background);
       }
     }
-    this.chip(ctx, x, dataH + 1, formatTimeStamp(ext.time, scene.timezone, coords.barInterval, scene.format), chipBg, "center", true, theme.background);
+    const showSeconds = scene.variableDuration || coords.barInterval > 0 && coords.barInterval < 6e4;
+    this.chip(ctx, x, dataH + 1, formatTimeStamp(ext.time, scene.timezone, coords.barInterval, scene.format, "crosshair", showSeconds), chipBg, "center", true, theme.background);
     ctx.globalAlpha = 1;
   }
   /** Paint the `shadeRight` veil from `from` to the price scale and record the veiled area. */
@@ -12353,6 +12791,8 @@ var BUILTIN_SETTINGS_IDS = [
   "scales.price-scale.last-price-line",
   "scales.price-scale.last-price-label",
   "scales.price-scale.countdown",
+  "scales.price-scale.indicator-value-labels",
+  "scales.price-scale.indicator-name-labels",
   "scales.price-scale.axis-labels",
   "scales.price-scale.border-color",
   "scales.crosshair",
@@ -12461,6 +12901,8 @@ var TEXT6 = {
   lastPriceLine: msg("chart.settings.lastPriceLine", "Last price line"),
   lastPriceLabel: msg("chart.settings.lastPriceLabel", "Last price label"),
   countdownToBarClose: msg("chart.settings.countdownToBarClose", "Countdown to bar close"),
+  indicatorValueLabels: msg("chart.settings.indicatorValueLabels", "Indicator value labels"),
+  indicatorNameLabels: msg("chart.settings.indicatorNameLabels", "Indicator name labels"),
   axisLabels: msg("chart.settings.axisLabels", "Axis labels"),
   scaleBorderColor: msg("chart.settings.scaleBorderColor", "Scale border color"),
   crosshair: msg("chart.settings.crosshair", "Crosshair"),
@@ -13000,6 +13442,8 @@ var SettingsDialog = class {
     body.append(sid(this.boolRow(TEXT6.lastPriceLine, config.priceScale.currentPriceLine, (v) => this.emit({ priceScale: { currentPriceLine: v } })), "scales.price-scale.last-price-line"));
     body.append(sid(this.boolRow(TEXT6.lastPriceLabel, config.priceScale.priceLabel, (v) => this.emit({ priceScale: { priceLabel: v } })), "scales.price-scale.last-price-label"));
     body.append(sid(this.boolRow(TEXT6.countdownToBarClose, config.priceScale.countdown, (v) => this.emit({ priceScale: { countdown: v } })), "scales.price-scale.countdown"));
+    body.append(sid(this.boolRow(TEXT6.indicatorValueLabels, config.priceScale.indicatorValueLabels, (v) => this.emit({ priceScale: { indicatorValueLabels: v } })), "scales.price-scale.indicator-value-labels"));
+    body.append(sid(this.boolRow(TEXT6.indicatorNameLabels, config.priceScale.indicatorNameLabels, (v) => this.emit({ priceScale: { indicatorNameLabels: v } })), "scales.price-scale.indicator-name-labels"));
     body.append(sid(this.boolRow(TEXT6.axisLabels, config.priceScale.labelsVisible, (v) => this.emit({ priceScale: { labelsVisible: v } })), "scales.price-scale.axis-labels"));
     body.append(sid(this.colorRow(TEXT6.scaleBorderColor, config.priceScale.borderColor, (v) => this.emit({ priceScale: { borderColor: v } })), "scales.price-scale.border-color"));
     body.append(sid(this.sectionTitle(TEXT6.crosshair), "scales.crosshair"));
@@ -18738,7 +19182,7 @@ var UserDrawingController = class {
     }
     return lo <= hi ? { min: lo, max: hi } : null;
   }
-  setActiveTool(type, lastStyle, defaults) {
+  setActiveTool(type, lastStyle, defaults2) {
     if (type != null) {
       this.finishTextEditor(true);
       this.withModeIntent(() => {
@@ -18747,7 +19191,7 @@ var UserDrawingController = class {
       });
     }
     this.activeTool = type;
-    this.activeToolDefaults = defaults ?? (lastStyle ? { style: lastStyle } : void 0);
+    this.activeToolDefaults = defaults2 ?? (lastStyle ? { style: lastStyle } : void 0);
     this.toolbar.setActiveTool(type);
     if (type == null) this.interaction.onToolCleared();
     else this.clearSelection();
@@ -19967,7 +20411,7 @@ function createProjector(coords, paneOf, paneIdAtY, barsInRange, seriesInRange, 
 }
 
 // src/renderers/native/core/autoscale.ts
-function computePaneScale(models, bars, includeCandles, i0, i1, drawings, log = false, offsetOf = () => 0, margins = DEFAULT_MARGINS) {
+function computePaneScale(models, bars, includeCandles, i0, i1, drawings, log = false, offsetOf = () => 0, margins = DEFAULT_MARGINS, valueScaleOf = () => 1) {
   let min = Infinity;
   let max = -Infinity;
   const consider = (v) => {
@@ -19987,11 +20431,14 @@ function computePaneScale(models, bars, includeCandles, i0, i1, drawings, log = 
   }
   for (const model of models) {
     const off = offsetOf(model.id);
+    const mult = valueScaleOf(model.id);
+    if (mult === 0) continue;
+    const considerModel = mult === 1 ? consider : (v) => consider(v != null ? v * mult : v);
     for (const s of model.series) {
       if (s.overlay === true) continue;
-      considerSeries(s, i0, i1, off, consider);
+      considerSeries(s, i0, i1, off, considerModel);
     }
-    for (const pl of model.priceLines) consider(pl.price);
+    for (const pl of model.priceLines) considerModel(pl.price);
   }
   if (drawings) {
     consider(drawings.min);
@@ -21345,7 +21792,7 @@ var NativeRenderer = class {
     /** The active symbol's style-deciding facts; null while unknown (every style applies). */
     this.symbolFacts = null;
     this.name = "native";
-    this.features = ["logScale", "currentPriceLine", "priceLabel", "countdown", "upColor", "downColor", "glow", "animZoom", "animPan", "animScroll", "animAutoscale", "animLiveBar", "intro", "zoomAnchor", "axisDrag", "paneResize", "freePan", "candleZOrder", "candleVisible", "seriesOrder", "highlights", "sessionZones", "gridlines", "axisLabels", "scaleMode", "invertScale", "scalePriceOnly", "paneScales", "autoScale", "timezone", "keyboard", "historyChords", "priceStyle", "shownPriceStyle", "priceBaseline", "baselinePrice", "previousClose", "settings", "attribution", "dialogHost", "tradeMarkers", "marks", "indicatorTitles", "indicatorValues", "crosshairOverride", "drawingsInteractive", "priceAxisTicks"];
+    this.features = ["logScale", "currentPriceLine", "priceLabel", "countdown", "indicatorValueLabels", "indicatorNameLabels", "upColor", "downColor", "glow", "animZoom", "animPan", "animScroll", "animAutoscale", "animLiveBar", "intro", "zoomAnchor", "axisDrag", "paneResize", "freePan", "candleZOrder", "candleVisible", "seriesOrder", "highlights", "sessionZones", "gridlines", "axisLabels", "scaleMode", "invertScale", "scalePriceOnly", "paneScales", "autoScale", "timezone", "keyboard", "historyChords", "priceStyle", "shownPriceStyle", "priceBaseline", "baselinePrice", "previousClose", "settings", "attribution", "dialogHost", "tradeMarkers", "marks", "indicatorTitles", "indicatorValues", "crosshairOverride", "drawingsInteractive", "priceAxisTicks"];
     /** Track cursor proximity to the scroll button on the plot (bubbles from the button too,
      *  so moving onto the button doesn't count as leaving). */
     this.onScrollProximityMove = (e) => {
@@ -21415,6 +21862,12 @@ var NativeRenderer = class {
       case "countdown":
         this.scene.showCountdown = Boolean(value);
         this.syncCountdownTimer();
+        break;
+      case "indicatorValueLabels":
+        this.scene.showIndicatorValueLabels = Boolean(value);
+        break;
+      case "indicatorNameLabels":
+        this.scene.showIndicatorNameLabels = Boolean(value);
         break;
       case "upColor":
         this.candleUp = String(value);
@@ -21597,6 +22050,10 @@ var NativeRenderer = class {
         return this.scene.showPriceLabel;
       case "countdown":
         return this.scene.showCountdown;
+      case "indicatorValueLabels":
+        return this.scene.showIndicatorValueLabels;
+      case "indicatorNameLabels":
+        return this.scene.showIndicatorNameLabels;
       case "upColor":
         return this.candleUp;
       case "downColor":
@@ -21773,6 +22230,12 @@ var NativeRenderer = class {
     if (this.scene.priceStyle !== before) this.scheduler?.invalidate(4 /* Full */);
     if (this.settingsDialog?.isOpen()) this.settingsDialog.refresh(this.getConfig());
   }
+  /** Port surface: the active symbol's short display name (bare ticker) for axis badges. */
+  setSymbolName(name) {
+    if (this.scene.symbolName === name) return;
+    this.scene.symbolName = name;
+    this.scheduler?.invalidate(2 /* Chrome */);
+  }
   /** The registered style ids the active symbol's facts rule out (none while unknown). */
   unavailablePriceStyles() {
     return priceStyleIds().filter((id) => !priceStyleApplies(id, this.symbolFacts));
@@ -21818,6 +22281,8 @@ var NativeRenderer = class {
         currentPriceLine: this.scene.showPriceLine,
         priceLabel: this.scene.showPriceLabel,
         countdown: this.scene.showCountdown,
+        indicatorValueLabels: this.scene.showIndicatorValueLabels,
+        indicatorNameLabels: this.scene.showIndicatorNameLabels,
         animateLastPrice: this.animLiveBar.on
       },
       animations: {
@@ -21939,6 +22404,8 @@ var NativeRenderer = class {
     this.scene.showPriceLine = next.priceScale.currentPriceLine;
     this.scene.showPriceLabel = next.priceScale.priceLabel;
     this.scene.showCountdown = next.priceScale.countdown;
+    this.scene.showIndicatorValueLabels = next.priceScale.indicatorValueLabels;
+    this.scene.showIndicatorNameLabels = next.priceScale.indicatorNameLabels;
     this.syncCountdownTimer();
     this.animLiveBar.toggle(next.priceScale.animateLastPrice);
     this.animZoom.toggle(next.animations.zoom);
@@ -22620,7 +23087,17 @@ var NativeRenderer = class {
       onToggleAuto: (paneId) => this.togglePaneAuto(paneId),
       onToggleLog: (paneId) => {
         const pane = this.scene.panes.get(paneId);
-        if (pane) this.setPaneLog(paneId, !paneLogScale(this.scene, pane));
+        if (!pane) return;
+        const nextLog = !paneLogScale(this.scene, pane);
+        if (nextLog && paneScaleMode(this.scene, pane) !== "price") this.setPaneScaleMode(paneId, "price");
+        this.setPaneLog(paneId, nextLog);
+      },
+      onTogglePercent: (paneId) => {
+        const pane = this.scene.panes.get(paneId);
+        if (!pane) return;
+        const nextPct = paneScaleMode(this.scene, pane) !== "percent";
+        if (nextPct && paneLogScale(this.scene, pane)) this.setPaneLog(paneId, false);
+        this.setPaneScaleMode(paneId, nextPct ? "percent" : "price");
       }
     });
     this.resizeObserver = new ResizeObserver((entries) => {
@@ -22729,6 +23206,7 @@ var NativeRenderer = class {
    *  repaints. */
   setLocalization(i18n, root) {
     this.i18n = i18n;
+    this.chrome.i18n = i18n;
     this.rootAttrs = { lang: root.lang, dir: root.dir };
     this.scene.format = i18n.format;
     this.inputsUI?.setI18n(i18n);
@@ -22880,11 +23358,12 @@ var NativeRenderer = class {
     this.liveEaseTime = 0;
     const prevBars = this.bars;
     const prevHeadTime = prevBars[0]?.time;
-    this.bars = normalizeBars(bars);
+    this.scene.variableDuration = opts?.variableDuration === true;
+    this.bars = normalizeBars(bars, this.scene.variableDuration);
     this.scene.bars = this.bars;
     this.coords.setBars(this.bars.map((b) => b.time));
     const newest = this.bars[this.bars.length - 1];
-    if (newest) clockCorrection.observeCandle(newest.time, this.coords.barInterval);
+    if (newest && !this.scene.variableDuration) clockCorrection.observeCandle(newest.time, this.coords.barInterval);
     for (const model of this.scene.indicators.values()) this.refreshAnchorOffset(model);
     if (opts?.preserveView === true && prevHeadTime != null && this.bars.length > 0) {
       const newHeadTime = this.bars[0].time;
@@ -22920,14 +23399,14 @@ var NativeRenderer = class {
   updateBar(bar) {
     const n = this.bars.length;
     const last = this.bars[n - 1];
-    if (last && bar.time === last.time) {
+    if (last && isSameBar(last, bar)) {
       this.bars[n - 1] = bar;
       if (!this.animLiveBar.on || this.liveEaseTime !== bar.time) {
         this.syncLiveEase(bar);
       } else {
         this.animator.start();
       }
-    } else if (!last || bar.time > last.time) {
+    } else if (!last || isNewerBar(bar, last)) {
       const vp = this.coords.getViewport();
       const holdView = n > 0 && vp.rightOffset < 0 && this.scrollTargetRO === null;
       this.bars.push(bar);
@@ -22935,7 +23414,7 @@ var NativeRenderer = class {
       if (this.coords.barInterval > 0) this.coords.appendBar(bar.time);
       else this.coords.setBars(this.bars.map((b) => b.time));
       if (holdView) this.coords.setViewport({ ...vp, rightOffset: vp.rightOffset - 1 });
-      clockCorrection.observeCandle(bar.time, this.coords.barInterval);
+      if (!this.scene.variableDuration) clockCorrection.observeCandle(bar.time, this.coords.barInterval);
     } else {
       return;
     }
@@ -23124,7 +23603,9 @@ var NativeRenderer = class {
       this.vpvrActive = true;
       this.vpvrHidden = false;
     }
-    if (model.ownScale) this.refreshAxisWidth();
+    const hadOwnScale = this.scene.indicatorScales.has(model.id);
+    if (!model.ownScale && hadOwnScale) this.scene.dropIndicatorScale(model.id);
+    if (model.ownScale || hadOwnScale) this.refreshAxisWidth();
     this.syncLegendOrder();
     this.paneControls?.refresh();
     this.scheduler.invalidate(4 /* Full */);
@@ -24054,7 +24535,16 @@ var NativeRenderer = class {
         continue;
       }
       if (value == null || !Number.isFinite(value)) continue;
-      rows.push({ label: this.seriesTitle(s, model), value: this.dataWindowFmt(value, pane, surface === "legend" ? "legend" : "dataWindow"), color });
+      const fmtSurface = surface === "legend" ? "legend" : "dataWindow";
+      let formatted;
+      if (pane && model.percentBaseline === "own") {
+        const sc = this.scene.scaleFor(model, pane);
+        const pct = percentScaleForModel(this.scene, pane, model);
+        formatted = pct ? formatAxisValue(sc, pane.bounds.height, value, pct, void 0, pane.axisFormat, this.scene.format, fmtSurface) : formatPriceLabel(sc, pane.bounds.height, value, void 0, this.scene.format, fmtSurface);
+      } else {
+        formatted = this.dataWindowFmt(value, pane, fmtSurface);
+      }
+      rows.push({ label: this.seriesTitle(s, model), value: formatted, color });
     }
     return rows;
   }
@@ -24204,9 +24694,9 @@ var NativeRenderer = class {
         if (this.animZoom.on && l.instance.animating?.()) this.animator.start();
       }
       if (folded) {
-        if (folded.candleBodyScale != null) this.backend.candleBodyScale = clamp012(folded.candleBodyScale) || 0.01;
-        if (folded.candleBodyAlpha != null) this.backend.candleBodyAlpha = clamp012(folded.candleBodyAlpha) * this.candleBodyAlpha;
-        if (folded.gridAlpha != null) gridAlpha = clamp012(folded.gridAlpha);
+        if (folded.candleBodyScale != null) this.backend.candleBodyScale = clamp013(folded.candleBodyScale) || 0.01;
+        if (folded.candleBodyAlpha != null) this.backend.candleBodyAlpha = clamp013(folded.candleBodyAlpha) * this.candleBodyAlpha;
+        if (folded.gridAlpha != null) gridAlpha = clamp013(folded.gridAlpha);
       }
     }
     const li = this.bars.length - 1;
@@ -24347,20 +24837,27 @@ var NativeRenderer = class {
     if (i1 < i0) return;
     const s1 = Math.max(i1, Math.ceil(vr.to));
     this.scene.percentBaseline = this.bars[i0]?.close ?? 0;
+    this.scene.modelPercentBaselines.clear();
     const panes = this.scene.orderedPanes();
     const pricePane = panes.find((p) => p.kind === "price") ?? null;
     this.chrome.prepare(this.scene, this.coords, this.theme);
     const animating = this.animator.active;
     const margins = this.scene.style.margins;
     for (const pane of panes) {
+      const models = this.scene.indicatorsForPane(pane.id);
+      const masterModels = models.filter((m) => m.ownScale !== true);
+      pane.percentBaseline = pane.kind === "price" ? this.bars[i0]?.close ?? 0 : this.firstVisibleValue(masterModels, i0, i1);
+      for (const m of masterModels) {
+        if (m.percentBaseline !== "own") continue;
+        const ownBase = this.firstVisibleValue([m], i0, i1);
+        if (ownBase !== 0 && Number.isFinite(ownBase)) this.scene.modelPercentBaselines.set(m.id, ownBase);
+      }
       if (pane.manualScale) {
         pane.scaleTarget = pane.manualScale;
         pane.scale = { ...pane.manualScale };
         pane.initialized = true;
         continue;
       }
-      const models = this.scene.indicatorsForPane(pane.id);
-      const masterModels = models.filter((m) => m.ownScale !== true);
       let dr = this.chrome.paneDrawingsRange(masterModels, this.scene, pane === pricePane, vr);
       if (pane === pricePane) {
         const or = overlaySeriesRange(this.scene.indicators.values(), i0, s1, (id) => this.scene.offsetOf(id));
@@ -24368,8 +24865,14 @@ var NativeRenderer = class {
       }
       const includeCandles = pane.kind === "price" && (!this.scene.candlesHidden || this.priceLayersAnchoredToBars(masterModels) || !this.paneHasMeasurableContent(masterModels, dr));
       const priceOnly = pane === pricePane && this.scene.scalePriceOnly && includeCandles;
-      pane.scaleTarget = priceOnly ? computePaneScale([], this.bars, true, i0, s1, null, paneLogScale(this.scene, pane), (id) => this.scene.offsetOf(id), margins) : computePaneScale(masterModels, this.bars, includeCandles, i0, s1, dr, paneLogScale(this.scene, pane), (id) => this.scene.offsetOf(id), margins);
-      pane.percentBaseline = pane.kind === "price" ? this.bars[i0]?.close ?? 0 : this.firstVisibleValue(masterModels, i0);
+      const panePct = percentScaleFor(this.scene, pane);
+      const ownBaselineIds = new Set(masterModels.filter((m) => m.percentBaseline === "own").map((m) => m.id));
+      const valueScaleOf = (id) => {
+        if (!panePct || !ownBaselineIds.has(id)) return 1;
+        const ownBase = this.scene.modelPercentBaselines.get(id);
+        return ownBase != null && ownBase !== 0 ? panePct.baseline / ownBase : 0;
+      };
+      pane.scaleTarget = priceOnly ? computePaneScale([], this.bars, true, i0, s1, null, paneLogScale(this.scene, pane), (id) => this.scene.offsetOf(id), margins) : computePaneScale(masterModels, this.bars, includeCandles, i0, s1, dr, paneLogScale(this.scene, pane), (id) => this.scene.offsetOf(id), margins, valueScaleOf);
       pane.axisFormat = void 0;
       pane.axisBands = void 0;
       if (this.volumeOwnsPane(pane, masterModels)) {
@@ -24668,7 +25171,7 @@ var NativeRenderer = class {
       invert: paneInvert(this.scene, p)
     }));
   }
-  /** Thin projection of the panes for the axis A/L hover buttons (top-to-bottom order). */
+  /** Thin projection of the panes for the axis %/L/A hover buttons (top-to-bottom order). */
   axisScaleViews() {
     return this.scene.orderedPanes().map((p) => ({
       id: p.id,
@@ -24676,7 +25179,8 @@ var NativeRenderer = class {
       height: p.bounds.height,
       collapsed: p.collapsed,
       auto: p.manualScale == null,
-      log: paneLogScale(this.scene, p)
+      log: paneLogScale(this.scene, p),
+      percent: paneScaleMode(this.scene, p) === "percent"
     }));
   }
   /** Toggle one pane's autoscale (the A axis button): off freezes the current window into
@@ -24743,20 +25247,24 @@ var NativeRenderer = class {
       }
     }
   }
-  /** The first visible value a study pane measures percent-change from: the earliest finite
-   *  value at bar `i0` across its master series (line-like value, else a candle/bar close).
-   *  0 when none is available yet — the axis then falls back to absolute. */
-  firstVisibleValue(models, i0) {
+  /** The first visible value a study pane (or an `own`-baseline model) measures percent-change
+   *  from: scans from `i0` forward up to `i1` so a secondary series whose history starts
+   *  partway through the viewport still anchors at its first visible bar. 0 when none. */
+  firstVisibleValue(models, i0, i1 = i0) {
     for (const m of models) {
       const off = this.scene.offsetOf(m.id);
       for (const s of m.series) {
         if (s.overlay === true) continue;
         if (isLineLikeSeries(s)) {
-          const v = s.points[i0 - off]?.value;
-          if (v != null && Number.isFinite(v)) return v;
+          for (let i = i0; i <= i1; i += 1) {
+            const v = s.points[i - off]?.value;
+            if (v != null && Number.isFinite(v) && v !== 0) return v;
+          }
         } else if (s.kind === "candle" || s.kind === "bar") {
-          const b = s.bars[i0 - off];
-          if (b && Number.isFinite(b.close)) return b.close;
+          for (let i = i0; i <= i1; i += 1) {
+            const b = s.bars[i - off];
+            if (b && Number.isFinite(b.close) && b.close !== 0) return b.close;
+          }
         }
       }
     }
@@ -25062,7 +25570,7 @@ function sanitizeSessionZones(value) {
   };
   return { pre: windows(v.pre), post: windows(v.post), extended: windows(v.extended) };
 }
-function clamp012(v) {
+function clamp013(v) {
   return Math.max(0, Math.min(1, v));
 }
 function isPriceStyle2(v) {
@@ -25071,13 +25579,22 @@ function isPriceStyle2(v) {
 function asScaleMode(v) {
   return v === "percent" || v === "indexed" ? v : "price";
 }
-function normalizeBars(bars) {
-  const sorted = [...bars].sort((a, b) => a.time - b.time);
+function normalizeBars(bars, preserveDuplicateTimes = false) {
+  const sorted = [...bars].sort((a, b) => a.time - b.time || (a.seq ?? 0) - (b.seq ?? 0));
   const out = [];
   for (const bar of sorted) {
     const last = out[out.length - 1];
-    if (last && last.time === bar.time) out[out.length - 1] = bar;
-    else out.push(bar);
+    if (last && last.time === bar.time) {
+      if (!preserveDuplicateTimes) {
+        out[out.length - 1] = bar;
+        continue;
+      }
+      if (last.seq !== void 0 && bar.seq !== void 0 && last.seq === bar.seq) {
+        out[out.length - 1] = bar;
+        continue;
+      }
+    }
+    out.push(bar);
   }
   return out;
 }
@@ -25432,6 +25949,7 @@ var DrawingSeriesService = class {
    *  distinguish "this pick isn't lower" from "NOTHING lower exists" (the chart is already
    *  at the finest offered step) so the consumer can word its notice honestly. */
   resolveTimeframe(timeframe) {
+    if (isVariableDurationTimeframe(this.deps.chartTimeframe())) return { reason: "none-lower" };
     const chartMs = timeframeToMs(this.deps.chartTimeframe());
     const finest = AUTO_STEPS[AUTO_STEPS.length - 1];
     if (timeframeToMs(finest) >= chartMs) return { reason: "none-lower" };
@@ -25831,7 +26349,8 @@ var EngineOrchestrator = class _EngineOrchestrator {
    */
   async fetchSeries(symbol, timeframe, range) {
     const parsed = parseExtendedTicker(symbol);
-    const cfg = { symbol: parsed.symbol, timeframe };
+    const session = normalizeSession(range.session);
+    const cfg = { symbol: parsed.symbol, timeframe, ...session ? { session } : {} };
     const bars = await (this.feed.loadRange ? this.feed.loadRange(cfg, range) : this.feed.load({ ...cfg, bars: range.limit }));
     return parsed.transform ? parsed.transform.full(bars) : bars;
   }
@@ -26106,7 +26625,7 @@ var EngineOrchestrator = class _EngineOrchestrator {
    */
   async setMarket(next) {
     const m = this.config.market;
-    const identityChanged = next.symbol !== void 0 && next.symbol !== m.symbol || next.timeframe !== void 0 && next.timeframe !== m.timeframe || // A session switch changes WHICH bars exist (RTH vs ETH) — a full reload,
+    const identityChanged = next.force === true || next.symbol !== void 0 && next.symbol !== m.symbol || next.timeframe !== void 0 && next.timeframe !== m.timeframe || // A session switch changes WHICH bars exist (RTH vs ETH) — a full reload,
     // exactly like a timeframe change; the cache keys the sessions apart.
     next.session !== void 0 && next.session !== m.session || next.data !== void 0;
     const depthChanged = next.bars !== void 0 && next.bars !== m.bars;
@@ -26322,7 +26841,7 @@ var EngineOrchestrator = class _EngineOrchestrator {
           return;
         }
         for (let i = 1; i < head.length; i += 1) {
-          if (head[i].time <= head[i - 1].time) {
+          if (!isNewerBar(head[i], head[i - 1])) {
             console.warn("[vela] non-monotonic history chunk — stopping the backfill");
             this.completeHistory("aborted");
             return;
@@ -26795,9 +27314,10 @@ var EngineOrchestrator = class _EngineOrchestrator {
    */
   syncSymbolFacts({ refresh = false } = {}) {
     const probe2 = ++this.factsProbe;
+    const symbol = this.qualifiedSymbol();
+    this.renderer.setSymbolName?.(symbol ? parseSymbol(symbol).ticker : void 0);
     const known = this.feed.symbolInfo?.(this.config.market);
     this.applySymbolFacts(symbolFactsOf(known));
-    const symbol = this.qualifiedSymbol();
     if (!symbol || this.config.market.data?.length || known !== void 0 && !refresh) return;
     void this.dataControl.symbolInfo(symbol).catch(() => void 0).then((info) => {
       if (this.factsProbe !== probe2 || this.qualifiedSymbol() !== symbol) return;
@@ -26951,7 +27471,10 @@ var EngineOrchestrator = class _EngineOrchestrator {
   setBarSeries(raw, opts) {
     this.rawBars = raw;
     this.bars = this.barTransform ? this.barTransform.full(raw) : raw;
-    this.renderer.setBars(this.bars, { preserveView: opts?.preserveView });
+    this.renderer.setBars(this.bars, {
+      preserveView: opts?.preserveView,
+      variableDuration: isVariableDurationTimeframe(this.config.market.timeframe ?? "")
+    });
     if (!opts?.clearing && this.bars.length > 0) this.endLoad();
   }
   /**
@@ -26966,14 +27489,14 @@ var EngineOrchestrator = class _EngineOrchestrator {
   applyBar(bar, notify = true) {
     const last = this.rawBars[this.rawBars.length - 1];
     let viewBar = bar;
-    if (last && bar.time === last.time) {
+    if (last && isSameBar(last, bar)) {
       this.rawBars[this.rawBars.length - 1] = bar;
       this.barCause = "tick";
       if (this.barTransform) {
         viewBar = this.barTransform.next(bar, this.bars[this.bars.length - 2]);
         this.bars[this.bars.length - 1] = viewBar;
       }
-    } else if (!last || bar.time > last.time) {
+    } else if (!last || isNewerBar(bar, last)) {
       this.rawBars.push(bar);
       this.barCause = "bar";
       if (this.barTransform) {
@@ -27032,9 +27555,11 @@ var EngineOrchestrator = class _EngineOrchestrator {
       if (record.native?.heldForHistory && !record.hidden) this.pokeNative(record);
     }
   }
-  /** Gap healing needs a ranged feed and a provider-backed series (offline `data` has no source). */
+  /** Gap healing needs a ranged feed, a provider-backed series (offline `data` has no
+   *  source), and a fixed-duration timeframe (variable-duration series have no fixed
+   *  bar interval to detect missed bars against). */
   canHeal() {
-    return !!this.feed.loadRange && !this.config.market.data?.length;
+    return !!this.feed.loadRange && !this.config.market.data?.length && !isVariableDurationTimeframe(this.config.market.timeframe ?? "");
   }
   /** Duration of one chart bar in ms (for live-bar continuity checks). */
   barIntervalMs() {
@@ -27135,7 +27660,7 @@ var EngineOrchestrator = class _EngineOrchestrator {
     const symbol = this.qualifiedSymbol();
     const present = new Set(this.presentNativeIndicators());
     return Promise.all(
-      nativeIndicatorEntries().map(async (d) => ({
+      nativeIndicatorEntries().filter((d) => d.catalog !== false).map(async (d) => ({
         type: d.type,
         title: textOf(this.i18n, d.title),
         supported: await this.isNativeSupported(d, symbol),
@@ -27494,9 +28019,9 @@ var EngineOrchestrator = class _EngineOrchestrator {
       const prepared = await engine.prepare(source, id);
       if (record.source !== source) return;
       record.prepared = prepared;
-      const defaults = {};
-      for (const input of prepared.inputs) defaults[input.key] = input.defval;
-      record.inputValues = { ...defaults, ...record.inputValues };
+      const defaults2 = {};
+      for (const input of prepared.inputs) defaults2[input.key] = input.defval;
+      record.inputValues = { ...defaults2, ...record.inputValues };
       handle.setSchema(prepared.inputs);
       const propDefaults = {};
       for (const prop of prepared.props ?? []) propDefaults[prop.key] = prop.defval;
@@ -27587,8 +28112,10 @@ var EngineOrchestrator = class _EngineOrchestrator {
       native.heldForHistory = false;
       const channel = this.nativeChannel(record);
       let alive = true;
+      const secondaryUnsubs = [];
       native.revokeContext = () => {
         alive = false;
+        for (const off of secondaryUnsubs.splice(0)) off();
       };
       const ctx = {
         id,
@@ -27598,6 +28125,27 @@ var EngineOrchestrator = class _EngineOrchestrator {
         session: this.config.market.session,
         bars: () => this.bars,
         data: this.dataControl,
+        fetchSeries: (symbol, timeframe, range) => this.fetchSeries(symbol, timeframe, { ...this.config.market.session ? { session: this.config.market.session } : {}, ...range }),
+        subscribeSeries: (symbol, timeframe, onBar) => {
+          if (!alive || !this.config.live || this.replayQueue !== null) return () => {
+          };
+          const parsed = parseExtendedTicker(symbol);
+          const cfg = {
+            symbol: parsed.symbol,
+            timeframe,
+            ...this.config.market.session ? { session: this.config.market.session } : {}
+          };
+          const rawOff = this.feed.subscribe(cfg, (bar) => {
+            if (alive) onBar(bar);
+          });
+          const off = () => {
+            const idx = secondaryUnsubs.indexOf(off);
+            if (idx >= 0) secondaryUnsubs.splice(idx, 1);
+            rawOff();
+          };
+          secondaryUnsubs.push(off);
+          return off;
+        },
         emit: (out) => {
           if (alive) this.applyModel(id, this.buildNativeModel(record, out, this.bars[0]?.time));
         },
@@ -27640,16 +28188,29 @@ var EngineOrchestrator = class _EngineOrchestrator {
     const d = record.native.descriptor;
     const type = record.native.type;
     const channel = this.nativeChannel(record);
-    const displayTitle = messageOnly(d.title);
-    const displayShorttitle = messageOnly(d.shortTitle);
+    const titleSrc = out.title ?? d.title;
+    const shortSrc = out.shortTitle !== void 0 ? out.shortTitle : out.title !== void 0 ? void 0 : d.shortTitle;
+    const title = out.title !== void 0 ? textOf(this.i18n, out.title) : record.title;
+    if (out.title !== void 0) {
+      record.title = title;
+      const h = this.handles.get(record.id);
+      if (h) h.title = title;
+    }
+    const displayTitle = messageOnly(titleSrc);
+    const displayShorttitle = messageOnly(shortSrc);
+    const paneHint = out.paneHint ?? d.paneHint;
+    const overlay = out.paneHint !== void 0 ? out.paneHint === "price" : d.overlay;
     return {
       id: record.id,
-      title: record.title,
-      ...d.shortTitle ? { shorttitle: textOf(this.i18n, d.shortTitle) } : {},
+      title,
+      ...shortSrc !== void 0 ? { shorttitle: textOf(this.i18n, shortSrc) } : {},
       ...displayTitle ? { displayTitle } : {},
       ...displayShorttitle ? { displayShorttitle } : {},
-      overlay: d.overlay,
-      paneHint: d.paneHint,
+      overlay,
+      paneHint,
+      ...out.ownScale ? { ownScale: true } : {},
+      ...out.percentBaseline !== void 0 ? { percentBaseline: out.percentBaseline } : {},
+      ...out.priceAxisLabel ? { priceAxisLabel: true } : {},
       native: { type, ...channel !== type ? { channel } : {} },
       ...anchorTime != null ? { anchorTime } : {},
       ...d.legend === false ? { legend: false } : {},
@@ -27801,12 +28362,16 @@ var EngineOrchestrator = class _EngineOrchestrator {
     for (const r of this.registry.all()) {
       const d = r.native?.descriptor;
       if (!d) continue;
-      r.title = textOf(this.i18n, d.title);
-      const handle = this.handles.get(r.id);
-      if (handle) handle.title = r.title;
+      const titleMsg = r.model ? r.model.displayTitle : d.title;
+      if (titleMsg !== void 0) {
+        r.title = textOf(this.i18n, titleMsg);
+        const handle = this.handles.get(r.id);
+        if (handle) handle.title = r.title;
+        if (r.model) r.model.title = r.title;
+      }
       if (r.model) {
-        r.model.title = r.title;
-        if (d.shortTitle !== void 0) r.model.shorttitle = textOf(this.i18n, d.shortTitle);
+        const shortMsg = r.model.displayShorttitle;
+        if (shortMsg !== void 0) r.model.shorttitle = textOf(this.i18n, shortMsg);
       }
     }
   }
@@ -28025,9 +28590,10 @@ var EngineOrchestrator = class _EngineOrchestrator {
       return true;
     }
     let paneId = record.model?.paneId ?? "price";
-    const prevOwnScale = record.model?.ownScale === true;
+    const prevModel = record.model;
+    const prevOwnScale = prevModel?.ownScale === true;
     let rerouted = false;
-    if (record.loading && !record.paneLocked) {
+    if (!record.paneLocked && (record.loading || record.native)) {
       const routed = this.routePane(id, model, record.options ?? {});
       if (routed !== paneId) {
         if (paneId !== "price" && !this.registry.all().some((r) => r.id !== id && r.model?.paneId === paneId)) {
@@ -28042,6 +28608,9 @@ var EngineOrchestrator = class _EngineOrchestrator {
     }
     this.placeModel(model, id, paneId);
     if (record.paneLocked) model.ownScale = prevOwnScale;
+    if (prevModel && (model.title !== prevModel.title || model.shorttitle !== prevModel.shorttitle || model.ownScale === true !== prevOwnScale || model.percentBaseline !== prevModel.percentBaseline || model.priceAxisLabel !== prevModel.priceAxisLabel)) {
+      record.pendingStructural = true;
+    }
     record.model = model;
     if (record.pendingStructural) {
       record.renderHandle = this.renderer.mountIndicator(model);
@@ -28589,16 +29158,74 @@ function bool(inputs, key, fallback) {
   const v = inputs[key];
   return typeof v === "boolean" ? v : fallback;
 }
-function toPoints(bars, values, colors) {
-  const pts = new Array(bars.length);
-  for (let i = 0; i < bars.length; i++) {
-    const v = values[i];
-    const p = { time: bars[i].time, value: v != null && Number.isFinite(v) ? v : null };
-    const c = colors?.[i];
+function barStepMs(bars, timeframe) {
+  if (bars.length >= 2) {
+    const gaps = [];
+    for (let i = 1; i < bars.length; i++) {
+      const g = bars[i].time - bars[i - 1].time;
+      if (g > 0) gaps.push(g);
+    }
+    if (gaps.length > 0) {
+      gaps.sort((a, b) => a - b);
+      return gaps[Math.floor(gaps.length / 2)];
+    }
+  }
+  return timeframeToMs(timeframe) || 6e4;
+}
+function toPoints(bars, values, colors, offset = 0, stepMs = 6e4) {
+  const shift2 = Math.trunc(offset);
+  if (shift2 === 0) {
+    const pts2 = new Array(bars.length);
+    for (let i = 0; i < bars.length; i++) {
+      const v = values[i];
+      const p = { time: bars[i].time, value: v != null && Number.isFinite(v) ? v : null };
+      const c = colors?.[i];
+      if (c != null) p.color = c;
+      pts2[i] = p;
+    }
+    return pts2;
+  }
+  if (bars.length === 0) return [];
+  if (shift2 < 0) {
+    const back = -shift2;
+    const pts2 = new Array(bars.length);
+    for (let i = 0; i < bars.length; i++) {
+      const src = i + back;
+      const v = src < values.length ? values[src] : void 0;
+      const p = { time: bars[i].time, value: v != null && Number.isFinite(v) ? v : null };
+      const c = src < values.length ? colors?.[src] : void 0;
+      if (c != null) p.color = c;
+      pts2[i] = p;
+    }
+    return pts2;
+  }
+  const total = bars.length + shift2;
+  const lastTime = bars[bars.length - 1].time;
+  const pts = new Array(total);
+  for (let i = 0; i < total; i++) {
+    const time = i < bars.length ? bars[i].time : lastTime + (i - (bars.length - 1)) * stepMs;
+    const src = i - shift2;
+    const v = src >= 0 && src < values.length ? values[src] : void 0;
+    const p = { time, value: v != null && Number.isFinite(v) ? v : null };
+    const c = src >= 0 && src < values.length ? colors?.[src] : void 0;
     if (c != null) p.color = c;
     pts[i] = p;
   }
   return pts;
+}
+function shiftBandArray(arr, offset) {
+  const shift2 = Math.trunc(offset);
+  if (shift2 === 0) return [...arr];
+  if (shift2 > 0) return [...new Array(shift2).fill(null), ...arr];
+  const back = -shift2;
+  const out = new Array(arr.length).fill(null);
+  for (let i = 0; i + back < arr.length; i++) out[i] = arr[i + back];
+  return out;
+}
+function mergeLiveBar(bars, incoming) {
+  const last = bars[bars.length - 1];
+  if (last && last.time === incoming.time) bars[bars.length - 1] = incoming;
+  else if (!last || incoming.time > last.time) bars.push(incoming);
 }
 var ClassicIndicator = class {
   constructor(spec) {
@@ -28606,42 +29233,172 @@ var ClassicIndicator = class {
     /** Null until start() — a pre-start setInputs must record without computing. */
     this.ctx = null;
     this.inputs = {};
+    this.extBars = /* @__PURE__ */ new Map();
+    this.extFetchedFrom = /* @__PURE__ */ new Map();
+    this.extSubs = /* @__PURE__ */ new Map();
+    this.fetchSeq = 0;
+    this.suspended = false;
   }
   start(ctx, inputs) {
     this.ctx = ctx;
     this.inputs = inputs;
-    this.recompute();
+    this.suspended = false;
+    this.syncAndCompute();
   }
   onBars() {
-    this.recompute();
+    if (!this.ctx || this.suspended) return;
+    this.syncAndCompute();
   }
   onViewport() {
   }
   setInputs(inputs) {
     this.inputs = inputs;
-    if (!this.ctx) return;
-    this.recompute();
+    if (!this.ctx || this.suspended) return;
+    this.syncAndCompute();
   }
-  /** Nothing to free — the compute reads the live bar accessor on demand. */
   suspend() {
+    this.suspended = true;
+    this.fetchSeq++;
+    this.clearSubs();
   }
   resume() {
-    this.recompute();
+    this.suspended = false;
+    if (!this.ctx) return;
+    this.syncAndCompute();
   }
   stop() {
+    this.suspended = true;
+    this.fetchSeq++;
+    this.clearSubs();
+    this.extBars.clear();
+    this.extFetchedFrom.clear();
+    this.ctx = null;
   }
-  recompute() {
+  clearSubs() {
+    for (const off of this.extSubs.values()) off();
+    this.extSubs.clear();
+  }
+  wantedExternalSymbols() {
+    const raw = this.spec.externalSymbols?.(this.inputs);
+    if (!raw || raw.length === 0) return [];
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const s of raw) {
+      const trimmed = s.trim();
+      if (!trimmed || seen.has(trimmed)) continue;
+      seen.add(trimmed);
+      out.push(trimmed);
+    }
+    return out;
+  }
+  isOwnSymbol(sym) {
+    if (!this.ctx) return false;
+    const canon = (s) => (this.ctx.data.canonicalSymbol?.(s) ?? s).trim().toUpperCase();
+    return canon(sym) === canon(this.ctx.symbol);
+  }
+  buildExternalMap(bars, wanted) {
+    if (wanted.length === 0) return void 0;
+    const map2 = /* @__PURE__ */ new Map();
+    for (const sym of wanted) {
+      map2.set(sym, this.isOwnSymbol(sym) ? bars : this.extBars.get(sym) ?? []);
+    }
+    return map2;
+  }
+  ensureSubscriptions(remote) {
+    const ctx = this.ctx;
+    if (!ctx || !ctx.live || !ctx.subscribeSeries || this.suspended) return;
+    for (const sym of remote) {
+      if (this.extSubs.has(sym)) continue;
+      const off = ctx.subscribeSeries(sym, ctx.timeframe, (bar) => {
+        if (!this.ctx || this.suspended) return;
+        let arr = this.extBars.get(sym);
+        if (!arr) {
+          arr = [];
+          this.extBars.set(sym, arr);
+        }
+        mergeLiveBar(arr, bar);
+        this.emitCompute(this.ctx.bars(), this.wantedExternalSymbols());
+      });
+      this.extSubs.set(sym, off);
+    }
+  }
+  syncAndCompute() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const bars = ctx.bars();
+    const wanted = this.wantedExternalSymbols();
+    const wantedSet = new Set(wanted);
+    for (const sym of [...this.extSubs.keys()]) {
+      if (!wantedSet.has(sym) || this.isOwnSymbol(sym)) {
+        this.extSubs.get(sym)?.();
+        this.extSubs.delete(sym);
+      }
+    }
+    for (const sym of [...this.extBars.keys()]) {
+      if (!wantedSet.has(sym) || this.isOwnSymbol(sym)) {
+        this.extBars.delete(sym);
+        this.extFetchedFrom.delete(sym);
+      }
+    }
+    const remote = wanted.filter((s) => !this.isOwnSymbol(s));
+    if (remote.length === 0) {
+      this.fetchSeq++;
+      this.emitCompute(bars, wanted);
+      ctx.setStatus("idle");
+      return;
+    }
+    this.emitCompute(bars, wanted);
+    if (!ctx.fetchSeries || bars.length === 0) {
+      ctx.setStatus("idle");
+      return;
+    }
+    const earliest = bars[0].time;
+    const needFetch = remote.filter((sym) => !this.extBars.has(sym) || earliest < (this.extFetchedFrom.get(sym) ?? Infinity));
+    if (needFetch.length === 0) {
+      this.ensureSubscriptions(remote);
+      ctx.setStatus("idle");
+      return;
+    }
+    const seq = ++this.fetchSeq;
+    ctx.setStatus("loading");
+    const step = barStepMs(bars, ctx.timeframe);
+    const range = { from: earliest, to: bars[bars.length - 1].time + step, limit: bars.length + 64 };
+    void Promise.all(
+      needFetch.map(async (sym) => {
+        try {
+          const fetched = await ctx.fetchSeries(sym, ctx.timeframe, range);
+          return [sym, fetched];
+        } catch {
+          return [sym, []];
+        }
+      })
+    ).then((results) => {
+      if (seq !== this.fetchSeq || !this.ctx || this.suspended) return;
+      for (const [sym, fetched] of results) {
+        this.extBars.set(sym, [...fetched]);
+        this.extFetchedFrom.set(sym, earliest);
+      }
+      this.ensureSubscriptions(remote);
+      this.emitCompute(this.ctx.bars(), this.wantedExternalSymbols());
+      this.ctx.setStatus("idle");
+    });
+  }
+  emitCompute(bars, wanted) {
     if (!this.ctx) return;
-    const bars = this.ctx.bars();
-    const out = this.spec.compute(bars, this.inputs);
+    const external = this.buildExternalMap(bars, wanted);
+    const out = this.spec.compute(bars, this.inputs, external);
+    const step = barStepMs(bars, this.ctx.timeframe);
     const instanceId = this.spec.type;
     const series = [];
     const idsByKey = /* @__PURE__ */ new Map();
+    const offsetsByKey = /* @__PURE__ */ new Map();
     out.plots.forEach((plot, ordinal) => {
       const kind = plot.kind ?? "line";
       const title = sourceText(plot.title);
       const id = stableSeriesId({ instanceId, kind, title, ordinal });
+      const offset = Math.trunc(plot.offset ?? 0);
       idsByKey.set(plot.key, id);
+      offsetsByKey.set(plot.key, offset);
       const displayTitle = plot.displayTitle ?? messageOnly(plot.title);
       series.push({
         id,
@@ -28650,7 +29407,7 @@ var ClassicIndicator = class {
         paneId: "",
         // stamped by the orchestrator
         kind,
-        points: toPoints(bars, plot.values, plot.colors),
+        points: toPoints(bars, plot.values, plot.colors, offset, step),
         style: {
           color: plot.color,
           width: plot.width ?? 1,
@@ -28677,6 +29434,9 @@ var ClassicIndicator = class {
       const from = idsByKey.get(band.from);
       const to = idsByKey.get(band.to);
       if (!from || !to) return [];
+      const fromOff = offsetsByKey.get(band.from) ?? 0;
+      const toOff = offsetsByKey.get(band.to) ?? 0;
+      const bandOff = fromOff === toOff ? fromOff : 0;
       return [
         {
           id: stableSeriesId({ instanceId, kind: "fill", title: band.key, ordinal }),
@@ -28684,8 +29444,8 @@ var ClassicIndicator = class {
           fromSeriesId: from,
           toSeriesId: to,
           color: band.color,
-          ...band.colors ? { colors: [...band.colors] } : {},
-          ...band.gradient ? { gradient: [...band.gradient] } : {}
+          ...band.colors ? { colors: shiftBandArray(band.colors, bandOff) } : {},
+          ...band.gradient ? { gradient: shiftBandArray(band.gradient, bandOff) } : {}
         }
       ];
     });
@@ -28708,7 +29468,6 @@ var ClassicIndicator = class {
       };
     });
     this.ctx.emit({ series, fills, priceLines, polylines });
-    this.ctx.setStatus("idle");
   }
 };
 function classicDescriptor(spec) {
@@ -29242,6 +30001,43 @@ function cumSum(v) {
 function fill(len, value) {
   return new Array(len).fill(value);
 }
+function logReturns(v) {
+  const out = new Array(v.length).fill(Number.NaN);
+  for (let i = 1; i < v.length; i++) {
+    const cur = v[i];
+    const prev2 = v[i - 1];
+    if (Number.isFinite(cur) && Number.isFinite(prev2) && cur > 0 && prev2 > 0) {
+      out[i] = Math.log(cur / prev2);
+    }
+  }
+  return out;
+}
+function sampleVariance(v, len) {
+  if (len < 2) return fill(v.length, Number.NaN);
+  return windowed(v, len, (w, from, to) => {
+    let s = 0;
+    for (let k = from; k <= to; k++) s += w[k];
+    const mean = s / len;
+    let sq = 0;
+    for (let k = from; k <= to; k++) {
+      const d = w[k] - mean;
+      sq += d * d;
+    }
+    return sq / (len - 1);
+  });
+}
+function alignBars(chartBars, extBars) {
+  const n = chartBars.length;
+  const out = new Array(n).fill(null);
+  if (extBars.length === 0) return out;
+  let j = -1;
+  for (let i = 0; i < n; i++) {
+    const t9 = chartBars[i].time;
+    while (j + 1 < extBars.length && extBars[j + 1].time <= t9) j++;
+    if (j >= 0) out[i] = extBars[j];
+  }
+  return out;
+}
 
 // src/core/native-indicators/classics/shared.ts
 var SETTINGS = "Settings";
@@ -29263,6 +30059,17 @@ function optionInput(key, title, defval, options, tooltip) {
 }
 function sourceInput(defval = "Close", key = "source", title = msg("indicator.common.source", "Source"), tooltip) {
   return { key, title, type: "string", defval, options: SOURCES2, group: SETTINGS, ...tooltip != null ? { tooltip } : {} };
+}
+function symbolInput(key, title, defval = "", opts) {
+  return {
+    key,
+    title,
+    type: "symbol",
+    defval,
+    group: SETTINGS,
+    ...opts?.confirm ? { confirm: true } : {},
+    ...opts?.tooltip != null ? { tooltip: opts.tooltip } : {}
+  };
 }
 function colorInput(defval = INFO, title = msg("indicator.common.color", "Color"), key = "color", tooltip) {
   return { key, title, type: "color", defval, group: STYLE, ...tooltip != null ? { tooltip } : {} };
@@ -31769,9 +32576,9 @@ var historicalVolatility = {
   ],
   compute: (bars, inputs) => {
     const len = num3(inputs, "length", 10);
-    const logReturns = sub(map(closes(bars), Math.log), shift(map(closes(bars), Math.log), 1));
-    const meanReturn = map(sum(logReturns, len), (s) => s / len);
-    const squaredSum = sum(map(logReturns, (r) => r * r), len);
+    const logReturns2 = sub(map(closes(bars), Math.log), shift(map(closes(bars), Math.log), 1));
+    const meanReturn = map(sum(logReturns2, len), (s) => s / len);
+    const squaredSum = sum(map(logReturns2, (r) => r * r), len);
     const factor = bool(inputs, "annualize", true) ? Math.sqrt(num3(inputs, "periodsPerYear", 252)) : 1;
     const values = zip(squaredSum, meanReturn, (sq, m) => Math.sqrt(Math.max(sq - len * m * m, 0) / (len - 1)) * factor * 100);
     return rangeInkedVolatility("hv", msg("indicator.historicalVolatility.plot.hv", "Historical Volatility"), values, str3(inputs, "color", WARNING));
@@ -31806,6 +32613,23 @@ var volatilityOhlc = {
     const annual = num3(inputs, "daysPerYear", 252);
     const values = map(sma(perDay, num3(inputs, "length", 10)), (v) => 100 * Math.sqrt(v * annual));
     return rangeInkedVolatility("vol", msg("indicator.volatilityOhlc.plot.vol", "Volatility"), values, str3(inputs, "color", WARNING));
+  }
+};
+var volatilityCloseToClose = {
+  type: "volatility-close-to-close",
+  title: msg("indicator.volatilityCloseToClose.title", "Volatility Close-to-Close"),
+  shortTitle: msg("indicator.volatilityCloseToClose.shortTitle", "Vol Close-to-Close"),
+  overlay: false,
+  inputs: [
+    { ...lengthInput(10, "length", msg("indicator.volatilityCloseToClose.length", "Length"), 5e3, msg("indicator.volatilityCloseToClose.length.tooltip", "Number of bar-to-bar close log returns used for the sample variance.")), min: 2 },
+    intInput("daysPerYear", msg("indicator.volatilityCloseToClose.daysPerYear", "Days Per Year"), 252, 1, 366, msg("indicator.volatilityCloseToClose.daysPerYear.tooltip", "Trading days in a year, used to annualize the variance.")),
+    colorInput(WARNING, msg("indicator.volatilityCloseToClose.color", "Volatility Line"), "color", msg("indicator.volatilityCloseToClose.color.tooltip", "Color of the line at its recent highs; it fades toward grey as volatility contracts."))
+  ],
+  compute: (bars, inputs) => {
+    const variance = sampleVariance(logReturns(closes(bars)), num3(inputs, "length", 10));
+    const annual = num3(inputs, "daysPerYear", 252);
+    const values = map(variance, (v) => 100 * Math.sqrt(Math.max(v, 0) * annual));
+    return rangeInkedVolatility("vol", msg("indicator.volatilityCloseToClose.plot.vol", "Volatility"), values, str3(inputs, "color", WARNING));
   }
 };
 var volatilityZeroTrend = {
@@ -32032,7 +32856,7 @@ var choppiness = {
     });
   }
 };
-var volatilitySpecs = [atrSpec, historicalVolatility, volatilityOhlc, volatilityZeroTrend, chaikinVolatility, massIndex, standardDeviation, standardError, ulcerIndex, choppiness];
+var volatilitySpecs = [atrSpec, historicalVolatility, volatilityCloseToClose, volatilityOhlc, volatilityZeroTrend, chaikinVolatility, massIndex, standardDeviation, standardError, ulcerIndex, choppiness];
 
 // src/core/native-indicators/classics/volume.ts
 function moneyFlowVolume(bars) {
@@ -33060,7 +33884,186 @@ var averagePrice = priceStudy("average-price", "OHLC4", {
   plot: msg("indicator.averagePrice.plot.price", "Average Price"),
   colorTooltip: msg("indicator.averagePrice.color.tooltip", "Color of the line through the average of each bar’s open, high, low and close.")
 });
-var overlaySpecs = [parabolicSar, vwap, pivotPoints, fiftyTwoWeek, zigzag, williamsFractal, medianPrice, typicalPrice, averagePrice];
+var ichimokuCloud = {
+  type: "ichimoku-cloud",
+  title: msg("indicator.ichimokuCloud.title", "Ichimoku Cloud"),
+  shortTitle: msg("indicator.ichimokuCloud.shortTitle", "Ichimoku"),
+  overlay: true,
+  inputs: [
+    symbolInput("symbol", msg("indicator.ichimokuCloud.symbol", "Another Symbol"), "", {
+      tooltip: msg("indicator.ichimokuCloud.symbol.tooltip", "Optional secondary symbol to compute the cloud on. Leave empty to use the chart symbol.")
+    }),
+    lengthInput(9, "conversionLength", msg("indicator.ichimokuCloud.conversionLength", "Conversion Line Length"), 5e3, msg("indicator.ichimokuCloud.conversionLength.tooltip", "Lookback period for the Conversion Line (Tenkan-sen) high-low midpoint.")),
+    lengthInput(26, "baseLength", msg("indicator.ichimokuCloud.baseLength", "Base Line Length"), 5e3, msg("indicator.ichimokuCloud.baseLength.tooltip", "Lookback period for the Base Line (Kijun-sen) high-low midpoint.")),
+    lengthInput(52, "spanBLength", msg("indicator.ichimokuCloud.spanBLength", "Leading Span B Length"), 5e3, msg("indicator.ichimokuCloud.spanBLength.tooltip", "Lookback period for Leading Span B (Senkou Span B) high-low midpoint.")),
+    lengthInput(26, "laggingLength", msg("indicator.ichimokuCloud.laggingLength", "Lagging Span"), 5e3, msg("indicator.ichimokuCloud.laggingLength.tooltip", "Backward shift period for the Lagging Span (Chikou Span); plots close shifted back by period − 1 bars.")),
+    lengthInput(26, "displacement", msg("indicator.ichimokuCloud.displacement", "Displacement"), 5e3, msg("indicator.ichimokuCloud.displacement.tooltip", "Forward shift period for Leading Span A and B; projects the cloud ahead by displacement − 1 bars.")),
+    colorInput(INFO, msg("indicator.ichimokuCloud.conversionColor", "Conversion Line"), "conversionColor", msg("indicator.ichimokuCloud.conversionColor.tooltip", "Color of the Conversion Line.")),
+    colorInput(BEARISH, msg("indicator.ichimokuCloud.baseColor", "Base Line"), "baseColor", msg("indicator.ichimokuCloud.baseColor.tooltip", "Color of the Base Line.")),
+    colorInput(BULLISH, msg("indicator.ichimokuCloud.laggingColor", "Lagging Span"), "laggingColor", msg("indicator.ichimokuCloud.laggingColor.tooltip", "Color of the Lagging Span.")),
+    colorInput(BULLISH, msg("indicator.ichimokuCloud.spanAColor", "Leading Span A"), "spanAColor", msg("indicator.ichimokuCloud.spanAColor.tooltip", "Color of Leading Span A.")),
+    colorInput(BEARISH, msg("indicator.ichimokuCloud.spanBColor", "Leading Span B"), "spanBColor", msg("indicator.ichimokuCloud.spanBColor.tooltip", "Color of Leading Span B.")),
+    colorInput(transp(BULLISH, 90), msg("indicator.ichimokuCloud.bullCloudColor", "Bullish Cloud"), "bullCloudColor", msg("indicator.ichimokuCloud.bullCloudColor.tooltip", "Cloud fill color while Leading Span A sits at or above Leading Span B.")),
+    colorInput(transp(BEARISH, 90), msg("indicator.ichimokuCloud.bearCloudColor", "Bearish Cloud"), "bearCloudColor", msg("indicator.ichimokuCloud.bearCloudColor.tooltip", "Cloud fill color while Leading Span A sits below Leading Span B."))
+  ],
+  externalSymbols: (inputs) => {
+    const sym = str3(inputs, "symbol", "").trim();
+    return sym ? [sym] : [];
+  },
+  compute: (bars, inputs, external) => {
+    const sym = str3(inputs, "symbol", "").trim();
+    let h;
+    let l;
+    let c;
+    if (sym) {
+      const aligned = alignBars(bars, external?.get(sym) ?? []);
+      h = aligned.map((b) => b ? b.high : Number.NaN);
+      l = aligned.map((b) => b ? b.low : Number.NaN);
+      c = aligned.map((b) => b ? b.close : Number.NaN);
+    } else {
+      h = highs(bars);
+      l = lows(bars);
+      c = closes(bars);
+    }
+    const donchian2 = (len) => zip(highest(h, len), lowest(l, len), (hi, lo) => (hi + lo) / 2);
+    const conversion = donchian2(num3(inputs, "conversionLength", 9));
+    const base = donchian2(num3(inputs, "baseLength", 26));
+    const spanA = zip(conversion, base, (a, b) => (a + b) / 2);
+    const spanB = donchian2(num3(inputs, "spanBLength", 52));
+    const lagShift = -(Math.max(1, Math.trunc(num3(inputs, "laggingLength", 26))) - 1);
+    const leadShift = Math.max(1, Math.trunc(num3(inputs, "displacement", 26))) - 1;
+    const bullCloud = str3(inputs, "bullCloudColor", transp(BULLISH, 90));
+    const bearCloud = str3(inputs, "bearCloudColor", transp(BEARISH, 90));
+    const cloudColors = spanA.map((a, i) => {
+      const b = spanB[i];
+      if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+      return a >= b ? bullCloud : bearCloud;
+    });
+    return {
+      plots: [
+        { key: "conversion", title: msg("indicator.ichimokuCloud.plot.conversion", "Conversion Line"), values: conversion, color: str3(inputs, "conversionColor", INFO) },
+        { key: "base", title: msg("indicator.ichimokuCloud.plot.base", "Base Line"), values: base, color: str3(inputs, "baseColor", BEARISH) },
+        { key: "lagging", title: msg("indicator.ichimokuCloud.plot.lagging", "Lagging Span"), values: c, color: str3(inputs, "laggingColor", BULLISH), offset: lagShift },
+        { key: "spanA", title: msg("indicator.ichimokuCloud.plot.spanA", "Leading Span A"), values: spanA, color: str3(inputs, "spanAColor", BULLISH), offset: leadShift },
+        { key: "spanB", title: msg("indicator.ichimokuCloud.plot.spanB", "Leading Span B"), values: spanB, color: str3(inputs, "spanBColor", BEARISH), offset: leadShift }
+      ],
+      bands: [{ key: "cloud", from: "spanA", to: "spanB", color: bullCloud, colors: cloudColors }]
+    };
+  }
+};
+var overlaySpecs = [ichimokuCloud, parabolicSar, vwap, pivotPoints, fiftyTwoWeek, zigzag, williamsFractal, medianPrice, typicalPrice, averagePrice];
+
+// src/core/native-indicators/classics/correlation.ts
+var correlationCoefficient = {
+  type: "correlation-coefficient",
+  title: msg("indicator.correlationCoefficient.title", "Correlation Coefficient"),
+  shortTitle: msg("indicator.correlationCoefficient.shortTitle", "CC"),
+  overlay: false,
+  inputs: [
+    symbolInput("symbol", msg("indicator.correlationCoefficient.symbol", "Symbol"), "", {
+      confirm: true,
+      tooltip: msg("indicator.correlationCoefficient.symbol.tooltip", "Secondary symbol whose closing prices are correlated with the chart symbol.")
+    }),
+    lengthInput(20, "length", msg("indicator.correlationCoefficient.length", "Length"), 2e3, msg("indicator.correlationCoefficient.length.tooltip", "Number of bars over which the Pearson correlation coefficient is computed.")),
+    colorInput(BULLISH, msg("indicator.correlationCoefficient.bullColor", "Positive"), "bullColor", msg("indicator.correlationCoefficient.bullColor.tooltip", "Line and area color while correlation is above zero.")),
+    colorInput(BEARISH, msg("indicator.correlationCoefficient.bearColor", "Negative"), "bearColor", msg("indicator.correlationCoefficient.bearColor.tooltip", "Line and area color while correlation is below zero.")),
+    colorInput(NEUTRAL, msg("indicator.correlationCoefficient.zeroColor", "Zero Line"), "zeroColor", msg("indicator.correlationCoefficient.zeroColor.tooltip", "Color of the zero reference line."))
+  ],
+  externalSymbols: (inputs) => {
+    const sym = str3(inputs, "symbol", "").trim();
+    return sym ? [sym] : [];
+  },
+  compute: (bars, inputs, external) => {
+    const sym = str3(inputs, "symbol", "").trim();
+    let values;
+    if (!sym) {
+      values = fill(bars.length, Number.NaN);
+    } else {
+      const other = alignBars(bars, external?.get(sym) ?? []).map((b) => b ? b.close : Number.NaN);
+      values = correlation(closes(bars), other, num3(inputs, "length", 20));
+    }
+    const bull = str3(inputs, "bullColor", BULLISH);
+    const bear = str3(inputs, "bearColor", BEARISH);
+    const zeroInk = str3(inputs, "zeroColor", NEUTRAL);
+    const inkOf = (x) => x > 0 ? bull : x < 0 ? bear : NEUTRAL;
+    return {
+      plots: [
+        {
+          key: "cc",
+          title: msg("indicator.correlationCoefficient.plot.cc", "Correlation"),
+          values,
+          color: NEUTRAL,
+          width: 1,
+          colors: values.map((x) => Number.isFinite(x) ? inkOf(x) : null)
+        },
+        anchorPlot("baseline", "Baseline Anchor", values.length, 0)
+      ],
+      bands: [
+        {
+          key: "area",
+          from: "cc",
+          to: "baseline",
+          color: transp(NEUTRAL, 100),
+          colors: values.map((x) => Number.isFinite(x) ? transp(inkOf(x), 80) : null)
+        }
+      ],
+      levels: [
+        {
+          key: "zero",
+          price: 0,
+          color: zeroInk,
+          lineStyle: "dashed",
+          title: msg("indicator.common.level.zero", "Zero Line")
+        }
+      ]
+    };
+  }
+};
+var correlationLog = {
+  type: "correlation-log",
+  title: msg("indicator.correlationLog.title", "Correlation - Log"),
+  shortTitle: msg("indicator.correlationLog.shortTitle", "Correlation - Log"),
+  overlay: false,
+  inputs: [
+    symbolInput("instrument", msg("indicator.correlationLog.instrument", "Instrument 1"), "", {
+      confirm: true,
+      tooltip: msg("indicator.correlationLog.instrument.tooltip", "First symbol whose log returns enter the correlation.")
+    }),
+    symbolInput("instrument2", msg("indicator.correlationLog.instrument2", "Instrument 2"), "", {
+      confirm: true,
+      tooltip: msg("indicator.correlationLog.instrument2.tooltip", "Second symbol whose log returns enter the correlation.")
+    }),
+    { ...lengthInput(25, "length", msg("indicator.correlationLog.length", "Length"), 5e3, msg("indicator.correlationLog.length.tooltip", "Number of bar-to-bar log returns used to compute the Pearson correlation.")), min: 2 },
+    colorInput(BULLISH, msg("indicator.correlationLog.bullColor", "Positive"), "bullColor", msg("indicator.correlationLog.bullColor.tooltip", "Line and wash color while correlation is above zero.")),
+    colorInput(BEARISH, msg("indicator.correlationLog.bearColor", "Negative"), "bearColor", msg("indicator.correlationLog.bearColor.tooltip", "Line and wash color while correlation is below zero.")),
+    colorInput(NEUTRAL, msg("indicator.correlationLog.zeroColor", "Zero Line"), "zeroColor", msg("indicator.correlationLog.zeroColor.tooltip", "Color of the zero reference line."))
+  ],
+  externalSymbols: (inputs) => {
+    const a = str3(inputs, "instrument", "").trim();
+    const b = str3(inputs, "instrument2", "").trim();
+    return [a, b].filter(Boolean);
+  },
+  compute: (bars, inputs, external) => {
+    const sym1 = str3(inputs, "instrument", "").trim();
+    const sym2 = str3(inputs, "instrument2", "").trim();
+    let values;
+    if (!sym1 || !sym2) {
+      values = fill(bars.length, Number.NaN);
+    } else {
+      const c1 = alignBars(bars, external?.get(sym1) ?? []).map((b) => b ? b.close : Number.NaN);
+      const c2 = alignBars(bars, external?.get(sym2) ?? []).map((b) => b ? b.close : Number.NaN);
+      values = correlation(logReturns(c1), logReturns(c2), num3(inputs, "length", 25));
+    }
+    return centeredOscillator({
+      key: "corr",
+      title: msg("indicator.correlationLog.plot.corr", "Correlation"),
+      values,
+      ink: { bull: str3(inputs, "bullColor", BULLISH), bear: str3(inputs, "bearColor", BEARISH), neutral: NEUTRAL },
+      zeroInk: str3(inputs, "zeroColor", NEUTRAL)
+    });
+  }
+};
+var correlationSpecs = [correlationCoefficient, correlationLog];
 
 // src/core/native-indicators/classics/index.ts
 var classicSpecs = [
@@ -33070,10 +34073,366 @@ var classicSpecs = [
   ...trendSpecs,
   ...volatilitySpecs,
   ...volumeSpecs,
-  ...overlaySpecs
+  ...overlaySpecs,
+  ...correlationSpecs
 ];
 function registerClassicIndicators() {
   for (const spec of classicSpecs) registerNativeIndicator(classicDescriptor(spec));
+}
+
+// src/core/native-indicators/compare/CompareIndicator.ts
+var SETTINGS2 = "Settings";
+var STYLE2 = "Style";
+var PLACEMENTS = ["same", "new-scale", "new-pane"];
+var LINE_STYLES2 = ["solid", "dashed", "dotted"];
+var LABELS = {
+  groups: CLASSIC_INPUT_LABELS.groups,
+  options: {
+    ...CLASSIC_INPUT_LABELS.options,
+    same: msg("indicator.compare.scale.same", "Same % scale"),
+    "new-scale": msg("indicator.compare.scale.newScale", "New price scale"),
+    "new-pane": msg("indicator.compare.scale.newPane", "New pane"),
+    solid: msg("indicator.compare.lineStyle.solid", "Solid"),
+    dashed: msg("indicator.compare.lineStyle.dashed", "Dashed"),
+    dotted: msg("indicator.compare.lineStyle.dotted", "Dotted")
+  }
+};
+var SCHEMA = [
+  localizeInput(
+    {
+      key: "symbol",
+      title: msg("indicator.compare.symbol", "Symbol"),
+      type: "symbol",
+      defval: "",
+      group: SETTINGS2,
+      tooltip: msg("indicator.compare.symbol.tooltip", "Secondary symbol overlaid for comparison.")
+    },
+    LABELS
+  ),
+  localizeInput(
+    {
+      key: "scale",
+      title: msg("indicator.compare.scale", "Scale"),
+      type: "string",
+      defval: "same",
+      options: PLACEMENTS,
+      group: SETTINGS2,
+      tooltip: msg("indicator.compare.scale.tooltip", "Share the main percentage scale, use an independent price scale, or plot in a new pane.")
+    },
+    LABELS
+  ),
+  localizeInput(
+    {
+      key: "source",
+      title: msg("indicator.common.source", "Source"),
+      type: "string",
+      defval: "Close",
+      options: SOURCES2,
+      group: SETTINGS2,
+      tooltip: msg("indicator.compare.source.tooltip", "Price value taken from each bar.")
+    },
+    LABELS
+  ),
+  localizeInput(
+    {
+      key: "color",
+      title: msg("indicator.common.color", "Color"),
+      type: "color",
+      defval: CATEGORICAL[0],
+      group: STYLE2,
+      tooltip: msg("indicator.compare.color.tooltip", "Color of the compared symbol line and price-axis badge.")
+    },
+    LABELS
+  ),
+  localizeInput(
+    {
+      key: "lineWidth",
+      title: msg("indicator.common.lineWidth", "Line Width"),
+      type: "int",
+      defval: 2,
+      min: 1,
+      max: 5,
+      step: 1,
+      group: STYLE2,
+      tooltip: msg("indicator.common.lineWidth.tooltip", "Width of the plotted line, in pixels.")
+    },
+    LABELS
+  ),
+  localizeInput(
+    {
+      key: "lineStyle",
+      title: msg("indicator.compare.lineStyle", "Style"),
+      type: "string",
+      defval: "solid",
+      options: LINE_STYLES2,
+      group: STYLE2,
+      tooltip: msg("indicator.compare.lineStyle.tooltip", "Stroke pattern of the compared symbol line.")
+    },
+    LABELS
+  )
+];
+function defaults() {
+  const out = {};
+  for (const s of SCHEMA) out[s.key] = s.defval;
+  return out;
+}
+function asPlacement(v) {
+  return v === "new-scale" || v === "new-pane" ? v : "same";
+}
+function asLineStyle(v) {
+  return v === "dashed" || v === "dotted" ? v : "solid";
+}
+function asWidth(v) {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? Math.max(1, Math.min(5, Math.round(n))) : 2;
+}
+function barStepMs2(bars, timeframe) {
+  if (bars.length >= 2) {
+    const dt = bars[bars.length - 1].time - bars[bars.length - 2].time;
+    if (dt > 0) return dt;
+  }
+  return timeframeToMs(timeframe) ?? 6e4;
+}
+function mergeLiveBar2(bars, bar) {
+  const last = bars[bars.length - 1];
+  if (!last || bar.time > last.time) bars.push(bar);
+  else if (bar.time === last.time) bars[bars.length - 1] = bar;
+}
+function mergeFetchedBars(fetched, existing) {
+  if (existing.length === 0) return [...fetched];
+  if (fetched.length === 0) return [...existing];
+  const out = [...fetched];
+  const tailTime = out[out.length - 1].time;
+  for (const b of existing) {
+    if (b.time > tailTime) out.push(b);
+    else if (b.time === tailTime) out[out.length - 1] = b;
+  }
+  return out;
+}
+var CompareIndicator = class {
+  constructor() {
+    this.ctx = null;
+    this.inputs = defaults();
+    this.suspended = false;
+    this.extBars = [];
+    this.fetchedSymbol = "";
+    this.fetchedFrom = Infinity;
+    this.inFlightFrom = null;
+    this.needsCatchup = false;
+    this.fetchSeq = 0;
+    this.unsub = null;
+    this.subSymbol = "";
+  }
+  start(ctx, inputs) {
+    this.ctx = ctx;
+    this.inputs = { ...defaults(), ...inputs };
+    this.suspended = false;
+    this.needsCatchup = false;
+    this.syncAndCompute();
+  }
+  onBars() {
+    if (!this.ctx || this.suspended) return;
+    this.syncAndCompute();
+  }
+  onViewport() {
+  }
+  setInputs(inputs) {
+    this.inputs = { ...defaults(), ...inputs };
+    if (!this.ctx || this.suspended) return;
+    this.syncAndCompute();
+  }
+  suspend() {
+    this.suspended = true;
+    this.fetchSeq += 1;
+    this.inFlightFrom = null;
+    this.needsCatchup = true;
+    this.clearSub();
+  }
+  resume() {
+    this.suspended = false;
+    if (!this.ctx) return;
+    this.syncAndCompute();
+  }
+  stop() {
+    this.suspended = true;
+    this.fetchSeq += 1;
+    this.clearSub();
+    this.extBars = [];
+    this.fetchedSymbol = "";
+    this.fetchedFrom = Infinity;
+    this.inFlightFrom = null;
+    this.needsCatchup = false;
+    this.ctx = null;
+  }
+  clearSub() {
+    this.unsub?.();
+    this.unsub = null;
+    this.subSymbol = "";
+  }
+  targetSymbol() {
+    return typeof this.inputs.symbol === "string" ? this.inputs.symbol.trim() : "";
+  }
+  isOwnSymbol(sym) {
+    if (!this.ctx) return false;
+    const canon = (s) => (this.ctx.data.canonicalSymbol?.(s) ?? s).trim().toUpperCase();
+    return canon(sym) === canon(this.ctx.symbol);
+  }
+  ensureSubscription(sym) {
+    const ctx = this.ctx;
+    if (!ctx || !ctx.live || !ctx.subscribeSeries || this.suspended) return;
+    if (this.subSymbol === sym && this.unsub) return;
+    this.clearSub();
+    this.subSymbol = sym;
+    this.unsub = ctx.subscribeSeries(sym, ctx.timeframe, (bar) => {
+      if (!this.ctx || this.suspended || this.targetSymbol() !== sym) return;
+      mergeLiveBar2(this.extBars, bar);
+      this.emit(this.ctx.bars(), sym, this.extBars);
+    });
+  }
+  syncAndCompute() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const bars = ctx.bars();
+    const sym = this.targetSymbol();
+    if (!sym) {
+      this.fetchSeq += 1;
+      this.clearSub();
+      this.extBars = [];
+      this.fetchedSymbol = "";
+      this.fetchedFrom = Infinity;
+      this.inFlightFrom = null;
+      this.needsCatchup = false;
+      this.emit(bars, "", []);
+      ctx.setStatus("idle");
+      return;
+    }
+    if (this.isOwnSymbol(sym)) {
+      this.fetchSeq += 1;
+      this.clearSub();
+      this.extBars = [];
+      this.fetchedSymbol = "";
+      this.fetchedFrom = Infinity;
+      this.inFlightFrom = null;
+      this.needsCatchup = false;
+      this.emit(bars, sym, bars);
+      ctx.setStatus("idle");
+      return;
+    }
+    if (this.fetchedSymbol !== sym) {
+      this.clearSub();
+      this.extBars = [];
+      this.fetchedSymbol = sym;
+      this.fetchedFrom = Infinity;
+      this.inFlightFrom = null;
+      this.needsCatchup = false;
+    }
+    this.emit(bars, sym, this.extBars);
+    if (!ctx.fetchSeries || bars.length === 0) {
+      ctx.setStatus("idle");
+      return;
+    }
+    const earliest = bars[0].time;
+    if (!this.needsCatchup && earliest >= this.fetchedFrom && this.fetchedFrom < Infinity) {
+      this.ensureSubscription(sym);
+      ctx.setStatus("idle");
+      return;
+    }
+    if (!this.needsCatchup && this.inFlightFrom !== null && earliest >= this.inFlightFrom) {
+      return;
+    }
+    const seq = ++this.fetchSeq;
+    this.inFlightFrom = earliest;
+    this.needsCatchup = false;
+    ctx.setStatus("loading");
+    const step = barStepMs2(bars, ctx.timeframe);
+    const range = { from: earliest, to: bars[bars.length - 1].time + step, limit: bars.length + 64 };
+    void ctx.fetchSeries(sym, ctx.timeframe, range).then(
+      (fetched) => ({ ok: true, fetched }),
+      () => ({ ok: false, fetched: [] })
+    ).then(({ ok, fetched }) => {
+      if (seq !== this.fetchSeq || !this.ctx || this.suspended || this.targetSymbol() !== sym) return;
+      this.inFlightFrom = null;
+      if (ok) {
+        this.extBars = mergeFetchedBars(fetched, this.extBars);
+        this.fetchedFrom = Math.min(this.fetchedFrom, earliest);
+        this.ensureSubscription(sym);
+        this.emit(this.ctx.bars(), sym, this.extBars);
+      }
+      this.ctx.setStatus("idle");
+    });
+  }
+  emit(chartBars, sym, secondary) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const placement = asPlacement(this.inputs.scale);
+    const source = typeof this.inputs.source === "string" ? this.inputs.source : "Close";
+    const color = typeof this.inputs.color === "string" && this.inputs.color ? this.inputs.color : CATEGORICAL[0];
+    const width = asWidth(this.inputs.lineWidth);
+    const lineStyle = asLineStyle(this.inputs.lineStyle);
+    const parsed = sym ? parseSymbol(sym) : null;
+    const ticker = parsed?.ticker || sym;
+    const rawVenue = sym ? ctx.data.displayPrefix(sym) ?? parsed?.provider ?? void 0 : void 0;
+    const venue = rawVenue ? rawVenue.toUpperCase() : void 0;
+    const displayTitle = ticker ? venue ? `${ticker} · ${venue}` : ticker : void 0;
+    const aligned = sym ? alignBars(chartBars, secondary) : [];
+    const points = new Array(chartBars.length);
+    if (sym && aligned.length === chartBars.length) {
+      const nonNull = [];
+      const indices = [];
+      for (let i = 0; i < aligned.length; i += 1) {
+        const b = aligned[i];
+        if (b) {
+          nonNull.push(b);
+          indices.push(i);
+        }
+      }
+      const vals = sourceValues(nonNull, source);
+      for (let i = 0; i < chartBars.length; i += 1) {
+        points[i] = { time: chartBars[i].time, value: null };
+      }
+      for (let k = 0; k < indices.length; k += 1) {
+        const v = vals[k];
+        const i = indices[k];
+        points[i] = { time: chartBars[i].time, value: Number.isFinite(v) ? v : null };
+      }
+    } else {
+      for (let i = 0; i < chartBars.length; i += 1) {
+        points[i] = { time: chartBars[i].time, value: null };
+      }
+    }
+    const seriesId = stableSeriesId({ instanceId: "compare", kind: "line", title: "compare", ordinal: 0 });
+    ctx.emit({
+      ...displayTitle ? { title: displayTitle } : {},
+      paneHint: placement === "new-pane" ? "new" : "price",
+      ownScale: placement === "new-scale",
+      percentBaseline: "own",
+      priceAxisLabel: true,
+      series: [
+        {
+          id: seriesId,
+          title: ticker || "Compare",
+          paneId: "",
+          kind: "line",
+          points,
+          style: { color, width, lineStyle }
+        }
+      ]
+    });
+  }
+};
+var compareDescriptor = {
+  type: "compare",
+  title: msg("indicator.compare.title", "Compare symbol"),
+  paneHint: "price",
+  overlay: true,
+  multiInstance: true,
+  catalog: false,
+  inputsSchema: () => SCHEMA.map((s) => ({ ...s })),
+  defaultInputs: () => defaults(),
+  create: () => new CompareIndicator()
+};
+function registerCompare() {
+  registerNativeIndicator(compareDescriptor);
 }
 
 // src/Vela.ts
@@ -33084,6 +34443,7 @@ var Vela = class {
     registerVolume();
     registerVpvr();
     registerClassicIndicators();
+    registerCompare();
     const element = resolveElement(container);
     const theme = resolveTheme(options.theme);
     const display = {
@@ -33129,8 +34489,8 @@ var Vela = class {
     if (options.settings) this.rendererControl.setSettingsVisibility(options.settings);
     this.dataControl = new DataControl(feed);
     this.orchestrator = new EngineOrchestrator(element, renderer, feed, engines, config, this.dataControl);
-    const defaults = rendererDefaults();
-    if (Object.keys(defaults).length > 0) this.rendererControl.set(defaults);
+    const defaults2 = rendererDefaults();
+    if (Object.keys(defaults2).length > 0) this.rendererControl.set(defaults2);
     this.panesControl = new PanesControl(this.orchestrator);
     this.drawingsControl = new DrawingsControl(this.orchestrator.drawings);
     this.marksControl = new MarksControl(this.orchestrator.marks);
@@ -33492,4 +34852,4 @@ function resolveElement(container) {
   return element;
 }
 
-export { BUILTIN_PRICE_STYLES, BarStore, CANDLE_OVERRIDE_KEYS, CachingDataFeed, ClockCorrection, DARK_THEME, DataControl, DrawingStore, DrawingToolbar, DrawingsControl, LEGEND_AT_TOP_ATTR, LIGHT_THEME, MarksControl, MultiProviderFeed, NativeRenderer, PRICE_STYLE_UNAVAILABLE, RendererControl, ReplayControl, SecondClock, TypedEventBus, Vela, applyAttributionMarkTheme, buildToolbar, clockCorrection, createAttributionMark, createCustomMark, defaultMemberOf, defaultToolbar, groupKeyOf, groupMembers, isGroupRow, normalizeSession, parseSymbol, priceStyleIds, priceStyleMessage, registerBuiltinChartTypes, registerTheme, registeredThemes, relabelAttributionMark, resolveTheme, sharedBarStore };
+export { BUILTIN_PRICE_STYLES, BarStore, CANDLE_OVERRIDE_KEYS, CachingDataFeed, ClockCorrection, DARK_THEME, DataControl, DrawingStore, DrawingToolbar, DrawingsControl, LEGEND_AT_TOP_ATTR, LIGHT_THEME, MarksControl, MultiProviderFeed, NativeRenderer, PRICE_STYLE_UNAVAILABLE, RendererControl, ReplayControl, SecondClock, TypedEventBus, Vela, applyAttributionMarkTheme, buildToolbar, clockCorrection, compareDescriptor, createAttributionMark, createCustomMark, defaultMemberOf, defaultToolbar, groupKeyOf, groupMembers, isGroupRow, normalizeSession, parseSymbol, priceStyleIds, priceStyleMessage, registerBuiltinChartTypes, registerTheme, registeredThemes, relabelAttributionMark, resolveTheme, sharedBarStore };

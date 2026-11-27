@@ -1,5 +1,5 @@
-import { D as DataProvider, P as ProviderInfo, B as BarRange, O as OHLCV, S as SymbolInfo, a as SymbolDescriptor, U as Unsubscribe } from '../DataProvider-CiFfigU4.js';
-import '../types-CsUd831-.js';
+import { D as DataProvider, P as ProviderInfo, B as BarRange, O as OHLCV, S as SymbolInfo, a as SymbolDescriptor, U as Unsubscribe } from '../DataProvider-CyaRCe6l.js';
+import '../types-DXVlW2vL.js';
 import '@luxalgo/vela-ui/theme';
 
 /**
@@ -27,6 +27,10 @@ declare class HyperliquidProvider implements DataProvider {
     private perpDexsPromise;
     /** Cached `meta` per HIP-3 dex name. */
     private readonly dexMetaPromises;
+    /** Every perp dex's `meta` from ONE `allPerpMetas` request, keyed by dex name (`''` = the
+     *  main dex), started by the symbol list; null when the answer doesn't line up with
+     *  `perpDexs`, and then the per-dex `meta` requests run exactly as before. */
+    private allMetasPromise;
     /** Upper-cased HIP-3 coin → its listed spelling, filled as dex metas arrive. */
     private readonly hip3Coins;
     /** Cached symbol enumeration. */
@@ -72,6 +76,15 @@ declare class HyperliquidProvider implements DataProvider {
     /** Poll the forming candle (for aggregated timeframes / environments without WebSocket). */
     private pollBars;
     private fetchMeta;
+    /**
+     * `allPerpMetas` answers the main dex first, then each HIP-3 dex in `perpDexs` order: the
+     * same records the per-dex `meta` requests return, in one round trip instead of one per
+     * dex after `perpDexs` lands. Accepted only when it lines up: one entry per dex, each
+     * listing only its own coins (`dex:COIN`; the main dex none).
+     */
+    private fetchAllMetas;
+    /** A dex's meta from the combined answer, once the symbol list has asked for it. */
+    private fromAllMetas;
     private fetchSpotMeta;
     /** The HIP-3 dexes: `perpDexs` lists the main dex first, as `null`, which is dropped. */
     private fetchPerpDexs;

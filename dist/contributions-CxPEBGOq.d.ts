@@ -1,5 +1,5 @@
-import { K as Millis, aF as InputSchema, aA as IndicatorMeta, S as SymbolInfo, h as PriceStyle, O as OHLCV, B as BarRange, I as InputValue, r as IndicatorModel, q as MoveTarget, M as MarketDataFeed, D as DataProvider, P as ProviderInfo, a as SymbolDescriptor, Z as ProviderCapabilities, aY as PaneAxis, bf as SeriesSpec, aw as Fill, a2 as Background, b5 as PriceLine, aj as DrawingLine, af as DrawingBox, ai as DrawingLabel, an as DrawingPolyline, ak as DrawingLinefill, as as DrawingTable, l as IndicatorStatus, b as VisibleRange, m as SymbolFacts, d as VelaTheme, g as SerializedDrawing, X as DrawingTypeKey, Q as SnapMode, al as DrawingMode, F as MarkClickEvent, i as IChartRenderer, R as RendererCapabilities, u as LegendActionView, v as DrawingActionView, w as LegendCalloutView, U as Unsubscribe, C as CrosshairEvent, y as ClickEvent, A as AxisLongPressEvent, H as DataWindowReadout, t as SymbolPickerFn, W as WallClock, bz as PaneInfo, av as DrawingsOption, ap as DrawingSeriesGateway, bA as DrawingToolDefaults, bB as DrawingToolTemplate, f as Drawing, z as TimelineMark, E as MarkGroup, c as VelaOptions, a0 as AddIndicatorOptions, aX as MarketSwitch, $ as MarketSnapshot, V as VisibleRangePreset } from './DataProvider-CiFfigU4.js';
-import { M as MessageLike, T as Translator, c as LocaleChangedEvent, b as LocalizationOptions } from './types-CsUd831-.js';
+import { K as Millis, aF as InputSchema, aA as IndicatorMeta, S as SymbolInfo, i as PriceStyle, O as OHLCV, B as BarRange, I as InputValue, s as IndicatorModel, r as MoveTarget, M as MarketDataFeed, D as DataProvider, P as ProviderInfo, a as SymbolDescriptor, Z as ProviderCapabilities, U as Unsubscribe, aY as PaneAxis, bf as SeriesSpec, aw as Fill, a2 as Background, b5 as PriceLine, aj as DrawingLine, af as DrawingBox, ai as DrawingLabel, an as DrawingPolyline, ak as DrawingLinefill, as as DrawingTable, m as IndicatorStatus, b as VisibleRange, n as SymbolFacts, d as VelaTheme, h as SerializedDrawing, X as DrawingTypeKey, Q as SnapMode, al as DrawingMode, F as MarkClickEvent, j as IChartRenderer, R as RendererCapabilities, u as LegendActionView, v as DrawingActionView, w as LegendCalloutView, C as CrosshairEvent, y as ClickEvent, A as AxisLongPressEvent, H as DataWindowReadout, e as SymbolPickerFn, W as WallClock, bB as PaneInfo, av as DrawingsOption, ap as DrawingSeriesGateway, bC as DrawingToolDefaults, bD as DrawingToolTemplate, g as Drawing, z as TimelineMark, E as MarkGroup, c as VelaOptions, a0 as AddIndicatorOptions, aX as MarketSwitch, $ as MarketSnapshot, V as VisibleRangePreset } from './DataProvider-CyaRCe6l.js';
+import { M as MessageLike, T as Translator, c as LocaleChangedEvent, b as LocalizationOptions } from './types-DXVlW2vL.js';
 
 /**
  * A strategy's broker state at ONE bar — the flat summary a host reads while a script
@@ -505,6 +505,21 @@ declare class DataControl {
  */
 interface NativeIndicatorOutput {
     /**
+     * Per-instance display title overriding the descriptor's static `title` (e.g. a
+     * compared symbol showing its ticker and venue). Absent ⇒ descriptor's `title`.
+     */
+    title?: MessageLike;
+    /** Per-instance compact title overriding the descriptor's `shortTitle`. */
+    shortTitle?: MessageLike;
+    /** Per-instance pane placement override (applied until the user moves the indicator). */
+    paneHint?: 'price' | 'new';
+    /** Per-instance own-scale override (applied until the user moves the indicator). */
+    ownScale?: boolean;
+    /** Percent/indexed normalization mode (see `IndicatorModel.percentBaseline`). */
+    percentBaseline?: 'pane' | 'own';
+    /** Show a colored last-value + name badge on the price axis (see `IndicatorModel.priceAxisLabel`). */
+    priceAxisLabel?: boolean;
+    /**
      * Value-axis override for the pane this native OWNS (see `IndicatorModel.paneAxis`):
      * `'none'` for content that is not value-mapped, or band labels for a categorical
      * axis. Emitted per compute, so it can follow the inputs (e.g. row toggles relabel
@@ -541,6 +556,17 @@ interface NativeIndicatorContext {
     bars(): readonly OHLCV[];
     /** Market-data access (trades / capabilities) for data-driven natives. */
     readonly data: DataControl;
+    /**
+     * Fetch bars for another symbol/timeframe through the chart's data feed (the same gateway
+     * scripting engines use). Unresolvable or empty answers resolve to `[]`.
+     */
+    fetchSeries?(symbol: string, timeframe: string, range: BarRange): Promise<OHLCV[]>;
+    /**
+     * Subscribe to live bar updates for another symbol/timeframe. Returns an unsubscribe
+     * function; always a no-op while `live` is `false` (bar replay or static mode), and
+     * automatically torn down when this indicator context stops.
+     */
+    subscribeSeries?(symbol: string, timeframe: string, onBar: (bar: OHLCV) => void): Unsubscribe;
     /**
      * Push a fresh render output; the chart mounts it (first call) or patches it (subsequent).
      * Series payloads are index-aligned: one slot per bar of `bars()` AS IT STANDS AT THE
@@ -636,6 +662,13 @@ interface NativeIndicatorDescriptor {
      * overwrite each other (see `IndicatorModel.native.channel`).
      */
     readonly multiInstance?: boolean;
+    /**
+     * Whether this type appears in `chart.availableNativeIndicators()` (indicator pickers).
+     * Absent / `true` ⇒ listed; `false` ⇒ excluded from the picker while still addable
+     * through `chart.addNativeIndicator(type)` (for tools with their own entry point, such
+     * as symbol comparison).
+     */
+    readonly catalog?: boolean;
     inputsSchema(): InputSchema[];
     defaultInputs(): Record<string, InputValue>;
     create(): NativeIndicator;
@@ -2195,7 +2228,7 @@ interface TopbarComposition {
  *  indicator surface exists — the built-in picker (the deprecated `indicatorPicker:
  *  false` still removes it) or a slot OVERRIDE replacing it — so listing them is
  *  necessary but not sufficient. */
-declare const TOPBAR_BUILTIN_IDS: readonly ["symbol", "timeframes", "style", "layout", "indicators", "actions", "undo-redo", "alerts", "panels", "screenshot", "fullscreen"];
+declare const TOPBAR_BUILTIN_IDS: readonly ["symbol", "compare", "timeframes", "style", "layout", "indicators", "actions", "undo-redo", "alerts", "panels", "screenshot", "fullscreen"];
 /** The default left side — the current shell composition, verbatim. */
 declare const TOPBAR_DEFAULT_LEFT: readonly string[];
 /** The default right side (the `margin-left: auto` cluster). */
@@ -2265,7 +2298,9 @@ interface WidgetContext {
     addIndicator(entry: ExternalIndicatorEntry): void;
     /** Add a native (core-computed) indicator to the active chart through the shell —
      *  recorded in the undo/redo timeline, unlike the raw `chart.addNativeIndicator`. */
-    addNativeIndicator(type: string): void;
+    addNativeIndicator(type: string, options?: {
+        inputs?: Record<string, InputValue>;
+    }): void;
     /** Tell the shell some PERSISTABLE third-party state changed (a debounced
      *  `state:changed` + storage write follows). Only needed for state with no shell
      *  event of its own — indicator adds/removals already trigger the save cycle. */
@@ -2575,7 +2610,7 @@ declare function sidePanels(): SidePanelDescriptor[];
  *  their id — the "simple button" slots. The composites (symbol, timeframes, style,
  *  layout, undo-redo, alerts, panels) are stateful controls the shell pushes state
  *  into; a plain `{label, icon, run}` descriptor cannot stand in for them. */
-declare const OVERRIDABLE_TOPBAR_IDS: readonly ["indicators", "screenshot"];
+declare const OVERRIDABLE_TOPBAR_IDS: readonly ["indicators", "screenshot", "compare"];
 /**
  * The action OVERRIDING a built-in topbar slot, if one is registered — an action whose
  * `id` IS the built-in id. An override takes the slot's WHOLE surface: the desktop
@@ -2736,7 +2771,9 @@ interface CellStateContext {
     /** Add a script indicator to THIS cell through the shell (see {@link WidgetContext.addIndicator}). */
     addIndicator(entry: ExternalIndicatorEntry): void;
     /** Add a native indicator to THIS cell through the shell. */
-    addNativeIndicator(type: string): void;
+    addNativeIndicator(type: string, options?: {
+        inputs?: Record<string, InputValue>;
+    }): void;
 }
 /**
  * A third-party STATE PERSISTENCE handler — how a plugin puts its own state into the
@@ -2814,4 +2851,4 @@ declare function unregisterDefaultEngine(language: string): void;
  *  language. The shell layers (widget, workspace cell) register exactly this result. */
 declare function resolveEngines(overrides?: Record<string, EngineFactory>): Record<string, EngineFactory>;
 
-export { type NativeIndicatorInfo as $, type ExecutionMarket as A, type BarsChangeReason as B, type CellStateContext as C, type DrawingsDocument as D, type ExternalIndicatorEntry as E, type ExecutionRequest as F, type ExecutionSession as G, type FetchSeries as H, type IndicatorHandle as I, type FullscreenControl as J, type IndicatorEventMap as K, type IndicatorSummary as L, type LegendActionDescriptor as M, type LegendCalloutContent as N, type LegendCalloutDescriptor as O, type LegendCalloutItem as P, type LegendCalloutSpec as Q, type ReplayState as R, type ScriptingEngine as S, type TopbarComposition as T, type LegendIndicatorInfo as U, Vela as V, type WidgetContext as W, MarksControl as X, type NativeIndicator as Y, type NativeIndicatorContext as Z, type NativeIndicatorDescriptor as _, type ReplayBounds as a, unregisterWidgetAction as a$, type NativeIndicatorOutput as a0, OVERRIDABLE_TOPBAR_IDS as a1, type PanelDockView as a2, type ParsedSymbol as a3, type PreparedScript as a4, RendererControl as a5, ReplayControl as a6, type ReplayEndReason as a7, type ReplayStartOptions as a8, type RunIndicatorResult as a9, isDataUnavailableError as aA, legendActions as aB, legendCallouts as aC, nativeIndicatorDescriptors as aD, nativeIndicatorTypes as aE, registerDefaultEngine as aF, registerDrawingAction as aG, registerLegendAction as aH, registerLegendCallout as aI, registerNativeIndicator as aJ, registerSidePanel as aK, registerStatePersistence as aL, registerSymbolRanking as aM, registerWidgetAction as aN, registerWidgetAttachment as aO, resolveEngines as aP, sidePanels as aQ, statePersistenceHandlers as aR, symbolRanking as aS, topbarActionOverride as aT, unregisterDefaultEngine as aU, unregisterDrawingAction as aV, unregisterLegendAction as aW, unregisterLegendCallout as aX, unregisterNativeIndicator as aY, unregisterSidePanel as aZ, unregisterStatePersistence as a_, SIDEBAR_DEFAULT_BOTTOM as aa, SIDEBAR_DEFAULT_TOP as ab, type SceneInspection as ac, type ScriptRunCause as ad, type ScriptRunResult as ae, type SidePanelButton as af, type SidePanelDescriptor as ag, type SidePanelHandle as ah, type SidePanelHeader as ai, type SidebarControl as aj, type StatePersistenceHandler as ak, type StrategyFill as al, type StrategyState as am, type StrategyTrade as an, type SymbolRankingHook as ao, type TopbarItemId as ap, type TopbarItems as aq, TypedEventBus as ar, type VelaDeps as as, type VisibleBarRange as at, type WidgetActionDescriptor as au, type WidgetActionTarget as av, type WidgetAttachment as aw, composeSidebar as ax, drawingActions as ay, getNativeIndicator as az, type VelaEventMap as b, unregisterWidgetAttachment as b0, widgetActions as b1, widgetAttachments as b2, DEFAULT_PANEL_ORDER as b3, type ResolvedTopbarComposition as b4, SIDEBAR_ACTIONS_SLOT as b5, SIDEBAR_PANELS_SLOT as b6, SIDEBAR_SEPARATOR as b7, type SidebarLayout as b8, type SidebarSource as b9, TOPBAR_BUILTIN_IDS as ba, TOPBAR_DEFAULT_LEFT as bb, TOPBAR_DEFAULT_RIGHT as bc, pinnedTopbarActionIds as bd, resolveTopbarComposition as be, topbarHas as bf, type ScriptRun as c, type SidebarComposition as d, type Resolved as e, type ReplayTick as f, DataControl as g, type ReplayTickSource as h, type CodeUpdateResult as i, type ContextMenuPointer as j, type ContextSelect as k, type DataUnavailableDetails as l, DataUnavailableError as m, type DataUnavailableReason as n, type DockStripOptions as o, type DockedPanelInfo as p, type DockedStrip as q, type DrawingActionDescriptor as r, type DrawingActionSurface as s, DrawingsControl as t, type EngineAlert as u, type EngineCapabilities as v, type EngineContextSnapshot as w, type EngineFactory as x, type EngineWarning as y, type ExecutionHandlers as z };
+export { type NativeIndicatorInfo as $, type ExecutionMarket as A, type BarsChangeReason as B, type CellStateContext as C, type DrawingsDocument as D, type ExternalIndicatorEntry as E, type ExecutionRequest as F, type ExecutionSession as G, type FetchSeries as H, type IndicatorHandle as I, type FullscreenControl as J, type IndicatorEventMap as K, type IndicatorSummary as L, type LegendActionDescriptor as M, type LegendCalloutContent as N, type LegendCalloutDescriptor as O, type LegendCalloutItem as P, type LegendCalloutSpec as Q, type ReplayState as R, type ScriptingEngine as S, type TopbarComposition as T, type LegendIndicatorInfo as U, Vela as V, type WidgetContext as W, MarksControl as X, type NativeIndicator as Y, type NativeIndicatorContext as Z, type NativeIndicatorDescriptor as _, type SidebarComposition as a, unregisterWidgetAction as a$, type NativeIndicatorOutput as a0, OVERRIDABLE_TOPBAR_IDS as a1, type PanelDockView as a2, type ParsedSymbol as a3, type PreparedScript as a4, RendererControl as a5, ReplayControl as a6, type ReplayEndReason as a7, type ReplayStartOptions as a8, type RunIndicatorResult as a9, isDataUnavailableError as aA, legendActions as aB, legendCallouts as aC, nativeIndicatorDescriptors as aD, nativeIndicatorTypes as aE, registerDefaultEngine as aF, registerDrawingAction as aG, registerLegendAction as aH, registerLegendCallout as aI, registerNativeIndicator as aJ, registerSidePanel as aK, registerStatePersistence as aL, registerSymbolRanking as aM, registerWidgetAction as aN, registerWidgetAttachment as aO, resolveEngines as aP, sidePanels as aQ, statePersistenceHandlers as aR, symbolRanking as aS, topbarActionOverride as aT, unregisterDefaultEngine as aU, unregisterDrawingAction as aV, unregisterLegendAction as aW, unregisterLegendCallout as aX, unregisterNativeIndicator as aY, unregisterSidePanel as aZ, unregisterStatePersistence as a_, SIDEBAR_DEFAULT_BOTTOM as aa, SIDEBAR_DEFAULT_TOP as ab, type SceneInspection as ac, type ScriptRunCause as ad, type ScriptRunResult as ae, type SidePanelButton as af, type SidePanelDescriptor as ag, type SidePanelHandle as ah, type SidePanelHeader as ai, type SidebarControl as aj, type StatePersistenceHandler as ak, type StrategyFill as al, type StrategyState as am, type StrategyTrade as an, type SymbolRankingHook as ao, type TopbarItemId as ap, type TopbarItems as aq, TypedEventBus as ar, type VelaDeps as as, type VisibleBarRange as at, type WidgetActionDescriptor as au, type WidgetActionTarget as av, type WidgetAttachment as aw, composeSidebar as ax, drawingActions as ay, getNativeIndicator as az, type ReplayBounds as b, unregisterWidgetAttachment as b0, widgetActions as b1, widgetAttachments as b2, DEFAULT_PANEL_ORDER as b3, type ResolvedTopbarComposition as b4, SIDEBAR_ACTIONS_SLOT as b5, SIDEBAR_PANELS_SLOT as b6, SIDEBAR_SEPARATOR as b7, type SidebarLayout as b8, type SidebarSource as b9, TOPBAR_BUILTIN_IDS as ba, TOPBAR_DEFAULT_LEFT as bb, TOPBAR_DEFAULT_RIGHT as bc, pinnedTopbarActionIds as bd, resolveTopbarComposition as be, topbarHas as bf, type VelaEventMap as c, type ScriptRun as d, type Resolved as e, type ReplayTick as f, DataControl as g, type ReplayTickSource as h, type CodeUpdateResult as i, type ContextMenuPointer as j, type ContextSelect as k, type DataUnavailableDetails as l, DataUnavailableError as m, type DataUnavailableReason as n, type DockStripOptions as o, type DockedPanelInfo as p, type DockedStrip as q, type DrawingActionDescriptor as r, type DrawingActionSurface as s, DrawingsControl as t, type EngineAlert as u, type EngineCapabilities as v, type EngineContextSnapshot as w, type EngineFactory as x, type EngineWarning as y, type ExecutionHandlers as z };

@@ -53,13 +53,13 @@ function resolveTheme(theme) {
     return entry ? resolveTheme(entry.theme) : DARK_THEME;
   }
   if ("tokens" in theme) {
-    let t33 = resolved.get(theme);
-    if (!t33) resolved.set(theme, t33 = { ...theme.chart, ui: theme.settings });
-    return t33;
+    let t34 = resolved.get(theme);
+    if (!t34) resolved.set(theme, t34 = { ...theme.chart, ui: theme.settings });
+    return t34;
   }
   return theme;
 }
-var themeKey = (t33) => JSON.stringify([t33.background, t33.textColor, t33.gridColor, t33.borderColor, t33.upColor, t33.downColor, t33.fontFamily, t33.ui ?? null]);
+var themeKey = (t34) => JSON.stringify([t34.background, t34.textColor, t34.gridColor, t34.borderColor, t34.upColor, t34.downColor, t34.fontFamily, t34.ui ?? null]);
 function registeredThemeIdOf(theme) {
   const key = themeKey(theme);
   for (const entry of registry.values()) if (themeKey(resolveTheme(entry.theme)) === key) return entry.id;
@@ -119,13 +119,13 @@ function groupMembers(pool, groupRow) {
 }
 function defaultMemberOf(pool, groupRow) {
   const members = groupMembers(pool, groupRow);
-  const defaults7 = members.filter((m) => m.default);
-  return (defaults7.length === 1 ? defaults7[0] : members[0]) ?? null;
+  const defaults8 = members.filter((m) => m.default);
+  return (defaults8.length === 1 ? defaults8[0] : members[0]) ?? null;
 }
 
 // src/data/ProviderRegistry.ts
 var normName = (n) => n.trim().toLowerCase();
-var normTicker = (t33) => t33.trim().toUpperCase();
+var normTicker = (t34) => t34.trim().toUpperCase();
 function parseSymbol(raw) {
   const s = raw.trim();
   const m = /^(?:([A-Za-z0-9_.]+):)?(.+)$/.exec(s);
@@ -504,6 +504,19 @@ function isDataUnavailableError(e) {
 // src/data/timeframe.ts
 var NAMED_TF_MS = { D: 864e5, W: 6048e5, M: 2592e6 };
 var UNIT_MS = { s: 1e3, m: 6e4, h: 36e5, d: 864e5, w: 6048e5, M: 2592e6 };
+function parseTickTimeframe(timeframe) {
+  const tf = timeframe.trim();
+  const m = /^(\d*)\s*[tT]$/.exec(tf);
+  if (!m) return null;
+  const count = m[1] === "" ? 1 : parseInt(m[1], 10);
+  return Number.isFinite(count) && count >= 1 ? count : null;
+}
+function isTickTimeframe(timeframe) {
+  return parseTickTimeframe(timeframe) !== null;
+}
+function isVariableDurationTimeframe(timeframe) {
+  return isTickTimeframe(timeframe);
+}
 function timeframeToMs(timeframe) {
   const tf = timeframe.trim();
   if (NAMED_TF_MS[tf]) return NAMED_TF_MS[tf];
@@ -527,14 +540,26 @@ var CachingDataFeed = class {
   constructor(inner, store = sharedBarStore) {
     this.inner = inner;
     this.store = store;
+    /** Loads in flight, keyed by series + depth: charts loading the same series at once (a
+     *  workspace's first boot, symbol- or timeframe-synced cells) share one request. */
+    this.loadInflight = /* @__PURE__ */ new Map();
   }
   async load(cfg) {
-    if (cfg.data && cfg.data.length > 0) return this.inner.load(cfg);
+    if (cfg.data && cfg.data.length > 0 || isVariableDurationTimeframe(cfg.timeframe ?? "")) return this.inner.load(cfg);
     const symbol = cfg.symbol ?? "TEST";
     const key = cacheKey(symbol, cfg.timeframe ?? "60", cfg.session);
+    const n = cfg.bars ?? 500;
+    const flightKey = `${key}|${n}`;
+    let flight = this.loadInflight.get(flightKey);
+    if (!flight) {
+      flight = this.loadSeries(cfg, symbol, key, n).finally(() => this.loadInflight.delete(flightKey));
+      this.loadInflight.set(flightKey, flight);
+    }
+    return (await flight).map((b) => ({ ...b }));
+  }
+  async loadSeries(cfg, symbol, key, n) {
     this.store.retainSymbol(symbol);
     const cached = this.store.get(key);
-    const n = cfg.bars ?? 500;
     const lastCached = cached?.[cached.length - 1];
     if (cached && lastCached && cached.length >= n - 1 && this.inner.loadRange) {
       const { bars: tail } = await this.fetchRange(cfg, { from: lastCached.time });
@@ -555,6 +580,7 @@ var CachingDataFeed = class {
   async loadProgressive(cfg, onBatch, opts) {
     if (cfg.data && cfg.data.length > 0) return this.inner.load(cfg);
     if (!this.inner.loadProgressive) return null;
+    if (isVariableDurationTimeframe(cfg.timeframe ?? "")) return this.inner.loadProgressive(cfg, onBatch, opts);
     const symbol = cfg.symbol ?? "TEST";
     const key = cacheKey(symbol, cfg.timeframe ?? "60", cfg.session);
     const cached = this.store.get(key);
@@ -582,6 +608,7 @@ var CachingDataFeed = class {
    */
   async loadRange(cfg, range) {
     if (!this.inner.loadRange) return this.inner.load(cfg);
+    if (isVariableDurationTimeframe(cfg.timeframe ?? "")) return this.inner.loadRange(cfg, range);
     const key = cacheKey(cfg.symbol ?? "TEST", cfg.timeframe ?? "60", cfg.session);
     let cached = this.store.get(key);
     let newest = cached?.[cached.length - 1];
@@ -692,6 +719,15 @@ function attachForming(closed, forming) {
   return !last || forming.time > last.time ? [...closed, forming] : closed;
 }
 
+// src/data/series-adapters.ts
+var adapters = /* @__PURE__ */ new Map();
+function matchSeriesAdapter(timeframe, provider, providerName) {
+  for (const adapter of adapters.values()) {
+    if (adapter.matches(timeframe, provider, providerName)) return adapter;
+  }
+  return void 0;
+}
+
 // src/data/MultiProviderFeed.ts
 var MultiProviderFeed = class {
   constructor(store = sharedBarStore) {
@@ -702,7 +738,10 @@ var MultiProviderFeed = class {
     this.symInfoCache = /* @__PURE__ */ new Map();
     /** Requests in flight, keyed like the cache — every concurrent asker shares one round trip. */
     this.symInfoInflight = /* @__PURE__ */ new Map();
-    this.cache = new CachingDataFeed(new RegistryFetchFeed(this.registry), store);
+    this.cache = new CachingDataFeed(
+      new RegistryFetchFeed(this.registry, (resolved3) => this.fetchSymbolInfo(resolved3)),
+      store
+    );
   }
   // ── Registry surface (driven by chart.data / DataControl) ──────────────
   registerProvider(name, provider) {
@@ -893,26 +932,52 @@ function refusalOf(e, ticker, tf) {
   const details = { reason: e.reason, symbol: e.symbol ?? ticker, timeframe: e.timeframe ?? tf, finest: e.finest, default: e.default };
   return new DataUnavailableError(details, e.message === dataUnavailableMessage(e) ? void 0 : e.message);
 }
+async function safeAdapterBars(adapter, ctx, range) {
+  try {
+    return await adapter.getBars(ctx, range);
+  } catch (e) {
+    if (isDataUnavailableError(e)) throw refusalOf(e, ctx.ticker, ctx.timeframe);
+    console.warn(`[vela] series adapter "${adapter.id}" fetch failed for ${ctx.ticker} ${ctx.timeframe} — ${e instanceof Error ? e.message : String(e)}`);
+    return [];
+  }
+}
 var RegistryFetchFeed = class {
-  constructor(registry6) {
+  constructor(registry6, readSymbolInfo) {
     this.registry = registry6;
+    this.readSymbolInfo = readSymbolInfo;
+  }
+  adapterContext(name, provider, ticker, timeframe, session) {
+    return {
+      providerName: name,
+      provider,
+      ticker,
+      timeframe,
+      ...session !== void 0 ? { session } : {},
+      symbolInfo: () => this.readSymbolInfo({ provider: name, ticker })
+    };
   }
   load(cfg) {
     const { provider: name, ticker } = parseSymbol(cfg.symbol ?? "");
     const provider = this.registry.get(name ?? "");
     if (!provider) return Promise.resolve([]);
-    return safeBars(provider, ticker, cfg.timeframe ?? "60", { limit: cfg.bars ?? 500, session: cfg.session });
+    const tf = cfg.timeframe ?? "60";
+    const range = { limit: cfg.bars ?? 500, session: cfg.session };
+    const adapter = matchSeriesAdapter(tf, provider, name ?? "");
+    if (adapter) return safeAdapterBars(adapter, this.adapterContext(name ?? "", provider, ticker, tf, cfg.session), range);
+    return safeBars(provider, ticker, tf, range);
   }
   async loadProgressive(cfg, onBatch, opts) {
     const { provider: name, ticker } = parseSymbol(cfg.symbol ?? "");
     const provider = this.registry.get(name ?? "");
     if (!provider) return [];
+    const tf = cfg.timeframe ?? "60";
+    if (matchSeriesAdapter(tf, provider, name ?? "")) return null;
     if (!provider.getBarsProgressive) return null;
     try {
-      return await provider.getBarsProgressive(ticker, cfg.timeframe ?? "60", { limit: cfg.bars ?? 500, session: cfg.session }, onBatch, opts);
+      return await provider.getBarsProgressive(ticker, tf, { limit: cfg.bars ?? 500, session: cfg.session }, onBatch, opts);
     } catch (e) {
-      if (isDataUnavailableError(e)) throw refusalOf(e, ticker, cfg.timeframe ?? "60");
-      console.warn(`[vela] progressive fetch failed for ${ticker} ${cfg.timeframe ?? "60"} — ${e instanceof Error ? e.message : String(e)}`);
+      if (isDataUnavailableError(e)) throw refusalOf(e, ticker, tf);
+      console.warn(`[vela] progressive fetch failed for ${ticker} ${tf} — ${e instanceof Error ? e.message : String(e)}`);
       return [];
     }
   }
@@ -920,7 +985,11 @@ var RegistryFetchFeed = class {
     const { provider: name, ticker } = parseSymbol(cfg.symbol ?? "");
     const provider = this.registry.get(name ?? "");
     if (!provider) return Promise.resolve([]);
-    return safeBars(provider, ticker, cfg.timeframe ?? "60", { ...range, session: cfg.session });
+    const tf = cfg.timeframe ?? "60";
+    const mergedRange = { ...range, session: cfg.session };
+    const adapter = matchSeriesAdapter(tf, provider, name ?? "");
+    if (adapter) return safeAdapterBars(adapter, this.adapterContext(name ?? "", provider, ticker, tf, cfg.session), mergedRange);
+    return safeBars(provider, ticker, tf, mergedRange);
   }
   subscribe(cfg, onBar) {
     const { provider: name, ticker } = parseSymbol(cfg.symbol ?? "");
@@ -928,13 +997,22 @@ var RegistryFetchFeed = class {
     if (!provider) return () => {
     };
     const tf = cfg.timeframe ?? "60";
+    const adapter = matchSeriesAdapter(tf, provider, name ?? "");
+    if (adapter) {
+      const ctx = this.adapterContext(name ?? "", provider, ticker, tf, cfg.session);
+      if (adapter.subscribe) return adapter.subscribe(ctx, onBar);
+      return this.poll(() => adapter.getBars(ctx, { limit: 2, session: cfg.session }), onBar);
+    }
     if (provider.subscribe) return provider.subscribe(ticker, tf, onBar, cfg.session ? { session: cfg.session } : void 0);
+    return this.poll(() => provider.getBars(ticker, tf, { limit: 2, session: cfg.session }), onBar);
+  }
+  poll(fetchLatest, onBar) {
     let stopped = false;
     let timer = null;
     const poll = async () => {
       if (stopped) return;
       try {
-        const bars = await provider.getBars(ticker, tf, { limit: 2, session: cfg.session });
+        const bars = await fetchLatest();
         if (stopped) return;
         for (const b of bars) onBar(b);
       } catch (e) {
@@ -1106,7 +1184,7 @@ function zoneOffsetMs(ms, timeZone) {
   if (!dtf) return 0;
   try {
     const parts = dtf.formatToParts(new Date(ms));
-    const get = (t33) => Number(parts.find((p) => p.type === t33)?.value);
+    const get = (t34) => Number(parts.find((p) => p.type === t34)?.value);
     const asUTC = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour") % 24, get("minute"), get("second"));
     return asUTC - ms;
   } catch {
@@ -1128,14 +1206,18 @@ function dateFormat(settings, options) {
   }
   return dtf;
 }
-function clockOptions(settings) {
-  if (settings.hourCycle === "h23") return { hour: "2-digit", minute: "2-digit", hourCycle: "h23" };
-  if (settings.hourCycle === "h12") return { hour: "numeric", minute: "2-digit", hourCycle: "h12" };
-  return { hour: "numeric", minute: "2-digit" };
+function clockOptions(settings, withSeconds = false) {
+  const sec = withSeconds ? { second: "2-digit" } : {};
+  if (settings.hourCycle === "h23") return { hour: "2-digit", minute: "2-digit", ...sec, hourCycle: "h23" };
+  if (settings.hourCycle === "h12") return { hour: "numeric", minute: "2-digit", ...sec, hourCycle: "h12" };
+  return { hour: "numeric", minute: "2-digit", ...sec };
 }
-function englishClock(wall, settings) {
-  if (settings.hourCycle === "h23") return localizeAscii(`${pad2(wall.getUTCHours())}:${pad2(wall.getUTCMinutes())}`, settings);
-  return stripBidiMarks(dateFormat(settings, clockOptions(settings)).format(wall));
+function englishClock(wall, settings, withSeconds = false) {
+  if (settings.hourCycle === "h23") {
+    const base = `${pad2(wall.getUTCHours())}:${pad2(wall.getUTCMinutes())}`;
+    return localizeAscii(withSeconds ? `${base}:${pad2(wall.getUTCSeconds())}` : base, settings);
+  }
+  return stripBidiMarks(dateFormat(settings, clockOptions(settings, withSeconds)).format(wall));
 }
 var TICK_OPTIONS = {
   year: { year: "numeric" },
@@ -1146,27 +1228,29 @@ var isClockUnit = (unit) => unit === "hour" || unit === "minute" || unit === "se
 function formatTimeTick(ms, options, settings) {
   const wall = new Date(ms + (options.offsetMs ?? 0));
   const unit = options.unit;
+  const withSeconds = unit === "second";
   if (settings.english) {
-    if (isClockUnit(unit)) return englishClock(wall, settings);
+    if (isClockUnit(unit)) return englishClock(wall, settings, withSeconds);
     const month = EN_MONTHS_SHORT[wall.getUTCMonth()];
     if (unit === "year") return localizeAscii(String(wall.getUTCFullYear()), settings);
     if (unit === "month") return month;
     return localizeAscii(`${month} ${wall.getUTCDate()}`, settings);
   }
-  const opts = isClockUnit(unit) ? clockOptions(settings) : TICK_OPTIONS[unit];
+  const opts = isClockUnit(unit) ? clockOptions(settings, withSeconds) : TICK_OPTIONS[unit];
   return stripBidiMarks(dateFormat(settings, opts).format(wall));
 }
 function formatTimeStamp(ms, options, settings) {
   const wall = new Date(ms + zoneOffsetMs(ms, options?.timeZone ?? "UTC"));
   const withTime = options?.withTime ?? true;
+  const withSeconds = options?.withSeconds === true;
   if (settings.english) {
     const date = localizeAscii(
       `${EN_WEEKDAYS_SHORT[wall.getUTCDay()]} ${wall.getUTCDate()} ${EN_MONTHS_SHORT[wall.getUTCMonth()]} '${pad2(wall.getUTCFullYear() % 100)}`,
       settings
     );
-    return withTime ? `${date} ${englishClock(wall, settings)}` : date;
+    return withTime ? `${date} ${englishClock(wall, settings, withSeconds)}` : date;
   }
-  const opts = { weekday: "short", day: "numeric", month: "short", year: "2-digit", ...withTime ? clockOptions(settings) : {} };
+  const opts = { weekday: "short", day: "numeric", month: "short", year: "2-digit", ...withTime ? clockOptions(settings, withSeconds) : {} };
   return stripBidiMarks(dateFormat(settings, opts).format(wall));
 }
 function countdownText(ms) {
@@ -1291,7 +1375,7 @@ function resolveFormatters(settings, overrides) {
     timeStamp(ms, options) {
       const fallback = () => base.timeStamp(ms, options);
       if (typeof o.timeStamp !== "function") return fallback();
-      return viaHost(o.timeStamp, ms, { ...ctx(options?.surface, "crosshair", options?.timeZone, fallback), withTime: options?.withTime ?? true }, fallback);
+      return viaHost(o.timeStamp, ms, { ...ctx(options?.surface, "crosshair", options?.timeZone, fallback), withTime: options?.withTime ?? true, ...options?.withSeconds !== void 0 ? { withSeconds: options.withSeconds } : {} }, fallback);
     },
     duration(ms, options) {
       const fallback = () => base.duration(ms, options);
@@ -1610,8 +1694,8 @@ function languageOf(tag) {
 }
 function fallbackChain(tag) {
   const out = [];
-  const add = (t33) => {
-    if (t33 && !out.includes(t33)) out.push(t33);
+  const add = (t34) => {
+    if (t34 && !out.includes(t34)) out.push(t34);
   };
   add(tag);
   const loc = parseLocale(tag);
@@ -1944,12 +2028,12 @@ function eventMatches(ev, c) {
   (c.key.length > 1 || /^[a-z0-9 ]$/.test(c.key) ? ev.shiftKey === c.shift : true) && chordKeyOf(ev) === c.key;
 }
 function isEditableTarget(ev) {
-  const t33 = ev.target;
-  if (!t33 || typeof t33 !== "object") return false;
-  const tag = (t33.tagName ?? "").toLowerCase();
+  const t34 = ev.target;
+  if (!t34 || typeof t34 !== "object") return false;
+  const tag = (t34.tagName ?? "").toLowerCase();
   if (tag === "input" || tag === "textarea" || tag === "select") return true;
-  if (t33.isContentEditable === true) return true;
-  return (typeof t33.getAttribute === "function" ? t33.getAttribute("role") : null) === "textbox";
+  if (t34.isContentEditable === true) return true;
+  return (typeof t34.getAttribute === "function" ? t34.getAttribute("role") : null) === "textbox";
 }
 function displayChord(spec, mac, i18n) {
   const c = parseChord(spec, mac);
@@ -2135,9 +2219,9 @@ var PRICE_STYLE_UNAVAILABLE = msg("chart.priceStyle.unavailable", "Not available
 function priceStyleMessage(id) {
   return chartType(id)?.label ?? PRICE_STYLE_LABELS[id] ?? id;
 }
-function injectChromeStyles(id, css35, root = document) {
+function injectChromeStyles(id, css36, root = document) {
   styles.injectLayerOrder(root);
-  return styles.injectStyles(id, css35, root);
+  return styles.injectStyles(id, css36, root);
 }
 var TEXT = {
   layout: msg("widget.layoutPicker.layout", "Layout"),
@@ -2290,8 +2374,8 @@ var LayoutPicker = class {
     /** Hover preview (1-based rows/cols), null = show current shape. */
     this.hover = null;
     this.onDocPointerDown = (e) => {
-      const t33 = e.target;
-      if (t33 && (this.layer.contains(t33) || this.opts.trigger.contains(t33))) return;
+      const t34 = e.target;
+      if (t34 && (this.layer.contains(t34) || this.opts.trigger.contains(t34))) return;
       this.close();
     };
     this.onDocKeydown = (e) => {
@@ -2504,8 +2588,8 @@ var LayoutPicker = class {
 };
 
 // src/widget/topbar-composition.ts
-var TOPBAR_BUILTIN_IDS = ["symbol", "timeframes", "style", "layout", "indicators", "actions", "undo-redo", "alerts", "panels", "screenshot", "fullscreen"];
-var TOPBAR_DEFAULT_LEFT = ["symbol", "timeframes", "style", "layout", "indicators", "actions", "undo-redo"];
+var TOPBAR_BUILTIN_IDS = ["symbol", "compare", "timeframes", "style", "layout", "indicators", "actions", "undo-redo", "alerts", "panels", "screenshot", "fullscreen"];
+var TOPBAR_DEFAULT_LEFT = ["symbol", "compare", "timeframes", "style", "layout", "indicators", "actions", "undo-redo"];
 var TOPBAR_DEFAULT_RIGHT = ["actions", "alerts", "panels", "screenshot", "fullscreen"];
 function resolveTopbarComposition(opt) {
   const seen = /* @__PURE__ */ new Set();
@@ -2540,7 +2624,7 @@ var DEFAULT_PANEL_ORDER = 100;
 function sidePanels() {
   return [...panels.values()].sort((a, b) => (a.order ?? DEFAULT_PANEL_ORDER) - (b.order ?? DEFAULT_PANEL_ORDER));
 }
-var OVERRIDABLE_TOPBAR_IDS = ["indicators", "screenshot"];
+var OVERRIDABLE_TOPBAR_IDS = ["indicators", "screenshot", "compare"];
 var overridableSet = new Set(OVERRIDABLE_TOPBAR_IDS);
 new Set(TOPBAR_BUILTIN_IDS);
 function topbarActionOverride(id) {
@@ -2583,7 +2667,7 @@ function legendCalloutsProviderFor(chart, context) {
     if (!handle) return [];
     const info = legendInfoOf(handle);
     const views = [];
-    const t33 = (m) => textOf(chart.i18n, m);
+    const t34 = (m) => textOf(chart.i18n, m);
     for (const d of legendCallouts()) {
       const spec = d.callout(info);
       if (!spec) continue;
@@ -2592,14 +2676,14 @@ function legendCalloutsProviderFor(chart, context) {
         icon: spec.icon,
         background: spec.background,
         ...spec.color !== void 0 ? { color: spec.color } : {},
-        tooltip: t33(spec.tooltip),
+        tooltip: t34(spec.tooltip),
         ...spec.content !== void 0 ? {
           content: {
-            ...spec.content.title !== void 0 ? { title: t33(spec.content.title) } : {},
+            ...spec.content.title !== void 0 ? { title: t34(spec.content.title) } : {},
             items: spec.content.items.map(
-              (item) => item.type === "text" ? { type: "text", text: t33(item.text) } : {
+              (item) => item.type === "text" ? { type: "text", text: t34(item.text) } : {
                 type: "button",
-                label: t33(item.label),
+                label: t34(item.label),
                 ...item.primary !== void 0 ? { primary: item.primary } : {},
                 ...item.close !== void 0 ? { close: item.close } : {},
                 run: () => item.run(context(), info)
@@ -2696,12 +2780,12 @@ function defaultChartStyle() {
 var LINE_STYLES = ["solid", "dashed", "dotted"];
 var BUILTIN_PRICE_STYLES = ["candles", "bars", "line", "linemarkers", "stepline", "area", "baseline", "columns", "heikinashi"];
 function basePaintingOf(style) {
-  for (const t33 of chartTypes()) if (t33.id === style) return t33.basePainting ?? "candles";
+  for (const t34 of chartTypes()) if (t34.id === style) return t34.basePainting ?? "candles";
   return "candles";
 }
 function hasOwnCandlePaint(style) {
   if (BUILTIN_PRICE_STYLES.includes(style)) return false;
-  for (const t33 of chartTypes()) if (t33.id === style) return (t33.basePainting ?? "candles") === "candles";
+  for (const t34 of chartTypes()) if (t34.id === style) return (t34.basePainting ?? "candles") === "candles";
   return false;
 }
 var CANDLE_OVERRIDE_KEYS = [
@@ -2750,7 +2834,7 @@ function effectiveCandlePaint(base, override, themeUp, themeDown) {
 }
 function priceStyleIds() {
   const out = [...BUILTIN_PRICE_STYLES];
-  for (const t33 of chartTypes()) if (!out.includes(t33.id)) out.push(t33.id);
+  for (const t34 of chartTypes()) if (!out.includes(t34.id)) out.push(t34.id);
   return out;
 }
 function sanitizeCrosshairOverride(value) {
@@ -2842,31 +2926,31 @@ function followThemeColors(config, prev2, next) {
 }
 function factoryResetConfig(factory, priceStyle = factory.series.style) {
   const bag = {};
-  for (const t33 of chartTypes()) {
-    const section = t33.settings;
+  for (const t34 of chartTypes()) {
+    const section = t34.settings;
     if (!section) continue;
-    const defaults7 = {};
+    const defaults8 = {};
     const addRows = (rows) => {
       for (const r of rows ?? []) {
-        for (const k of settingsRowValueKeys(r)) defaults7[k.key] = k.defval;
+        for (const k of settingsRowValueKeys(r)) defaults8[k.key] = k.defval;
       }
     };
     for (const inst of section.instances ?? []) {
-      if (inst.enableKey) defaults7[inst.enableKey] = false;
+      if (inst.enableKey) defaults8[inst.enableKey] = false;
       addRows(inst.rows);
     }
     for (const sub2 of section.subsections ?? []) {
-      if (sub2.enableKey) defaults7[sub2.enableKey] = false;
+      if (sub2.enableKey) defaults8[sub2.enableKey] = false;
       addRows(sub2.rows);
     }
     if (!section.instances) addRows(section.rows);
-    bag[t33.id] = defaults7;
+    bag[t34.id] = defaults8;
   }
-  for (const t33 of chartTypes()) {
-    if (!hasOwnCandlePaint(t33.id)) continue;
-    const defaults7 = bag[t33.id] ?? {};
-    for (const key of CANDLE_OVERRIDE_KEYS) defaults7[key] = null;
-    bag[t33.id] = defaults7;
+  for (const t34 of chartTypes()) {
+    if (!hasOwnCandlePaint(t34.id)) continue;
+    const defaults8 = bag[t34.id] ?? {};
+    for (const key of CANDLE_OVERRIDE_KEYS) defaults8[key] = null;
+    bag[t34.id] = defaults8;
   }
   for (const [typeId, vals] of Object.entries(factory.chartTypes)) {
     bag[typeId] = { ...bag[typeId] ?? {}, ...vals };
@@ -2940,6 +3024,8 @@ function mergeConfig(base, patch) {
       currentPriceLine: isBool(ps.currentPriceLine) ? ps.currentPriceLine : base.priceScale.currentPriceLine,
       priceLabel: isBool(ps.priceLabel) ? ps.priceLabel : base.priceScale.priceLabel,
       countdown: isBool(ps.countdown) ? ps.countdown : base.priceScale.countdown,
+      indicatorValueLabels: isBool(ps.indicatorValueLabels) ? ps.indicatorValueLabels : base.priceScale.indicatorValueLabels,
+      indicatorNameLabels: isBool(ps.indicatorNameLabels) ? ps.indicatorNameLabels : base.priceScale.indicatorNameLabels,
       animateLastPrice: isBool(ps.animateLastPrice) ? ps.animateLastPrice : base.priceScale.animateLastPrice
     },
     animations: {
@@ -3038,7 +3124,6 @@ function mergeConfig(base, patch) {
 }
 
 // src/widget/timeframe.ts
-var TIMEFRAME_UNAVAILABLE = msg("widget.timeframe.unavailable", "This market does not offer that timeframe.");
 var UNIT_MS2 = {
   S: 1e3,
   MIN: 6e4,
@@ -3049,6 +3134,7 @@ var UNIT_MS2 = {
   Y: 31536e6
 };
 var UNIT_NAME = {
+  T: msg("widget.timeframe.ticks", "{count, plural, one {{n} tick} other {{n} ticks}}"),
   S: msg("widget.timeframe.seconds", "{count, plural, one {{n} second} other {{n} seconds}}"),
   MIN: msg("widget.timeframe.minutes", "{count, plural, one {{n} minute} other {{n} minutes}}"),
   H: msg("widget.timeframe.hours", "{count, plural, one {{n} hour} other {{n} hours}}"),
@@ -3058,6 +3144,7 @@ var UNIT_NAME = {
   Y: msg("widget.timeframe.years", "{count, plural, one {{n} year} other {{n} years}}")
 };
 var UNIT_SHORT = {
+  T: msg("widget.timeframe.short.ticks", "{n}T"),
   S: msg("widget.timeframe.short.seconds", "{n}s"),
   MIN: msg("widget.timeframe.short.minutes", "{n}m"),
   H: msg("widget.timeframe.short.hours", "{n}h"),
@@ -3071,7 +3158,7 @@ function shortLabel(key, count, i18n) {
 }
 function unitKey(letter) {
   if (letter === "") return "MIN";
-  return letter === "S" || letter === "H" || letter === "D" || letter === "W" || letter === "M" || letter === "Y" ? letter : null;
+  return letter === "T" || letter === "S" || letter === "H" || letter === "D" || letter === "W" || letter === "M" || letter === "Y" ? letter : null;
 }
 var UNIT_MINUTES = {
   MIN: 1,
@@ -3082,6 +3169,7 @@ var UNIT_MINUTES = {
   Y: 525600
 };
 function canonicalFor(key, count) {
+  if (key === "T") return `${count}T`;
   if (key === "S") return `${count}S`;
   return `${count * UNIT_MINUTES[key]}`;
 }
@@ -3096,12 +3184,12 @@ function parseTimeframe(text, i18n) {
   if (numStr === "" && key === "MIN") return { valid: false };
   const count = numStr === "" ? 1 : parseInt(numStr, 10);
   if (!Number.isFinite(count) || count < 1) return { valid: false };
-  const ms = count * UNIT_MS2[key];
+  const ms = key === "T" ? void 0 : count * UNIT_MS2[key];
   return {
     valid: true,
     count,
     unit: key,
-    ms,
+    ...ms !== void 0 ? { ms } : {},
     canonical: canonicalFor(key, count),
     label: textOf(i18n, UNIT_NAME[key], { count, n: localizeNumberText(String(count), i18n) }),
     short: shortLabel(key, count, i18n)
@@ -3114,50 +3202,23 @@ function chartTimeframeOf(value) {
   if (parsed2.count === 1 && (parsed2.unit === "D" || parsed2.unit === "W" || parsed2.unit === "M")) return parsed2.unit;
   return parsed2.canonical ?? null;
 }
-function calendarTimeframe({ count, unit }) {
-  return unit === "D" || unit === "W" || unit === "M" || unit === "Y" ? count === 1 ? unit : `${count}${unit}` : void 0;
-}
-function timeframeKey(parsed2) {
-  return calendarTimeframe(parsed2) ?? parsed2.canonical;
-}
-function declaredTimeframe(value) {
-  return /[a-z]/.test(value) ? { valid: false } : parseTimeframe(value);
-}
-function resolveTimeframeChoice(value, timeframes, fallback = value) {
-  if (!timeframes) return fallback;
-  const requested = parseTimeframe(value);
-  if (timeframes.list) {
-    const key = timeframeKey(requested);
-    if (key === void 0) return null;
-    const matches = timeframes.list.filter((entry) => timeframeKey(declaredTimeframe(entry)) === key);
-    return matches.includes(value) ? value : matches[0] ?? null;
-  }
-  const finest = declaredTimeframe(timeframes.finest).ms;
-  if (finest === void 0) return fallback;
-  if (requested.ms === void 0 || requested.ms < finest) return null;
-  return calendarTimeframe(requested) ?? fallback;
-}
-function currentTimeframeChoice(options, timeframe, resolve) {
-  if (options.includes(timeframe)) return timeframe;
-  const current = resolve(timeframe);
-  return current === null ? void 0 : options.find((option) => resolve(option) === current);
-}
-function workspaceTimeframeLabel(value, i18n) {
-  const parsed2 = parseTimeframe(value, i18n);
-  if (parsed2.unit === "D" || parsed2.unit === "W" || parsed2.unit === "M" || parsed2.unit === "Y") return parsed2.short;
-  return timeframeLabel(value, i18n);
-}
 function timeframeMs(value) {
   const v = String(value ?? "").trim();
   if (!v) return NaN;
   const m = /^(\d*)\s*([a-zA-Z]?)$/.exec(v);
   if (!m) return NaN;
   const key = unitKey((m[2] ?? "").toUpperCase());
-  if (key === null) return NaN;
+  if (key === null || key === "T") return NaN;
   if ((m[1] ?? "") === "" && key === "MIN") return NaN;
   const count = (m[1] ?? "") === "" ? 1 : parseInt(m[1], 10);
   if (!Number.isFinite(count) || count < 1) return NaN;
   return count * UNIT_MS2[key];
+}
+function chipRank(tf) {
+  const parsed2 = parseTimeframe(tf);
+  if (!parsed2.valid) return [2, 0];
+  if (parsed2.unit === "T") return [0, parsed2.count ?? 0];
+  return [1, parsed2.ms ?? 0];
 }
 function favoriteTimeframeChips(favorites) {
   const seen = /* @__PURE__ */ new Set();
@@ -3168,18 +3229,17 @@ function favoriteTimeframeChips(favorites) {
     out.push(tf);
   }
   return out.sort((a, b) => {
-    const ma = timeframeMs(a);
-    const mb = timeframeMs(b);
-    const aOk = Number.isFinite(ma);
-    const bOk = Number.isFinite(mb);
-    if (aOk && bOk && ma !== mb) return ma - mb;
-    if (aOk !== bOk) return aOk ? -1 : 1;
+    const [ga, va] = chipRank(a);
+    const [gb, vb] = chipRank(b);
+    if (ga !== gb) return ga - gb;
+    if (va !== vb) return va - vb;
     return 0;
   });
 }
 function timeframeLabel(value, i18n) {
   const parsed2 = parseTimeframe(value, i18n);
   if (!parsed2.valid) return value;
+  if (parsed2.unit === "T") return parsed2.short;
   const ms = parsed2.ms;
   const order = ["Y", "M", "W", "D", "H", "MIN", "S"];
   for (const key of order) {
@@ -3339,6 +3399,7 @@ function priceStyleIcon(id) {
   return void 0;
 }
 var TEXT2 = {
+  compare: msg("widget.topbar.compare", "Compare or add symbol"),
   timeframes: msg("widget.topbar.timeframes", "Timeframes"),
   indicators: msg("widget.topbar.indicators", "Indicators"),
   undo: msg("widget.topbar.undo", "Undo"),
@@ -3351,12 +3412,13 @@ var TEXT2 = {
   layout: msg("widget.topbar.layout", "Layout"),
   switchTimeframe: msg("widget.topbar.switchTimeframe", "Switch timeframe to {timeframe}"),
   currentTimeframe: msg("widget.topbar.currentTimeframe", "Timeframe — {timeframe}"),
+  timeframeUnavailable: msg("widget.topbar.timeframeUnavailable", "Not available for this symbol"),
   currentLayout: msg("widget.topbar.currentLayout", "Layout — {layout}"),
   currentStyle: msg("widget.topbar.currentStyle", "Chart style — {style}")
 };
-var TopbarControl = class {
-  constructor(host, opts, resolveTimeframe) {
-    this.resolveTimeframe = resolveTimeframe;
+var Topbar = class {
+  constructor(host, opts, onFavoriteTimeframe) {
+    this.onFavoriteTimeframe = onFavoriteTimeframe;
     this.layoutButton = null;
     this.layoutPicker = null;
     this.layoutId = null;
@@ -3378,6 +3440,8 @@ var TopbarControl = class {
     this.warnedIconless = /* @__PURE__ */ new Set();
     /** Style ids the current symbol's data cannot draw: listed greyed, not selectable. */
     this.unavailableStyles = /* @__PURE__ */ new Set();
+    /** Timeframe ids the current symbol's data cannot serve: listed greyed, not selectable. */
+    this.unavailableTimeframes = /* @__PURE__ */ new Set();
     this.onHairlineSync = () => {
       if (this.hairlineRaf) return;
       const win = this.el.ownerDocument.defaultView;
@@ -3442,6 +3506,7 @@ var TopbarControl = class {
     }
     this.setHistoryState(false, false);
     const screenshotBtn = vis("screenshot") && !topbarActionOverride("screenshot") ? tool("vela-widget-screenshot", "camera", TEXT2.screenshot, opts.onScreenshotClick) : null;
+    const compareBtn = vis("compare") && opts.onCompareClick && !topbarActionOverride("compare") ? tool("vela-widget-compare", "circle-plus", TEXT2.compare, opts.onCompareClick) : null;
     const fullscreenBtn = vis("fullscreen") && opts.onFullscreenClick ? tool("vela-widget-fullscreen", "maximize", TEXT2.fullscreen, opts.onFullscreenClick) : null;
     this.alertsBtn = vis("alerts") ? tool("vela-widget-alerts", "bell", TEXT2.alerts) : doc.createElement("button");
     this.alertsBtn.style.position = "relative";
@@ -3463,7 +3528,7 @@ var TopbarControl = class {
     };
     this.leftActionsSep = sep();
     this.leftActionsSep.hidden = true;
-    const primaries = /* @__PURE__ */ new Set(["symbol", "timeframes", "style", "layout", "indicators"]);
+    const primaries = /* @__PURE__ */ new Set(["symbol", "compare", "timeframes", "style", "layout", "indicators"]);
     const pinSlot = (id, left) => {
       const slot = doc.createElement("span");
       slot.className = "vela-widget-action-pin";
@@ -3484,6 +3549,8 @@ var TopbarControl = class {
       switch (id) {
         case "symbol":
           return [this.symbolEl];
+        case "compare":
+          return overridden(id, left) ?? (compareBtn ? [compareBtn] : []);
         case "timeframes":
           return [tfGroup];
         case "style":
@@ -3510,14 +3577,25 @@ var TopbarControl = class {
     };
     const builtin = new Set(TOPBAR_BUILTIN_IDS);
     const sideEls = (list, left) => {
+      const entries2 = list.map((id) => ({ id, els: elementsFor(id, left) })).filter((e) => e.els.length > 0);
       const out = [];
-      for (const [i, id] of list.entries()) {
-        const els = elementsFor(id, left);
-        if (els.length === 0) continue;
+      for (const [i, entry] of entries2.entries()) {
+        const { id, els } = entry;
         const item = [...els];
-        if (primaries.has(id) && i < list.length - 1) item.push(sep());
+        const nextId = entries2[i + 1]?.id;
+        const prevId = entries2[i - 1]?.id;
+        const joinedWithCompare = id === "symbol" && nextId === "compare";
+        const trailingSep = primaries.has(id) && i < entries2.length - 1 && !joinedWithCompare ? sep() : null;
+        if (trailingSep) item.push(trailingSep);
         out.push(...item);
-        if (builtin.has(id) && id !== "actions") this.itemEls.set(id, item);
+        if (builtin.has(id) && id !== "actions") {
+          if (id === "compare" && prevId === "symbol" && trailingSep) {
+            this.itemEls.set(id, [...els]);
+            this.itemEls.get("symbol")?.push(trailingSep);
+          } else {
+            this.itemEls.set(id, item);
+          }
+        }
       }
       return out;
     };
@@ -3555,7 +3633,7 @@ var TopbarControl = class {
       host,
       i18n: opts.i18n ?? null,
       items: this.tfItems(),
-      onSelect: (id) => this.applyTimeframe(id),
+      onSelect: (id) => opts.onTimeframe(id),
       onFavorite: (id, on) => opts.onTimeframeFavorite?.(id, on),
       // Timeframe labels are two-or-three characters ("1m", "4h", "1D") — the
       // stylesheet's default min-width would leave the list mostly empty.
@@ -3584,40 +3662,45 @@ var TopbarControl = class {
     this.tfMenu.setItems(this.tfItems());
     this.renderTfChips();
   }
+  /** Grey out unavailable choices in the menu and omit them from the favorite chips. */
+  setUnavailableTimeframes(unavailable = []) {
+    this.unavailableTimeframes = new Set(unavailable);
+    this.tfMenu.setItems(this.tfItems());
+    this.renderTfChips();
+  }
   /** Reflect the favorite-timeframe set — the quick-switch chips and the dropdown stars. */
   setTimeframeFavorites(favs) {
     this.tfFavs = [...favs];
     this.renderTfChips();
     this.tfMenu.setItems(this.tfItems());
   }
-  /** Rebuild the quick-switch chips (current value changed, or the favorite set did). */
+  /** Rebuild the quick-switch chips when the current choice, favorites or availability change. */
   renderTfChips() {
     const doc = this.el.ownerDocument;
     this.tfChipsHost.replaceChildren();
     const stars = this.opts.onTimeframeFavorite !== void 0;
-    const chips2 = stars ? favoriteTimeframeChips(this.tfFavs).filter((tf) => this.timeframeValue(tf) !== null) : [];
-    const current = this.checkedTimeframe(chips2);
-    const shown = current !== void 0 || chips2.length === 0 ? chips2 : [...chips2, this.timeframe];
+    const chips2 = stars ? favoriteTimeframeChips(this.tfFavs.filter((tf) => !this.unavailableTimeframes.has(tf))) : [];
+    const currentIsFav = chips2.includes(this.timeframe);
+    const shown = currentIsFav || chips2.length === 0 ? chips2 : [...chips2, this.timeframe];
     for (const tf of shown) {
       const b = doc.createElement("button");
       b.className = "vela-widget-tf";
-      const label = this.timeframeDisplay(tf);
+      const label = timeframeLabel(tf, this.i18n);
       b.textContent = label;
-      if (tf === (current ?? this.timeframe)) {
+      if (tf === this.timeframe) {
         b.dataset.current = "1";
         b.setAttribute("aria-current", "true");
       } else {
         b.setAttribute("aria-label", this.t(TEXT2.switchTimeframe, { timeframe: label }));
-        b.addEventListener("click", () => this.applyTimeframe(tf));
+        b.addEventListener("click", () => (this.onFavoriteTimeframe ?? this.opts.onTimeframe)(tf));
       }
       this.tfChipsHost.appendChild(b);
     }
     this.tfCaret.replaceChildren();
     if (chips2.length === 0) {
       this.tfCaret.dataset.solo = "1";
-      const label = this.timeframeDisplay(this.timeframe);
-      this.tfCaret.append(doc.createTextNode(label), icons.iconEl("chevron-down", doc));
-      this.tfCaret.setAttribute("aria-label", this.t(TEXT2.currentTimeframe, { timeframe: label }));
+      this.tfCaret.append(doc.createTextNode(timeframeLabel(this.timeframe, this.i18n)), icons.iconEl("chevron-down", doc));
+      this.tfCaret.setAttribute("aria-label", this.t(TEXT2.currentTimeframe, { timeframe: timeframeLabel(this.timeframe, this.i18n) }));
     } else {
       delete this.tfCaret.dataset.solo;
       this.tfCaret.appendChild(icons.iconEl("chevron-down", doc));
@@ -3669,7 +3752,7 @@ var TopbarControl = class {
     this.actionsHost.replaceChildren();
     this.leftActionsHost.replaceChildren();
     for (const pin of this.pinned.values()) pin.host.replaceChildren();
-    for (const t33 of this.actionTooltips) t33.destroy();
+    for (const t34 of this.actionTooltips) t34.destroy();
     this.actionTooltips = [];
     const doc = this.actionsHost.ownerDocument;
     const flowLeft = this.comp.left.includes("actions");
@@ -3730,7 +3813,7 @@ var TopbarControl = class {
    * contributed panels on every `refreshActions()`), then pushes each pressed state.
    */
   setPanelButtons(buttons, onClick) {
-    for (const t33 of this.panelTooltips) t33.destroy();
+    for (const t34 of this.panelTooltips) t34.destroy();
     this.panelTooltips = [];
     this.panelBtns.clear();
     this.panelsHost.replaceChildren();
@@ -3754,7 +3837,7 @@ var TopbarControl = class {
     this.tfMenu.destroy();
     this.styleMenu.destroy();
     this.layoutPicker?.destroy();
-    for (const t33 of [...this.tooltips, ...this.panelTooltips, ...this.actionTooltips]) t33.destroy();
+    for (const t34 of [...this.tooltips, ...this.panelTooltips, ...this.actionTooltips]) t34.destroy();
     this.el.remove();
   }
   /** One icon-only tool button with its kit tooltip, parked in `sink` for disposal. */
@@ -3803,29 +3886,21 @@ var TopbarControl = class {
       if (dx) el.style.transform = `translateX(${dx}px)`;
     }
   }
-  timeframeValue(tf) {
-    return this.resolveTimeframe ? this.resolveTimeframe(tf) : tf;
-  }
-  applyTimeframe(tf) {
-    const value = this.timeframeValue(tf);
-    if (value !== null) this.opts.onTimeframe(value);
-  }
-  timeframeDisplay(tf) {
-    return this.resolveTimeframe ? workspaceTimeframeLabel(tf, this.i18n) : timeframeLabel(tf, this.i18n);
-  }
-  checkedTimeframe(options) {
-    return this.resolveTimeframe ? currentTimeframeChoice(options, this.timeframe, this.resolveTimeframe) : options.find((tf) => tf === this.timeframe);
-  }
   tfItems() {
     const stars = this.opts.onTimeframeFavorite !== void 0;
-    const current = this.checkedTimeframe(this.opts.timeframes);
+    let prevGroup = null;
     return this.opts.timeframes.map((tf) => {
+      const group = timeframeFamily(tf);
+      const separatorBefore = prevGroup !== null && group !== prevGroup;
+      prevGroup = group;
+      const disabled = this.unavailableTimeframes.has(tf);
       return {
         id: tf,
-        label: this.timeframeDisplay(tf),
-        checked: tf === current,
-        ...stars ? { favorite: this.tfFavs.includes(tf) } : {},
-        ...this.timeframeValue(tf) === null ? { disabled: true, title: this.t(TIMEFRAME_UNAVAILABLE) } : {}
+        label: timeframeLabel(tf, this.i18n),
+        checked: tf === this.timeframe,
+        ...separatorBefore ? { separatorBefore: true } : {},
+        ...disabled ? { disabled: true, title: this.t(TEXT2.timeframeUnavailable) } : {},
+        ...stars ? { favorite: this.tfFavs.includes(tf) } : {}
       };
     });
   }
@@ -3840,8 +3915,11 @@ var TopbarControl = class {
     }));
   }
 };
-function createWorkspaceTopbar(host, opts, resolve) {
-  return new TopbarControl(host, opts, resolve);
+function timeframeFamily(tf) {
+  const unit = parseTimeframe(tf).unit;
+  if (unit === "T") return "ticks";
+  if (unit === "S") return "seconds";
+  return "time";
 }
 
 // src/core/util/wall-clock.ts
@@ -3992,7 +4070,7 @@ function normalizeTimezone(zone) {
 }
 function timezoneMenuRows(current, i18n) {
   const active = normalizeTimezone(current);
-  const [utc, ...zones] = TIMEZONES.map((t33) => ({ value: t33.value, label: tzMenuLabel(t33.value, textOf(i18n, t33.name), i18n), checked: t33.value === active }));
+  const [utc, ...zones] = TIMEZONES.map((t34) => ({ value: t34.value, label: tzMenuLabel(t34.value, textOf(i18n, t34.name), i18n), checked: t34.value === active }));
   return [utc, { value: EXCHANGE_TIMEZONE, label: textOf(i18n, EXCHANGE_LABEL), checked: isExchangeTimezone(current) }, ...zones];
 }
 var EXCHANGE_LABEL = msg("timezone.exchange", "Exchange");
@@ -4561,9 +4639,9 @@ function distToSegment(px, py, ax, ay, bx, by) {
   const dy = by - ay;
   const len2 = dx * dx + dy * dy;
   if (len2 <= 1e-9) return Math.hypot(px - ax, py - ay);
-  let t33 = ((px - ax) * dx + (py - ay) * dy) / len2;
-  t33 = t33 < 0 ? 0 : t33 > 1 ? 1 : t33;
-  return Math.hypot(px - (ax + t33 * dx), py - (ay + t33 * dy));
+  let t34 = ((px - ax) * dx + (py - ay) * dy) / len2;
+  t34 = t34 < 0 ? 0 : t34 > 1 ? 1 : t34;
+  return Math.hypot(px - (ax + t34 * dx), py - (ay + t34 * dy));
 }
 function distToPolyline(px, py, pts) {
   let best = Infinity;
@@ -5240,14 +5318,14 @@ var CalloutBase = class extends Drawing {
   }
   /** The target tip + box-center pixels (drives the painter, hit-test, and the tip handle). */
   points(proj) {
-    const t33 = this.anchors[0];
+    const t34 = this.anchors[0];
     const c = this.anchors[1];
-    if (!t33 || !c) return null;
-    const ty = proj.yOf(t33.price, this.paneId);
+    if (!t34 || !c) return null;
+    const ty = proj.yOf(t34.price, this.paneId);
     const cy = proj.yOf(c.price, this.paneId);
     if (ty == null || cy == null) return null;
     return [
-      [proj.xOf(t33.time), ty],
+      [proj.xOf(t34.time), ty],
       [proj.xOf(c.time), cy]
     ];
   }
@@ -5268,11 +5346,11 @@ var CalloutBase = class extends Drawing {
   }
   /** A body drag moves only the box; the pointer tip stays pinned at its target. */
   translateBody(dt, dp, orig) {
-    const t33 = orig[0];
+    const t34 = orig[0];
     const b = orig[1];
-    if (!t33 || !b) return orig.map((o) => ({ time: o.time + dt, price: o.price + dp }));
+    if (!t34 || !b) return orig.map((o) => ({ time: o.time + dt, price: o.price + dp }));
     return [
-      { time: t33.time, price: t33.price },
+      { time: t34.time, price: t34.price },
       { time: b.time + dt, price: b.price + dp }
     ];
   }
@@ -5982,9 +6060,9 @@ function growValueArea(rows, poc, valueAreaFrac) {
   let total = 0;
   let maxTotal = 0;
   for (let k = 0; k < n; k += 1) {
-    const t33 = rows[k].up + rows[k].down;
-    total += t33;
-    if (t33 > maxTotal) maxTotal = t33;
+    const t34 = rows[k].up + rows[k].down;
+    total += t34;
+    if (t34 > maxTotal) maxTotal = t34;
   }
   const target = total * Math.min(1, Math.max(0, valueAreaFrac));
   let vaFrom = poc;
@@ -6018,9 +6096,9 @@ function findPoc(rows) {
   let maxTotal = 0;
   let poc = 0;
   for (let k = 0; k < rows.length; k += 1) {
-    const t33 = rows[k].up + rows[k].down;
-    if (t33 > maxTotal) {
-      maxTotal = t33;
+    const t34 = rows[k].up + rows[k].down;
+    if (t34 > maxTotal) {
+      maxTotal = t34;
       poc = k;
     }
   }
@@ -6559,8 +6637,8 @@ var Ellipse = class extends Drawing {
   perimeter(o) {
     const pts = [];
     for (let i = 0; i <= PERIM_SAMPLES; i += 1) {
-      const t33 = i / PERIM_SAMPLES * Math.PI * 2;
-      pts.push([o.cx + o.rx * Math.cos(t33), o.cy + o.ry * Math.sin(t33)]);
+      const t34 = i / PERIM_SAMPLES * Math.PI * 2;
+      pts.push([o.cx + o.rx * Math.cos(t34), o.cy + o.ry * Math.sin(t34)]);
     }
     return pts;
   }
@@ -6904,9 +6982,9 @@ var Arc = class extends SegmentDrawing {
     const h = Math.abs(off);
     const pts = [];
     for (let i = 0; i <= ARC_SAMPLES; i += 1) {
-      const t33 = i / ARC_SAMPLES * Math.PI;
-      const c = Math.cos(t33);
-      const s = Math.sin(t33);
+      const t34 = i / ARC_SAMPLES * Math.PI;
+      const c = Math.cos(t34);
+      const s = Math.sin(t34);
       pts.push([Mx + c * hx + s * h * nx, My + c * hy + s * h * ny]);
     }
     const segments = [];
@@ -6950,9 +7028,9 @@ var Curve = class extends SegmentDrawing {
     }
     const pts = [];
     for (let i = 0; i <= CURVE_SAMPLES; i += 1) {
-      const t33 = i / CURVE_SAMPLES;
-      const u = 1 - t33;
-      pts.push([u * u * P0[0] + 2 * u * t33 * C[0] + t33 * t33 * P2[0], u * u * P0[1] + 2 * u * t33 * C[1] + t33 * t33 * P2[1]]);
+      const t34 = i / CURVE_SAMPLES;
+      const u = 1 - t34;
+      pts.push([u * u * P0[0] + 2 * u * t34 * C[0] + t34 * t34 * P2[0], u * u * P0[1] + 2 * u * t34 * C[1] + t34 * t34 * P2[1]]);
     }
     const segments = [];
     for (let i = 1; i < pts.length; i += 1) segments.push([pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]]);
@@ -8352,9 +8430,9 @@ var DedekindTessellation = class extends Drawing {
       if (ks.length === 0) continue;
       const tLo = Math.floor(xMin) - 1;
       const tHi = Math.ceil(xMax) + 1;
-      for (let t33 = tLo; t33 <= tHi; t33 += 1) {
+      for (let t34 = tLo; t34 <= tHi; t34 += 1) {
         for (const k of ks) {
-          const c = k / n + t33;
+          const c = k / n + t34;
           if (c + r < xMin || c - r > xMax) continue;
           const cx = left + (c - x0) * unitPx;
           if (cx + rPx < left - 1 || cx - rPx > right + 1) continue;
@@ -9284,13 +9362,13 @@ var _PositionTool = class _PositionTool extends Drawing {
     const ex = proj.xOf(e.time);
     const ey = proj.yOf(e.price, this.paneId);
     if (ey == null) return;
-    const t33 = this.anchors[1];
-    const ty = t33 ? proj.yOf(t33.price, this.paneId) : null;
+    const t34 = this.anchors[1];
+    const ty = t34 ? proj.yOf(t34.price, this.paneId) : null;
     let targetPx;
     let endPx;
-    if (t33 && ty != null && Math.abs(ty - ey) >= _PositionTool.MIN_DRAG_PX) {
+    if (t34 && ty != null && Math.abs(ty - ey) >= _PositionTool.MIN_DRAG_PX) {
       targetPx = ty;
-      endPx = ex + Math.max(Math.abs(proj.xOf(t33.time) - ex), _PositionTool.MIN_WIDTH_PX);
+      endPx = ex + Math.max(Math.abs(proj.xOf(t34.time) - ex), _PositionTool.MIN_WIDTH_PX);
     } else {
       targetPx = ey - _PositionTool.DEFAULT_RISK_PX * _PositionTool.DEFAULT_RR;
       endPx = ex + _PositionTool.DEFAULT_WIDTH_PX;
@@ -10844,28 +10922,28 @@ function groupTokenIndex(pane, groupId, memberSlot) {
   return at;
 }
 function placeTokens(tokens, dragged, at) {
-  const isDragged = (t33) => dragged.some((d) => sameToken(d, t33));
+  const isDragged = (t34) => dragged.some((d) => sameToken(d, t34));
   let adjusted = at;
-  tokens.forEach((t33, i) => {
-    if (i < at && isDragged(t33)) adjusted -= 1;
+  tokens.forEach((t34, i) => {
+    if (i < at && isDragged(t34)) adjusted -= 1;
   });
-  const rest = tokens.filter((t33) => !isDragged(t33));
+  const rest = tokens.filter((t34) => !isDragged(t34));
   rest.splice(Math.max(0, Math.min(adjusted, rest.length)), 0, ...dragged);
   return rest;
 }
 function tokensEqual(a, b) {
-  return a.length === b.length && a.every((t33, i) => sameToken(t33, b[i]));
+  return a.length === b.length && a.every((t34, i) => sameToken(t34, b[i]));
 }
 function stackWrites(tokens) {
   const n = tokens.length;
   let candleZ = null;
   const series = [];
   const drawings = [];
-  tokens.forEach((t33, i) => {
+  tokens.forEach((t34, i) => {
     const z = n - i;
-    if (t33.kind === "price") candleZ = z;
-    else if (t33.kind === "indicator") series.push({ id: t33.id, z });
-    else drawings.push({ id: t33.id, z });
+    if (t34.kind === "price") candleZ = z;
+    else if (t34.kind === "indicator") series.push({ id: t34.id, z });
+    else drawings.push({ id: t34.id, z });
   });
   return { candleZ, series, drawings };
 }
@@ -12151,11 +12229,11 @@ var ObjectTree = class extends SidePanel {
     name.title = label;
     el.append(icon2, name);
     if (tag) {
-      const t33 = doc.createElement("span");
-      t33.className = "vela-ot-tag";
-      t33.textContent = tag;
-      t33.title = this.t(TEXT6.ownScaleHint);
-      el.appendChild(t33);
+      const t34 = doc.createElement("span");
+      t34.className = "vela-ot-tag";
+      t34.textContent = tag;
+      t34.title = this.t(TEXT6.ownScaleHint);
+      el.appendChild(t34);
     }
     const acts = doc.createElement("span");
     acts.className = "vela-ot-acts";
@@ -12433,7 +12511,7 @@ var ObjectTree = class extends SidePanel {
       this.groups = drop.kind === "intoGroup" ? assignToGroup(this.groups, drop.groupId, [drag.id]) : removeFromGroups(this.groups, [drag.id]);
     }
     const live = new Map(chart.drawings.all().map((d) => [d.id, d]));
-    const draggedIds = new Set(dragged.flatMap((t33) => t33.kind === "drawing" ? [t33.id] : []));
+    const draggedIds = new Set(dragged.flatMap((t34) => t34.kind === "drawing" ? [t34.id] : []));
     const repaned = [...draggedIds].some((id) => live.get(id)?.paneId !== drop.paneId);
     if (tokensEqual(tokens, placed) && !repaned) return;
     this.writeStack(pass, drop.paneId, placed, draggedIds);
@@ -12761,14 +12839,14 @@ var CSS6 = css.css`@layer vela.chrome {
 var REFRESH_EVENTS2 = ["bar", "context:changed", "indicator:added", "indicator:removed", "indicator:visibility", "indicator:moved", "pane:changed", "market:changed", "history:complete"];
 var EM_DASH = "—";
 function dataWindowSections(readout, i18n) {
-  const t33 = (m) => textOf(i18n, m);
+  const t34 = (m) => textOf(i18n, m);
   const sections = [];
   if (readout.date || readout.time) {
     sections.push({
-      title: t33(TEXT7.timeSection),
+      title: t34(TEXT7.timeSection),
       lines: [
-        { label: t33(TEXT7.date), value: readout.date || EM_DASH, color: "" },
-        { label: t33(TEXT7.time), value: readout.time || EM_DASH, color: "" }
+        { label: t34(TEXT7.date), value: readout.date || EM_DASH, color: "" },
+        { label: t34(TEXT7.time), value: readout.time || EM_DASH, color: "" }
       ]
     });
   }
@@ -12776,13 +12854,13 @@ function dataWindowSections(readout, i18n) {
   if (ohlc) {
     const color = ohlc.up ? "var(--vela-up)" : "var(--vela-down)";
     const lines = [
-      { label: t33(TEXT7.open), value: ohlc.o, color },
-      { label: t33(TEXT7.high), value: ohlc.h, color },
-      { label: t33(TEXT7.low), value: ohlc.l, color },
-      { label: t33(TEXT7.close), value: ohlc.c, color }
+      { label: t34(TEXT7.open), value: ohlc.o, color },
+      { label: t34(TEXT7.high), value: ohlc.h, color },
+      { label: t34(TEXT7.low), value: ohlc.l, color },
+      { label: t34(TEXT7.close), value: ohlc.c, color }
     ];
-    if (ohlc.vol !== void 0) lines.push({ label: t33(TEXT7.volume), value: ohlc.vol, color });
-    sections.push({ title: t33(TEXT7.priceSection), lines });
+    if (ohlc.vol !== void 0) lines.push({ label: t34(TEXT7.volume), value: ohlc.vol, color });
+    sections.push({ title: t34(TEXT7.priceSection), lines });
   }
   for (const group of readout.groups) {
     sections.push({ title: group.name, lines: group.rows.map((r) => ({ label: r.label, value: r.value, color: r.color })) });
@@ -12911,7 +12989,7 @@ var PanelDock = class {
       try {
         const header = {
           slot: panel.headerSlot,
-          setTitle: (t33) => panel.setTitle(t33),
+          setTitle: (t34) => panel.setTitle(t34),
           get maximized() {
             return panel.maximized;
           },
@@ -13075,8 +13153,8 @@ var TOP_TICKERS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEU
 function parseQuery(raw, venues) {
   const m = raw.match(/^\s*([^\s:]+)\s*[:\s]\s*(.*)$/);
   if (m) {
-    const t33 = m[1].toLowerCase();
-    const scope = venues.includes(t33) ? t33 : onlyOne(venues.filter((v) => v.startsWith(t33)));
+    const t34 = m[1].toLowerCase();
+    const scope = venues.includes(t34) ? t34 : onlyOne(venues.filter((v) => v.startsWith(t34)));
     if (scope) return { scope, term: m[2].trim() };
   }
   return { scope: null, term: raw.trim() };
@@ -13094,7 +13172,7 @@ function filterSymbols(list, query, limit = 100, top = TOP_TICKERS) {
     if (scope) return [...pool].sort((a, b) => a.ticker.localeCompare(b.ticker)).slice(0, limit);
     if (top === false) return pool.slice(0, limit);
     const byTicker = new Map(pool.map((s) => [s.ticker.toUpperCase(), s]));
-    const pinned = top.map((t33) => byTicker.get(t33)).filter((s) => s !== void 0);
+    const pinned = top.map((t34) => byTicker.get(t34)).filter((s) => s !== void 0);
     const rest = pool.filter((s) => !top.includes(s.ticker.toUpperCase()));
     return [...pinned, ...rest].slice(0, limit);
   }
@@ -13104,9 +13182,9 @@ function filterSymbols(list, query, limit = 100, top = TOP_TICKERS) {
   const desc = [];
   const venue = [];
   for (const s of pool) {
-    const t33 = s.ticker.toUpperCase();
-    if (t33.startsWith(q)) prefix.push(s);
-    else if (t33.includes(q)) substr.push(s);
+    const t34 = s.ticker.toUpperCase();
+    if (t34.startsWith(q)) prefix.push(s);
+    else if (t34.includes(q)) substr.push(s);
     else if ((s.description ?? "").toUpperCase().includes(q)) desc.push(s);
     else if (!scope && (venueOf(s)?.toLowerCase().includes(qLower) || s.provider?.toLowerCase().includes(qLower))) venue.push(s);
     if (prefix.length >= limit) break;
@@ -13285,6 +13363,13 @@ var SymbolPicker = class {
     /** The ranked pool cache — `key` fingerprints the raw pool the ranking ran on. */
     this.ranked = null;
     this.ranking = false;
+    /** The dialog is showing, by its own open/close callbacks (set before the open-time
+     *  rebuild runs). A ranking that lands while it is closed repaints nothing: the next
+     *  open rebuilds the rows, so no row icons load for a list nobody sees. */
+    this.shown = false;
+    /** One-shot selection override when opened for an indicator's symbol input rather than
+     *  the main chart; cleared as soon as the dialog closes. */
+    this.pickOverride = null;
     for (const category of opts.categories ?? SYMBOL_PICKER_DEFAULT_CATEGORIES) {
       const { id } = category;
       if (!id.trim() || id === ALL_TAB_ID || this.categories.has(id)) continue;
@@ -13328,6 +13413,7 @@ var SymbolPicker = class {
       flush: true,
       content: (body) => body.append(head, this.list),
       onOpenChange: (open) => {
+        this.shown = open;
         if (open) {
           this.relabel();
           this.input.value = this.seed.toUpperCase();
@@ -13339,6 +13425,7 @@ var SymbolPicker = class {
           }, 0);
         } else {
           this.input.blur();
+          this.pickOverride = null;
         }
         opts.onOpenChange?.(open);
       }
@@ -13377,9 +13464,15 @@ var SymbolPicker = class {
   setSource(source) {
     this.source = source;
   }
-  open(initialQuery = "") {
+  open(initialQuery = "", opts) {
     this.seed = initialQuery;
+    this.pickOverride = opts?.onSelect ?? null;
     this.dialog.show();
+  }
+  /** True while open for a one-shot caller override (e.g. an indicator's symbol input)
+   *  rather than switching the active chart's symbol. */
+  get isPicking() {
+    return this.pickOverride !== null;
   }
   get isOpen() {
     return this.dialog.open;
@@ -13408,7 +13501,10 @@ var SymbolPicker = class {
     if (isGroupRow(s)) {
       target = this.categoryPool === null ? defaultMemberOf(this.pool(), s) ?? s : defaultMemberOf(this.categoryPool, s);
     }
-    if (target) this.select(target.ticker, target.prefix ?? target.provider, this.opts.onSelect);
+    if (!target) return;
+    const handler = this.pickOverride ?? this.opts.onSelect;
+    this.pickOverride = null;
+    this.select(target.ticker, target.prefix ?? target.provider, handler);
   }
   /** Expand/collapse a group row IN PLACE — same query, same page, same scroll; only
    *  the member rows under the group appear or go. */
@@ -13541,13 +13637,13 @@ var SymbolPicker = class {
     const av = tickerIconEl(doc, baseOf(s), s.ticker, "vela-sp-avatar", this.opts.iconFor?.(s));
     const main = doc.createElement("span");
     main.className = "vela-sp-main";
-    const t33 = doc.createElement("span");
-    t33.className = "vela-sp-ticker";
-    t33.textContent = s.ticker;
+    const t34 = doc.createElement("span");
+    t34.className = "vela-sp-ticker";
+    t34.textContent = s.ticker;
     const d = doc.createElement("span");
     d.className = "vela-sp-desc";
     d.textContent = s.description ?? (s.type ?? "");
-    main.append(t33, d);
+    main.append(t34, d);
     row2.append(av, main);
     if (isGroupRow(s)) {
       row2.dataset.group = "1";
@@ -13567,7 +13663,494 @@ var SymbolPicker = class {
     return row2;
   }
 };
+var TABS = [
+  { id: "all", label: msg("widget.symbolPicker.tab.all", "All") },
+  { id: "stocks", label: msg("widget.symbolPicker.tab.stocks", "Stocks") },
+  { id: "etfs", label: msg("widget.symbolPicker.tab.etfs", "ETFs") },
+  { id: "crypto", label: msg("widget.symbolPicker.tab.crypto", "Crypto") },
+  { id: "futures", label: msg("widget.symbolPicker.tab.futures", "Futures") },
+  { id: "forex", label: msg("widget.symbolPicker.tab.forex", "Forex") },
+  { id: "commodities", label: msg("widget.symbolPicker.tab.commodities", "Commodities") }
+];
+var TAB_TYPES = {
+  crypto: ["crypto"],
+  stocks: ["stock"],
+  etfs: ["etf"],
+  futures: ["futures", "root"],
+  forex: ["forex"],
+  commodities: ["commodity"]
+};
+var PLACEMENTS = [
+  { id: "same", label: msg("widget.comparePicker.placement.same", "Same % scale") },
+  { id: "new-scale", label: msg("widget.comparePicker.placement.newScale", "New price scale") },
+  { id: "new-pane", label: msg("widget.comparePicker.placement.newPane", "New pane") }
+];
 var TEXT9 = {
+  title: msg("widget.comparePicker.title", "Compare symbol"),
+  search: msg("widget.comparePicker.search", "Search symbol to compare…"),
+  noMatch: msg("widget.symbolPicker.noMatch", "No symbols match."),
+  empty: msg("widget.symbolPicker.empty", "No symbols available yet."),
+  showContracts: msg("widget.symbolPicker.showContracts", "Show contracts"),
+  remove: msg("widget.comparePicker.remove", "Remove comparison")
+};
+var TOP_TICKERS2 = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "LINKUSDT"];
+var PAGE2 = 100;
+var STYLE_ID8 = "vela-widget-comparepicker";
+var CSS8 = css.css`@layer vela.chrome {
+
+.vela-cp-head { flex: none; padding: ${t.t.space[4]} ${t.t.space[4]} 0; }
+.vela-cp-searchrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 40px;
+    padding: 0 12px;
+    background: ${t.t.surface.elev};
+    border: 1px solid ${t.t.border};
+    border-radius: ${t.t.radius.md};
+}
+.vela-cp-searchrow:focus-within { border-color: ${t.t.border.strong}; }
+.vela-cp-searchrow .vela-icon { color: ${t.t.fg.muted}; }
+.vela-cp-input {
+    flex: 1;
+    background: transparent;
+    color: ${t.t.fg};
+    border: none;
+    font-size: 14px;
+    outline: 2px solid transparent;
+    text-transform: uppercase;
+}
+.vela-cp-input::placeholder { text-transform: none; }
+.vela-cp-active {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-block-start: 10px;
+}
+.vela-cp-active:empty { display: none; }
+.vela-cp-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    padding-inline: 8px 4px;
+    border-radius: ${t.t.radius.sm};
+    background: ${t.t.surface.elev};
+    border: 1px solid ${t.t.border};
+    color: ${t.t.fg.bright};
+    font-size: 12px;
+    font-weight: 600;
+}
+.vela-cp-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex: none;
+}
+.vela-cp-chip-x {
+    all: unset;
+    box-sizing: border-box;
+    width: 18px;
+    height: 18px;
+    border-radius: ${t.t.radius.sm};
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: ${t.t.fg.muted};
+}
+.vela-cp-chip-x:hover { background: ${t.t.hover}; color: ${t.t.fg.bright}; }
+.vela-cp-chip-x .vela-icon { width: 12px; height: 12px; font-size: 12px; }
+.vela-cp-tabs { display: flex; gap: 14px; margin: 12px 2px 0; border-block-end: 1px solid ${t.t.border}; padding-block-end: 8px; }
+.vela-cp-list {
+    min-height: 0;
+    margin: ${t.t.space[2]} ${t.t.space[4]} ${t.t.space[4]};
+    max-height: 46vh;
+    overflow: auto;
+}
+[data-layout='mobile'] .vela-cp-tabs { overflow-x: auto; scrollbar-width: none; gap: 6px; }
+[data-layout='mobile'] .vela-cp-tabs::-webkit-scrollbar { display: none; }
+[data-layout='mobile'] .vela-cp-tabs > .vela-tab { flex: none; padding: 7px 10px; }
+[data-layout='mobile'] .vela-cp-list { flex: 1 1 auto; max-height: none; margin-block-end: 0; }
+.vela-cp-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 7px 10px;
+    border-radius: ${t.t.radius.md};
+    cursor: pointer;
+}
+.vela-cp-row:hover, .vela-cp-row[data-highlighted] { background: ${t.t.hover}; }
+.vela-cp-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: ${t.t.fg.onFill};
+    font-size: ${t.t.fontSize.md};
+    font-weight: 700;
+}
+.vela-cp-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.vela-cp-ticker { font-weight: 700; color: ${t.t.fg.bright}; font-size: 14px; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vela-cp-desc { color: ${t.t.fg.muted}; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vela-cp-badge {
+    flex: none;
+    padding: 2px 8px;
+    border-radius: ${t.t.radius.sm};
+    background: ${t.t.surface.elev};
+    border: 1px solid ${t.t.border};
+    color: ${t.t.fg.muted};
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+.vela-cp-actions {
+    display: none;
+    flex: none;
+    align-items: center;
+    gap: 4px;
+}
+.vela-cp-row:hover .vela-cp-actions { display: inline-flex; }
+.vela-cp-row:hover .vela-cp-badge { display: none; }
+[data-layout='mobile'] .vela-cp-row:hover .vela-cp-actions { display: none; }
+[data-layout='mobile'] .vela-cp-row:hover .vela-cp-badge { display: inline-flex; }
+.vela-cp-action {
+    all: unset;
+    box-sizing: border-box;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: ${t.t.radius.sm};
+    border: 1px solid ${t.t.border};
+    background: ${t.t.surface.elev};
+    color: ${t.t.fg};
+    font-size: 11px;
+    font-weight: 550;
+    white-space: nowrap;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+}
+.vela-cp-action:hover {
+    background: ${t.t.selected.bg};
+    color: ${t.t.selected.fg};
+    border-color: transparent;
+}
+.vela-cp-empty { padding: ${t.t.space[3]}; color: ${t.t.fg.muted}; text-align: center; }
+.vela-cp-expander {
+    all: unset;
+    box-sizing: border-box;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: ${t.t.radius.sm};
+    cursor: pointer;
+    color: ${t.t.fg.muted};
+}
+.vela-cp-expander:hover { background: ${t.t.surface.elev}; color: ${t.t.fg}; }
+.vela-cp-row[data-member] { padding-inline-start: 34px; }
+
+}`;
+var ComparePicker = class {
+  constructor(opts) {
+    this.opts = opts;
+    this.source = () => [];
+    this.rows = [];
+    this.highlighted = 0;
+    this.activeTab = "all";
+    this.visible = PAGE2;
+    this.exhausted = false;
+    this.expanded = /* @__PURE__ */ new Set();
+    this.ranked = null;
+    this.ranking = false;
+    this.shown = false;
+    this.focusTimer = null;
+    const doc = (opts.host ?? document.body).ownerDocument;
+    injectChromeStyles(STYLE_ID8, CSS8, doc);
+    this.input = doc.createElement("input");
+    this.input.className = "vela-cp-input";
+    this.input.placeholder = textOf(opts.i18n, TEXT9.search);
+    this.input.setAttribute("spellcheck", "false");
+    const searchRow = doc.createElement("div");
+    searchRow.className = "vela-cp-searchrow";
+    searchRow.append(icons.iconEl("search", doc), this.input);
+    this.activeEl = doc.createElement("div");
+    this.activeEl.className = "vela-cp-active";
+    this.tabs = tabs.createTabs({
+      variant: "filled",
+      className: "vela-cp-tabs",
+      items: TABS.map((tab) => ({ value: tab.id, label: textOf(opts.i18n, tab.label) })),
+      defaultValue: this.activeTab,
+      onValueChange: (id) => {
+        this.activeTab = id;
+        this.refresh();
+      }
+    });
+    const head = doc.createElement("div");
+    head.className = "vela-cp-head";
+    head.append(searchRow, this.activeEl, this.tabs.el);
+    this.list = doc.createElement("div");
+    this.list.className = "vela-cp-list";
+    this.list.addEventListener("scroll", () => {
+      if (this.exhausted) return;
+      if (this.list.scrollTop + this.list.clientHeight < this.list.scrollHeight - 200) return;
+      this.visible += PAGE2;
+      this.grow();
+    });
+    this.dialog = new dialog.Dialog({
+      title: textOf(opts.i18n, TEXT9.title),
+      ...opts.i18n ? { i18n: opts.i18n } : {},
+      host: opts.host,
+      closeOnInteractOutside: true,
+      flush: true,
+      content: (body) => body.append(head, this.list),
+      onOpenChange: (open) => {
+        this.shown = open;
+        if (open) {
+          this.relabel();
+          this.input.value = "";
+          this.renderActive();
+          this.refresh();
+          if (this.focusTimer !== null) clearTimeout(this.focusTimer);
+          this.focusTimer = setTimeout(() => {
+            this.focusTimer = null;
+            if (this.shown) this.input.focus();
+          }, 0);
+        } else {
+          if (this.focusTimer !== null) {
+            clearTimeout(this.focusTimer);
+            this.focusTimer = null;
+          }
+          this.input.blur();
+        }
+        opts.onOpenChange?.(open);
+      }
+    });
+    this.input.addEventListener("input", () => {
+      const next = this.input.value.toUpperCase();
+      if (this.input.value !== next) {
+        const start = this.input.selectionStart;
+        const end = this.input.selectionEnd;
+        this.input.value = next;
+        if (start != null && end != null) this.input.setSelectionRange(start, end);
+      }
+      this.refresh();
+    });
+    this.input.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown") this.moveHighlight(1);
+      else if (e.key === "ArrowUp") this.moveHighlight(-1);
+      else if (e.key === "Enter") {
+        const pick = this.rows[this.highlighted];
+        if (pick) this.pick(pick, "same");
+        return;
+      } else return;
+      e.preventDefault();
+    });
+    this.list.addEventListener("click", (e) => {
+      const target = e.target;
+      const row2 = target.closest(".vela-cp-row");
+      if (!row2) return;
+      const s = this.rows[Number(row2.dataset.i)];
+      if (!s) return;
+      if (target.closest(".vela-cp-expander")) {
+        this.toggleExpand(s);
+        return;
+      }
+      const actionBtn = target.closest(".vela-cp-action");
+      const placement = actionBtn?.dataset.placement ?? "same";
+      this.pick(s, placement);
+    });
+  }
+  setSource(source) {
+    this.source = source;
+  }
+  open() {
+    this.dialog.show();
+  }
+  close() {
+    this.dialog.hide();
+  }
+  get isOpen() {
+    return this.dialog.open;
+  }
+  destroy() {
+    this.shown = false;
+    if (this.focusTimer !== null) {
+      clearTimeout(this.focusTimer);
+      this.focusTimer = null;
+    }
+    this.tabs.destroy();
+    this.dialog.destroy();
+  }
+  relabel() {
+    const i18n = this.opts.i18n;
+    this.dialog.titleEl.textContent = textOf(i18n, TEXT9.title);
+    this.dialog.setI18n(i18n ?? null);
+    this.input.placeholder = textOf(i18n, TEXT9.search);
+    this.tabs.setItems(TABS.map((tab) => ({ value: tab.id, label: textOf(i18n, tab.label) })));
+  }
+  renderActive() {
+    const doc = this.activeEl.ownerDocument;
+    this.activeEl.replaceChildren();
+    const items = this.opts.activeItems?.() ?? [];
+    for (const item of items) {
+      const chip = doc.createElement("span");
+      chip.className = "vela-cp-chip";
+      chip.dataset.compareId = item.id;
+      const dot = doc.createElement("span");
+      dot.className = "vela-cp-dot";
+      dot.style.background = item.color;
+      const label = doc.createElement("span");
+      label.textContent = item.title;
+      const x = doc.createElement("button");
+      x.type = "button";
+      x.className = "vela-cp-chip-x";
+      x.setAttribute("aria-label", textOf(this.opts.i18n, TEXT9.remove));
+      x.appendChild(icons.iconEl("close", doc));
+      x.addEventListener("click", () => {
+        this.opts.onRemove?.(item.id);
+        this.renderActive();
+      });
+      chip.append(dot, label, x);
+      this.activeEl.appendChild(chip);
+    }
+  }
+  pick(s, placement) {
+    const target = isGroupRow(s) ? defaultMemberOf(this.pool(), s) ?? s : s;
+    const venue = target.prefix ?? target.provider;
+    const canonical2 = venue ? `${venue}:${target.ticker}` : target.ticker;
+    this.close();
+    this.opts.onAdd(canonical2, placement);
+  }
+  toggleExpand(s) {
+    const key = groupKeyOf(s);
+    if (!this.expanded.delete(key)) this.expanded.add(key);
+    const scrollTop = this.list.scrollTop;
+    const focus = this.rows[this.highlighted];
+    this.rows = this.computeRows();
+    this.list.replaceChildren();
+    this.rows.forEach((r, i) => this.list.appendChild(this.rowEl(r, i)));
+    const at = focus ? this.rows.indexOf(focus) : -1;
+    this.highlighted = at >= 0 ? at : Math.min(this.highlighted, Math.max(0, this.rows.length - 1));
+    this.renderHighlight();
+    this.list.scrollTop = scrollTop;
+  }
+  moveHighlight(delta) {
+    if (!this.rows.length) return;
+    this.highlighted = Math.min(this.rows.length - 1, Math.max(0, this.highlighted + delta));
+    this.renderHighlight();
+  }
+  renderHighlight() {
+    [...this.list.children].forEach((el, i) => {
+      if (i === this.highlighted) {
+        el.dataset.highlighted = "1";
+        el.scrollIntoView({ block: "nearest" });
+      } else delete el.dataset.highlighted;
+    });
+  }
+  pool() {
+    const raw = this.source();
+    return raw;
+  }
+  computeRows() {
+    const all = this.pool();
+    const tab = this.activeTab;
+    const pool = tab === "all" ? all : all.filter((s) => TAB_TYPES[tab].includes((s.type ?? "").toLowerCase()) || tab === "crypto" && (s.type ?? "").toLowerCase() === "futures");
+    const filtered = filterSymbols(pool, this.input.value, this.visible, TOP_TICKERS2);
+    this.exhausted = filtered.length < this.visible;
+    const folded = foldGroups(filtered);
+    if (!this.expanded.size) return folded;
+    const keyOf = (s) => `${(s.prefix ?? s.provider ?? "").toLowerCase()}:${s.ticker.toUpperCase()}`;
+    const present = new Set(folded.map(keyOf));
+    const out = [];
+    for (const s of folded) {
+      out.push(s);
+      if (!isGroupRow(s) || !this.expanded.has(groupKeyOf(s))) continue;
+      for (const m of groupMembers(all, s)) {
+        if (present.has(keyOf(m))) continue;
+        present.add(keyOf(m));
+        out.push(m);
+      }
+    }
+    return out;
+  }
+  refresh() {
+    const doc = this.list.ownerDocument;
+    this.visible = PAGE2;
+    this.rows = this.computeRows();
+    this.highlighted = 0;
+    this.list.replaceChildren();
+    if (!this.rows.length) {
+      const empty = doc.createElement("div");
+      empty.className = "vela-cp-empty";
+      empty.textContent = textOf(this.opts.i18n, this.input.value ? TEXT9.noMatch : TEXT9.empty);
+      this.list.appendChild(empty);
+      return;
+    }
+    this.rows.forEach((s, i) => this.list.appendChild(this.rowEl(s, i)));
+    this.renderHighlight();
+  }
+  grow() {
+    const already = this.rows.length;
+    this.rows = this.computeRows();
+    this.rows.slice(already).forEach((s, j) => this.list.appendChild(this.rowEl(s, already + j)));
+  }
+  rowEl(s, i) {
+    const doc = this.list.ownerDocument;
+    const row2 = doc.createElement("div");
+    row2.className = "vela-cp-row";
+    row2.dataset.i = String(i);
+    row2.dataset.ticker = s.ticker;
+    const venue = s.prefix ?? s.provider;
+    if (venue) row2.dataset.venue = venue;
+    const av = tickerIconEl(doc, baseOf(s), s.ticker, "vela-cp-avatar", this.opts.iconFor?.(s));
+    const main = doc.createElement("span");
+    main.className = "vela-cp-main";
+    const ticker = doc.createElement("span");
+    ticker.className = "vela-cp-ticker";
+    ticker.textContent = s.ticker;
+    const desc = doc.createElement("span");
+    desc.className = "vela-cp-desc";
+    desc.textContent = s.description ?? (s.type ?? "");
+    main.append(ticker, desc);
+    row2.append(av, main);
+    if (isGroupRow(s)) {
+      row2.dataset.group = "1";
+      const expander = doc.createElement("button");
+      expander.type = "button";
+      expander.className = "vela-cp-expander";
+      expander.setAttribute("aria-label", textOf(this.opts.i18n, TEXT9.showContracts));
+      expander.appendChild(icons.iconEl(this.expanded.has(groupKeyOf(s)) ? "chevron-down" : "chevron-right", doc));
+      row2.appendChild(expander);
+    } else if (s.group != null && this.expanded.has(groupKeyOf(s))) row2.dataset.member = "1";
+    const actions = doc.createElement("span");
+    actions.className = "vela-cp-actions";
+    for (const p of PLACEMENTS) {
+      const btn = doc.createElement("button");
+      btn.type = "button";
+      btn.className = "vela-cp-action";
+      btn.dataset.placement = p.id;
+      btn.textContent = textOf(this.opts.i18n, p.label);
+      actions.appendChild(btn);
+    }
+    row2.appendChild(actions);
+    if (venue) {
+      const badge = doc.createElement("span");
+      badge.className = "vela-cp-badge";
+      badge.dataset.p = s.provider ?? venue;
+      badge.textContent = venue;
+      row2.appendChild(badge);
+    }
+    return row2;
+  }
+};
+var TEXT10 = {
   title: msg("widget.indicatorPicker.title", "Indicators"),
   search: msg("widget.indicatorPicker.search", "Search…"),
   beta: msg("widget.indicatorPicker.beta", "beta"),
@@ -13578,8 +14161,8 @@ var TEXT9 = {
   empty: msg("widget.indicatorPicker.empty", "No indicators in the manifest.")
 };
 var GENERAL = "General";
-var STYLE_ID8 = "vela-widget-indpicker";
-var CSS8 = css.css`@layer vela.chrome {
+var STYLE_ID9 = "vela-widget-indpicker";
+var CSS9 = css.css`@layer vela.chrome {
 
 .vela-ip-searchrow {
     display: flex;
@@ -13657,10 +14240,10 @@ var IndicatorPicker = class {
     this.isOpen = false;
     this.opts = opts;
     const doc = (opts.host ?? document.body).ownerDocument;
-    injectChromeStyles(STYLE_ID8, CSS8, doc);
+    injectChromeStyles(STYLE_ID9, CSS9, doc);
     this.search = doc.createElement("input");
     this.search.className = "vela-ip-search";
-    this.search.placeholder = this.t(TEXT9.search);
+    this.search.placeholder = this.t(TEXT10.search);
     this.search.spellcheck = false;
     this.search.addEventListener("input", () => this.refresh());
     const searchRow = doc.createElement("div");
@@ -13669,7 +14252,7 @@ var IndicatorPicker = class {
     this.list = doc.createElement("div");
     this.list.className = "vela-ip-list";
     this.dialog = new dialog.Dialog({
-      title: this.t(TEXT9.title),
+      title: this.t(TEXT10.title),
       ...opts.i18n ? { i18n: opts.i18n } : {},
       host: opts.host,
       draggable: true,
@@ -13704,9 +14287,9 @@ var IndicatorPicker = class {
   }
   /** The dialog's fixed text in the shell's language, re-read on every open. */
   relabel() {
-    this.dialog.titleEl.textContent = this.t(TEXT9.title);
+    this.dialog.titleEl.textContent = this.t(TEXT10.title);
     this.dialog.setI18n(this.opts.i18n ?? null);
-    this.search.placeholder = this.t(TEXT9.search);
+    this.search.placeholder = this.t(TEXT10.search);
   }
   t(text, values) {
     return textOf(this.opts.i18n, text, values);
@@ -13751,7 +14334,7 @@ var IndicatorPicker = class {
       if (r.beta) {
         const beta = doc.createElement("span");
         beta.className = "vela-ip-badge";
-        beta.textContent = this.t(TEXT9.beta);
+        beta.textContent = this.t(TEXT10.beta);
         row2.appendChild(beta);
       }
       if (opts.instance !== void 0) {
@@ -13765,7 +14348,7 @@ var IndicatorPicker = class {
         const trash = doc.createElement("button");
         trash.className = "vela-ip-trash";
         trash.appendChild(icons.iconEl("trash", doc));
-        trash.title = this.t(TEXT9.remove);
+        trash.title = this.t(TEXT10.remove);
         row2.appendChild(trash);
       }
       return row2;
@@ -13776,7 +14359,7 @@ var IndicatorPicker = class {
       card.className = "vela-ip-oncard";
       const title = doc.createElement("div");
       title.className = "vela-ip-group";
-      title.textContent = this.t(TEXT9.onChart, { count: onChart.length });
+      title.textContent = this.t(TEXT10.onChart, { count: onChart.length });
       card.appendChild(title);
       for (const [r, i] of onChart) card.appendChild(rowEl(r, { instance: i }));
       this.list.appendChild(card);
@@ -13792,20 +14375,20 @@ var IndicatorPicker = class {
     for (const [cat, bucket] of byCat) {
       const title = doc.createElement("div");
       title.className = "vela-ip-group";
-      title.textContent = cat === GENERAL ? this.t(TEXT9.general) : cat;
+      title.textContent = cat === GENERAL ? this.t(TEXT10.general) : cat;
       this.list.appendChild(title);
       for (const [r, i] of bucket) this.list.appendChild(rowEl(r, { library: i }));
     }
     if (!onChart.length && byCat.size === 0) {
       const empty = doc.createElement("div");
       empty.className = "vela-ip-empty";
-      empty.textContent = this.t(library.length ? TEXT9.noMatch : TEXT9.empty);
+      empty.textContent = this.t(library.length ? TEXT10.noMatch : TEXT10.empty);
       this.list.appendChild(empty);
     }
   }
 };
-var STYLE_ID9 = "vela-widget-tfquick";
-var CSS9 = css.css`@layer vela.chrome {
+var STYLE_ID10 = "vela-widget-tfquick";
+var CSS10 = css.css`@layer vela.chrome {
 
 .vela-tq-input {
     display: block;
@@ -13827,18 +14410,19 @@ var CSS9 = css.css`@layer vela.chrome {
 .vela-tq-hint[data-invalid] { color: ${t.t.danger}; }
 
 }`;
-var TEXT10 = {
+var TEXT11 = {
   title: msg("widget.timeframeQuick.title", "Change timeframe"),
   // The codes are what the field accepts, typed as is in every language.
   example: msg("widget.timeframeQuick.example", "e.g. 15, 4H, D, 3M"),
-  invalid: msg("widget.timeframeQuick.invalid", "Not a timeframe")
+  invalid: msg("widget.timeframeQuick.invalid", "Not a timeframe"),
+  unavailable: msg("widget.topbar.timeframeUnavailable", "Not available for this symbol")
 };
-var TimeframeQuickControl = class {
-  constructor(opts, resolveChoice) {
-    this.resolveChoice = resolveChoice;
+var TimeframeQuick = class {
+  constructor(opts, isAvailable) {
+    this.submission = 0;
     this.i18n = opts.i18n ?? null;
     const doc = (opts.host ?? document.body).ownerDocument;
-    injectChromeStyles(STYLE_ID9, CSS9, doc);
+    injectChromeStyles(STYLE_ID10, CSS10, doc);
     this.input = doc.createElement("input");
     this.input.className = "vela-tq-input";
     this.input.setAttribute("spellcheck", "false");
@@ -13846,7 +14430,7 @@ var TimeframeQuickControl = class {
     this.hint.className = "vela-tq-hint";
     this.hint.setAttribute("aria-live", "polite");
     this.dialog = new dialog.Dialog({
-      title: this.t(TEXT10.title),
+      title: this.t(TEXT11.title),
       ...this.i18n ? { i18n: this.i18n } : {},
       host: opts.host,
       draggable: true,
@@ -13860,16 +14444,23 @@ var TimeframeQuickControl = class {
       this.input.setSelectionRange(selectionStart, selectionEnd);
       this.renderHint();
     });
-    this.input.addEventListener("keydown", (e) => {
+    this.input.addEventListener("keydown", async (e) => {
       if (e.key !== "Enter") return;
       const parsed2 = parseTimeframe(this.input.value);
-      const choice = parsed2.canonical === void 0 ? null : this.resolveTimeframe(parsed2.canonical);
-      if (choice === null) {
-        this.renderHint();
-        return;
+      if (parsed2.valid && parsed2.canonical !== void 0) {
+        if (isAvailable) {
+          const submission = ++this.submission;
+          const available = await isAvailable(parsed2.canonical);
+          if (submission !== this.submission || !this.isOpen || available === void 0) return;
+          if (!available) {
+            this.hint.textContent = this.t(TEXT11.unavailable);
+            this.hint.dataset.invalid = "1";
+            return;
+          }
+        }
+        this.close();
+        opts.onApply(parsed2.canonical);
       }
-      this.close();
-      opts.onApply(choice);
     });
   }
   t(text) {
@@ -13877,7 +14468,7 @@ var TimeframeQuickControl = class {
   }
   /** The dialog's title in the shell's language, re-read on every open. */
   relabel() {
-    this.dialog.titleEl.textContent = this.t(TEXT10.title);
+    this.dialog.titleEl.textContent = this.t(TEXT11.title);
     this.dialog.setI18n(this.i18n);
     if (this.isOpen) this.renderHint();
   }
@@ -13909,19 +14500,18 @@ var TimeframeQuickControl = class {
     this.dialog.hide();
   }
   destroy() {
+    ++this.submission;
     this.dialog.destroy();
   }
-  resolveTimeframe(canonical2) {
-    return this.resolveChoice ? this.resolveChoice(this.input.value.trim(), canonical2) : canonical2;
-  }
   renderHint() {
+    ++this.submission;
     const raw = this.input.value.trim();
     const parsed2 = parseTimeframe(raw, this.i18n);
     if (!raw) {
-      this.hint.textContent = this.t(TEXT10.example);
+      this.hint.textContent = this.t(TEXT11.example);
       delete this.hint.dataset.invalid;
-    } else if (parsed2.canonical === void 0 || this.resolveTimeframe(parsed2.canonical) === null) {
-      this.hint.textContent = this.t(parsed2.valid ? TIMEFRAME_UNAVAILABLE : TEXT10.invalid);
+    } else if (!parsed2.valid) {
+      this.hint.textContent = this.t(TEXT11.invalid);
       this.hint.dataset.invalid = "1";
     } else {
       this.hint.textContent = parsed2.label ?? "";
@@ -13929,10 +14519,7 @@ var TimeframeQuickControl = class {
     }
   }
 };
-function createWorkspaceTimeframeQuick(opts, resolve) {
-  return new TimeframeQuickControl(opts, resolve);
-}
-var TEXT11 = {
+var TEXT12 = {
   title: msg("widget.shortcuts.title", "Keyboard shortcuts"),
   mouse: msg("widget.shortcuts.mouse", "Mouse"),
   scroll: msg("widget.shortcuts.scrollHistory", "Scroll through history"),
@@ -13944,8 +14531,8 @@ var TEXT11 = {
   typing: msg("widget.shortcuts.typing", "Typing a letter or 0 opens the symbol search; typing a digit from 1 to 9 opens the timeframe entry."),
   typingTimeframe: msg("widget.shortcuts.typingTimeframe", "Typing a digit from 1 to 9 opens the timeframe entry.")
 };
-var STYLE_ID10 = "vela-widget-shortcuts";
-var CSS10 = css.css`@layer vela.chrome {
+var STYLE_ID11 = "vela-widget-shortcuts";
+var CSS11 = css.css`@layer vela.chrome {
 
 .vela-sh-cat {
     color: ${t.t.fg.muted};
@@ -13975,10 +14562,10 @@ var ShortcutsHelp = class {
     this.i18n = i18n ?? englishTranslator;
     this.symbolMenuFromKey = opts.symbolMenuFromKey !== false;
     const doc = (host ?? document.body).ownerDocument;
-    injectChromeStyles(STYLE_ID10, CSS10, doc);
+    injectChromeStyles(STYLE_ID11, CSS11, doc);
     this.list = doc.createElement("div");
     this.dialog = new dialog.Dialog({
-      title: this.i18n().t(TEXT11.title),
+      title: this.i18n().t(TEXT12.title),
       i18n: this.i18n(),
       host,
       closeOnInteractOutside: true,
@@ -14001,8 +14588,8 @@ var ShortcutsHelp = class {
   refresh() {
     const doc = this.list.ownerDocument;
     const i18n = this.i18n();
-    const t33 = (m) => i18n.t(m);
-    this.dialog.titleEl.textContent = t33(TEXT11.title);
+    const t34 = (m) => i18n.t(m);
+    this.dialog.titleEl.textContent = t34(TEXT12.title);
     this.dialog.setI18n(i18n);
     this.list.replaceChildren();
     const addCategory = (text) => {
@@ -14038,18 +14625,18 @@ var ShortcutsHelp = class {
       addCategory(category);
       for (const b of bindings) addRow(b.label, b.display);
     }
-    addCategory(t33(TEXT11.mouse));
-    addRow(t33(TEXT11.scroll), [t33(TEXT11.scrollKeys)]);
-    addRow(t33(TEXT11.measure), [t33(TEXT11.measureKeys)]);
-    addRow(t33(TEXT11.erase), [t33(TEXT11.eraseKeys)]);
+    addCategory(t34(TEXT12.mouse));
+    addRow(t34(TEXT12.scroll), [t34(TEXT12.scrollKeys)]);
+    addRow(t34(TEXT12.measure), [t34(TEXT12.measureKeys)]);
+    addRow(t34(TEXT12.erase), [t34(TEXT12.eraseKeys)]);
     const s = doc.createElement("div");
     s.className = "vela-sh-static";
-    s.textContent = t33(this.symbolMenuFromKey ? TEXT11.typing : TEXT11.typingTimeframe);
+    s.textContent = t34(this.symbolMenuFromKey ? TEXT12.typing : TEXT12.typingTimeframe);
     this.list.appendChild(s);
   }
 };
-var STYLE_ID11 = "vela-widget-toast";
-var CSS11 = css.css`@layer vela.chrome {
+var STYLE_ID12 = "vela-widget-toast";
+var CSS12 = css.css`@layer vela.chrome {
 
 .vela-toast {
     position: absolute;
@@ -14081,7 +14668,7 @@ var CSS11 = css.css`@layer vela.chrome {
 var Toast = class {
   constructor(host) {
     this.timer = null;
-    injectChromeStyles(STYLE_ID11, CSS11, host.ownerDocument);
+    injectChromeStyles(STYLE_ID12, CSS12, host.ownerDocument);
     this.el = host.ownerDocument.createElement("div");
     this.el.className = "vela-toast";
     host.appendChild(this.el);
@@ -14288,12 +14875,12 @@ function composeSidebar(sources, comp = {}) {
   };
   return { top: lay(top), bottom: lay(bottom) };
 }
-var TEXT12 = {
+var TEXT13 = {
   sidebar: msg("vela.sidebar.label", "Sidebar")
 };
 var SIDEBAR_WIDTH_PX = 44;
-var STYLE_ID12 = "vela-sidebar";
-var CSS12 = css.css`@layer vela.chrome {
+var STYLE_ID13 = "vela-sidebar";
+var CSS13 = css.css`@layer vela.chrome {
 
 .vela-sidebar {
     order: 1;
@@ -14369,7 +14956,7 @@ var Sidebar = class {
     /** The shell finished building: the actions (which read the context) may show. */
     this.live = false;
     const doc = opts.host.ownerDocument;
-    injectChromeStyles(STYLE_ID12, CSS12, doc);
+    injectChromeStyles(STYLE_ID13, CSS13, doc);
     this.el = doc.createElement("nav");
     this.el.className = "vela-sidebar";
     this.topEl = doc.createElement("div");
@@ -14415,7 +15002,7 @@ var Sidebar = class {
   }
   /** Redraw from the dock's panels and the registered sidebar actions. */
   render() {
-    for (const t33 of this.tooltips) t33.destroy();
+    for (const t34 of this.tooltips) t34.destroy();
     this.tooltips = [];
     this.buttons.clear();
     const entries2 = [
@@ -14430,11 +15017,11 @@ var Sidebar = class {
     this.bottomEl.replaceChildren(...this.groups(layout.bottom));
   }
   relocalize() {
-    this.el.setAttribute("aria-label", this.t(TEXT12.sidebar));
+    this.el.setAttribute("aria-label", this.t(TEXT13.sidebar));
     this.render();
   }
   destroy() {
-    for (const t33 of this.tooltips) t33.destroy();
+    for (const t34 of this.tooltips) t34.destroy();
     this.tooltips = [];
     this.el.remove();
   }
@@ -14532,8 +15119,8 @@ var defaults5 = /* @__PURE__ */ new Map();
 function shellDefaults() {
   return Object.fromEntries(defaults5);
 }
-var STYLE_ID13 = "vela-widget-mobilebar";
-var CSS13 = css.css`@layer vela.chrome {
+var STYLE_ID14 = "vela-widget-mobilebar";
+var CSS14 = css.css`@layer vela.chrome {
 
 .vela-mobilebar {
     display: none;
@@ -14587,7 +15174,7 @@ var CSS13 = css.css`@layer vela.chrome {
 }
 
 }`;
-var TEXT13 = {
+var TEXT14 = {
   symbolSearch: msg("widget.mobileBar.symbolSearch", "Symbol search"),
   timeframe: msg("widget.mobileBar.timeframe", "Timeframe"),
   indicators: msg("widget.mobileBar.indicators", "Indicators"),
@@ -14604,7 +15191,7 @@ var MobileBar = class {
     this.maximizeActive = false;
     this.opts = opts;
     const doc = host.ownerDocument;
-    injectChromeStyles(STYLE_ID13, CSS13, doc);
+    injectChromeStyles(STYLE_ID14, CSS14, doc);
     this.el = doc.createElement("div");
     this.el.className = "vela-mobilebar";
     this.timeframe = opts.timeframe;
@@ -14617,21 +15204,21 @@ var MobileBar = class {
       b.addEventListener("click", onClick);
       return b;
     };
-    this.symbolEl = item("vela-mb-symbol", TEXT13.symbolSearch, opts.onSymbolClick);
+    this.symbolEl = item("vela-mb-symbol", TEXT14.symbolSearch, opts.onSymbolClick);
     this.symbolEl.textContent = parseSymbol(opts.symbol).ticker;
-    this.tfEl = item("vela-mb-tf", TEXT13.timeframe, opts.onTimeframeClick);
+    this.tfEl = item("vela-mb-tf", TEXT14.timeframe, opts.onTimeframeClick);
     this.tfEl.textContent = timeframeLabel(opts.timeframe, opts.i18n);
     const onIndicators = opts.onIndicatorsClick;
-    const indicators = onIndicators ? item("vela-mb-indicators", TEXT13.indicators, onIndicators, "indicators") : null;
+    const indicators = onIndicators ? item("vela-mb-indicators", TEXT14.indicators, onIndicators, "indicators") : null;
     this.indicatorsEl = indicators;
     this.actionsHost = doc.createElement("span");
     this.actionsHost.className = "vela-mb-actions";
     const onDrawings = opts.onDrawingsClick;
-    const drawings = onDrawings ? item("vela-mb-drawings", TEXT13.drawings, onDrawings, "pen") : null;
+    const drawings = onDrawings ? item("vela-mb-drawings", TEXT14.drawings, onDrawings, "pen") : null;
     const onMaximize = opts.onMaximizeClick;
-    this.maxEl = onMaximize ? item("vela-mb-maximize", TEXT13.maximizeChart, onMaximize, "maximize") : null;
-    const more = item("vela-mb-more", TEXT13.more, opts.onMoreClick, "kebab");
-    const settings = item("vela-mb-settings", TEXT13.chartSettings, opts.onSettingsClick, "gear");
+    this.maxEl = onMaximize ? item("vela-mb-maximize", TEXT14.maximizeChart, onMaximize, "maximize") : null;
+    const more = item("vela-mb-more", TEXT14.more, opts.onMoreClick, "kebab");
+    const settings = item("vela-mb-settings", TEXT14.chartSettings, opts.onSettingsClick, "gear");
     this.el.append(this.symbolEl, this.tfEl, ...indicators ? [indicators] : [], this.actionsHost, ...drawings ? [drawings] : [], ...this.maxEl ? [this.maxEl] : [], more, settings);
     host.appendChild(this.el);
     this.renderActions();
@@ -14687,7 +15274,7 @@ var MobileBar = class {
     if (!this.maxEl) return;
     this.maximizeActive = on;
     this.maxEl.classList.toggle("vela-mb-on", on);
-    this.maxEl.setAttribute("aria-label", this.t(on ? TEXT13.restoreLayout : TEXT13.maximizeChart));
+    this.maxEl.setAttribute("aria-label", this.t(on ? TEXT14.restoreLayout : TEXT14.maximizeChart));
     this.maxEl.replaceChildren(icons.iconEl(on ? "restore" : "maximize", this.el.ownerDocument));
   }
   /** Show the maximize stop only while the grid holds more than one chart — on a
@@ -14700,8 +15287,8 @@ var MobileBar = class {
     this.el.remove();
   }
 };
-var STYLE_ID14 = "vela-widget-tf-drawer";
-var CSS14 = css.css`@layer vela.chrome {
+var STYLE_ID15 = "vela-widget-tf-drawer";
+var CSS15 = css.css`@layer vela.chrome {
 
 .vela-tfd-heading {
     padding: 4px 2px 8px;
@@ -14711,8 +15298,6 @@ var CSS14 = css.css`@layer vela.chrome {
     text-transform: uppercase;
     color: ${t.t.fg.bright};
 }
-.vela-tfd-heading + .vela-tfd-ranges,
-.vela-tfd-heading + .vela-tfd-grid { padding-top: 0; }
 .vela-tfd-ranges {
     display: flex;
     gap: 6px;
@@ -14729,6 +15314,8 @@ var CSS14 = css.css`@layer vela.chrome {
     gap: 6px;
     padding-bottom: 4px;
 }
+.vela-tfd-heading + .vela-tfd-ranges,
+.vela-tfd-heading + .vela-tfd-grid { padding-top: 0; }
 .vela-tfd-chip {
     all: unset;
     box-sizing: border-box;
@@ -14747,8 +15334,8 @@ var CSS14 = css.css`@layer vela.chrome {
     -webkit-tap-highlight-color: transparent;
 }
 .vela-tfd-chip:disabled {
-    opacity: 0.45;
-    cursor: default;
+    opacity: 0.38;
+    cursor: not-allowed;
 }
 .vela-tfd-chip:enabled:active { background: ${t.t.hover}; }
 .vela-tfd-chip[data-active='1'] {
@@ -14758,7 +15345,7 @@ var CSS14 = css.css`@layer vela.chrome {
 }
 
 }`;
-var TEXT14 = {
+var TEXT15 = {
   dateRange: msg("widget.timeframeDrawer.dateRange", "Date Range"),
   timeframes: msg("widget.timeframeDrawer.timeframes", "Timeframes")
 };
@@ -14769,11 +15356,11 @@ var TimeframeDrawer = class {
     this.tfChips = /* @__PURE__ */ new Map();
     this.headings = [];
     const doc = opts.host.ownerDocument;
-    injectChromeStyles(STYLE_ID14, CSS14, doc);
+    injectChromeStyles(STYLE_ID15, CSS15, doc);
     this.drawer = new drawer.Drawer({ host: opts.host, onOpenChange: opts.onOpenChange });
     const rangeHeading = doc.createElement("div");
     rangeHeading.className = "vela-tfd-heading";
-    this.headings.push({ el: rangeHeading, text: TEXT14.dateRange });
+    this.headings.push({ el: rangeHeading, text: TEXT15.dateRange });
     const ranges = doc.createElement("div");
     ranges.className = "vela-tfd-ranges";
     for (const preset of opts.ranges) {
@@ -14789,16 +15376,15 @@ var TimeframeDrawer = class {
     }
     const tfHeading = doc.createElement("div");
     tfHeading.className = "vela-tfd-heading";
-    this.headings.push({ el: tfHeading, text: TEXT14.timeframes });
+    this.headings.push({ el: tfHeading, text: TEXT15.timeframes });
     const grid = doc.createElement("div");
     grid.className = "vela-tfd-grid";
     for (const tf of opts.timeframes) {
       const chip = doc.createElement("button");
       chip.className = "vela-tfd-chip";
       chip.addEventListener("click", () => {
-        const choice = opts.resolveTimeframe(tf);
-        if (choice === null) return;
-        opts.onTimeframe(choice);
+        if (chip.disabled) return;
+        opts.onTimeframe(tf);
         this.drawer.hide();
       });
       this.tfChips.set(tf, chip);
@@ -14812,7 +15398,7 @@ var TimeframeDrawer = class {
     const i18n = this.opts.i18n;
     for (const { el, text } of this.headings) el.textContent = textOf(i18n, text);
     for (const [id, chip] of this.rangeChips) chip.textContent = rangeLabel(id, i18n);
-    for (const [tf, chip] of this.tfChips) chip.textContent = workspaceTimeframeLabel(tf, i18n);
+    for (const [tf, chip] of this.tfChips) chip.textContent = timeframeLabel(tf, i18n);
   }
   open() {
     this.relabel();
@@ -14821,16 +15407,16 @@ var TimeframeDrawer = class {
   }
   refresh() {
     const tf = this.opts.currentTimeframe();
-    const current = currentTimeframeChoice(this.opts.timeframes, tf, this.opts.resolveTimeframe);
     const range = this.opts.activeRange();
+    const unavailable = new Set(this.opts.unavailableTimeframes?.() ?? []);
     for (const [id, chip] of this.rangeChips) {
       if (range !== null && id === range) chip.dataset.active = "1";
       else delete chip.dataset.active;
     }
     for (const [id, chip] of this.tfChips) {
-      chip.disabled = this.opts.resolveTimeframe(id) === null;
-      if (range === null && id === current) chip.dataset.active = "1";
+      if (range === null && id === tf) chip.dataset.active = "1";
       else delete chip.dataset.active;
+      chip.disabled = unavailable.has(id);
     }
   }
   close() {
@@ -14840,14 +15426,14 @@ var TimeframeDrawer = class {
     this.drawer.destroy();
   }
 };
-var TEXT15 = {
+var TEXT16 = {
   title: msg("widget.drawingsDrawer.title", "Drawings"),
   search: msg("widget.drawingsDrawer.search", "Search tools…"),
   favorite: msg("widget.drawingsDrawer.favorite", "Favorite {tool}"),
   noMatch: msg("widget.drawingsDrawer.noMatch", "No tools match.")
 };
-var STYLE_ID15 = "vela-widget-drawings-drawer";
-var CSS15 = css.css`@layer vela.chrome {
+var STYLE_ID16 = "vela-widget-drawings-drawer";
+var CSS16 = css.css`@layer vela.chrome {
 
 /* Search + tabs stay pinned while the tool list scrolls underneath. */
 .vela-dd-sticky {
@@ -14939,10 +15525,10 @@ var DrawingsDrawer = class {
     this.definition = { groups: [] };
     this.activeGroup = "";
     const doc = opts.host.ownerDocument;
-    injectChromeStyles(STYLE_ID15, CSS15, doc);
+    injectChromeStyles(STYLE_ID16, CSS16, doc);
     this.drawer = new drawer.Drawer({
       host: opts.host,
-      title: this.t(TEXT15.title),
+      title: this.t(TEXT16.title),
       onOpenChange: opts.onOpenChange,
       // Swiping across the tool list pages through the group tabs.
       onSwipe: (dir) => this.stepGroup(dir === "left" ? 1 : -1)
@@ -14954,7 +15540,7 @@ var DrawingsDrawer = class {
     search.appendChild(icons.iconEl("search", doc));
     this.input = doc.createElement("input");
     this.input.type = "text";
-    this.input.placeholder = this.t(TEXT15.search);
+    this.input.placeholder = this.t(TEXT16.search);
     this.input.addEventListener("input", () => this.renderList());
     search.appendChild(this.input);
     this.tabs = tabs.createTabs({
@@ -14980,8 +15566,8 @@ var DrawingsDrawer = class {
     return textOf(this.opts.i18n?.() ?? null, m, values);
   }
   open() {
-    this.drawer.setTitle(this.t(TEXT15.title));
-    this.input.placeholder = this.t(TEXT15.search);
+    this.drawer.setTitle(this.t(TEXT16.title));
+    this.input.placeholder = this.t(TEXT16.search);
     this.definition = this.opts.toolbar();
     if (!this.definition.groups.some((g) => g.id === this.activeGroup)) this.activeGroup = this.definition.groups[0]?.id ?? "";
     this.input.value = "";
@@ -15048,7 +15634,7 @@ var DrawingsDrawer = class {
         else delete star.dataset.on;
       };
       paintStar(this.opts.isFavorite(tool.type));
-      star.setAttribute("aria-label", this.t(TEXT15.favorite, { tool: this.t(tool.label) }));
+      star.setAttribute("aria-label", this.t(TEXT16.favorite, { tool: this.t(tool.label) }));
       star.addEventListener("click", (e) => {
         e.stopPropagation();
         const on = !this.opts.isFavorite(tool.type);
@@ -15065,7 +15651,7 @@ var DrawingsDrawer = class {
     if (query) {
       let any = false;
       for (const group2 of this.definition.groups) {
-        const hits = group2.tools.filter((t33) => lower(this.t(t33.label)).includes(query) || sourceText(t33.label).toLowerCase().includes(query));
+        const hits = group2.tools.filter((t34) => lower(this.t(t34.label)).includes(query) || sourceText(t34.label).toLowerCase().includes(query));
         if (hits.length === 0) continue;
         any = true;
         section(this.t(group2.label));
@@ -15074,7 +15660,7 @@ var DrawingsDrawer = class {
       if (!any) {
         const empty = doc.createElement("div");
         empty.className = "vela-dd-empty";
-        empty.textContent = this.t(TEXT15.noMatch);
+        empty.textContent = this.t(TEXT16.noMatch);
         this.list.appendChild(empty);
       }
       return;
@@ -15091,7 +15677,8 @@ var DrawingsDrawer = class {
     }
   }
 };
-var TEXT16 = {
+var TEXT17 = {
+  compare: msg("widget.moreDrawer.compare", "Compare symbol"),
   chartType: msg("widget.moreDrawer.chartType", "Chart type"),
   layout: msg("widget.moreDrawer.layout", "Layout"),
   alerts: msg("widget.moreDrawer.alerts", "Alerts"),
@@ -15102,8 +15689,8 @@ var TEXT16 = {
   noAlerts: msg("widget.moreDrawer.noAlerts", "No alerts yet."),
   alert: msg("widget.moreDrawer.alert", "{title}: {message}")
 };
-var STYLE_ID16 = "vela-widget-more-drawer";
-var CSS16 = css.css`@layer vela.chrome {
+var STYLE_ID17 = "vela-widget-more-drawer";
+var CSS17 = css.css`@layer vela.chrome {
 
 .vela-md-actions {
     display: flex;
@@ -15183,7 +15770,7 @@ var MoreDrawer = class {
   constructor(opts) {
     this.opts = opts;
     this.view = "main";
-    injectChromeStyles(STYLE_ID16, CSS16, opts.host.ownerDocument);
+    injectChromeStyles(STYLE_ID17, CSS17, opts.host.ownerDocument);
     this.drawer = new drawer.Drawer({ host: opts.host, onOpenChange: opts.onOpenChange });
   }
   open() {
@@ -15211,7 +15798,7 @@ var MoreDrawer = class {
       const back = doc.createElement("button");
       back.className = "vela-md-back";
       back.appendChild(icons.iconEl("chevron-left", doc));
-      back.appendChild(doc.createTextNode(this.t(this.view === "style" ? TEXT16.chartType : this.view === "layout" ? TEXT16.layout : TEXT16.alerts)));
+      back.appendChild(doc.createTextNode(this.t(this.view === "style" ? TEXT17.chartType : this.view === "layout" ? TEXT17.layout : TEXT17.alerts)));
       back.addEventListener("click", () => this.show("main"));
       this.drawer.body.appendChild(back);
     }
@@ -15264,18 +15851,29 @@ var MoreDrawer = class {
       });
       actions.appendChild(b);
     };
-    if (this.opts.onUndo) action("undo", TEXT16.undo, this.opts.canUndo(), this.opts.onUndo);
-    if (this.opts.onRedo) action("redo", TEXT16.redo, this.opts.canRedo(), this.opts.onRedo);
-    if (this.opts.onScreenshot) action("camera", TEXT16.screenshot, true, this.opts.onScreenshot);
+    if (this.opts.onUndo) action("undo", TEXT17.undo, this.opts.canUndo(), this.opts.onUndo);
+    if (this.opts.onRedo) action("redo", TEXT17.redo, this.opts.canRedo(), this.opts.onRedo);
+    if (this.opts.onScreenshot) action("camera", TEXT17.screenshot, true, this.opts.onScreenshot);
     if (actions.childElementCount > 0) this.drawer.body.appendChild(actions);
     const list = doc.createElement("div");
     list.className = "vela-md-list";
+    if (this.opts.onCompare) {
+      list.appendChild(
+        this.row(doc, this.t(TEXT17.compare), {
+          icon: "circle-plus",
+          onClick: () => {
+            this.drawer.hide();
+            this.opts.onCompare?.();
+          }
+        })
+      );
+    }
     const current = this.opts.priceStyles().find((s) => s.id === this.opts.priceStyle());
-    list.appendChild(this.row(doc, this.t(TEXT16.chartType), { icon: "style-line", value: current?.label, chevron: true, onClick: () => this.show("style") }));
+    list.appendChild(this.row(doc, this.t(TEXT17.chartType), { icon: "style-line", value: current?.label, chevron: true, onClick: () => this.show("style") }));
     if (this.opts.layout) {
       const shape = this.opts.layout.shape();
       const value = shape ? layoutGridLabel(shape.cols, shape.rows, this.opts.i18n) : this.opts.layout.presets().find((p) => p.checked)?.label;
-      list.appendChild(this.row(doc, this.t(TEXT16.layout), { icon: "layout", glyph: this.opts.layout.glyph?.(), value, chevron: true, onClick: () => this.show("layout") }));
+      list.appendChild(this.row(doc, this.t(TEXT17.layout), { icon: "layout", glyph: this.opts.layout.glyph?.(), value, chevron: true, onClick: () => this.show("layout") }));
     }
     for (const act of this.opts.primaryActions?.() ?? []) list.appendChild(this.actionRow(doc, act));
     for (const panel of this.opts.panels()) {
@@ -15291,7 +15889,7 @@ var MoreDrawer = class {
     }
     if (this.opts.alerts) {
       const alertCount = this.opts.alerts().length;
-      list.appendChild(this.row(doc, this.t(TEXT16.alerts), { icon: "bell", value: alertCount > 0 ? String(alertCount) : void 0, chevron: true, onClick: () => this.show("alerts") }));
+      list.appendChild(this.row(doc, this.t(TEXT17.alerts), { icon: "bell", value: alertCount > 0 ? String(alertCount) : void 0, chevron: true, onClick: () => this.show("alerts") }));
     }
     for (const act of this.opts.actions()) list.appendChild(this.actionRow(doc, act));
     this.drawer.body.appendChild(list);
@@ -15358,7 +15956,7 @@ var MoreDrawer = class {
     if (syncs.length > 0) {
       const heading = doc.createElement("div");
       heading.className = "vela-md-section";
-      heading.textContent = this.t(TEXT16.sync);
+      heading.textContent = this.t(TEXT17.sync);
       list.appendChild(heading);
       for (const s of syncs) {
         list.appendChild(
@@ -15379,23 +15977,23 @@ var MoreDrawer = class {
     if (alerts.length === 0) {
       const empty = doc.createElement("div");
       empty.className = "vela-md-empty";
-      empty.textContent = this.t(TEXT16.noAlerts);
+      empty.textContent = this.t(TEXT17.noAlerts);
       this.drawer.body.appendChild(empty);
       return;
     }
     const list = doc.createElement("div");
     list.className = "vela-md-list";
     for (const a of alerts) {
-      list.appendChild(this.row(doc, this.t(TEXT16.alert, { title: a.title, message: a.message }), { value: eventTimeText(a.time, this.opts.i18n), onClick: () => void 0 }));
+      list.appendChild(this.row(doc, this.t(TEXT17.alert, { title: a.title, message: a.message }), { value: eventTimeText(a.time, this.opts.i18n), onClick: () => void 0 }));
     }
     this.drawer.body.appendChild(list);
   }
 };
-var TEXT17 = {
+var TEXT18 = {
   title: msg("widget.timezoneDrawer.title", "Time zone")
 };
-var STYLE_ID17 = "vela-widget-timezone-drawer";
-var CSS17 = css.css`@layer vela.chrome {
+var STYLE_ID18 = "vela-widget-timezone-drawer";
+var CSS18 = css.css`@layer vela.chrome {
 
 .vela-tzd-list { padding: 2px 0 4px; }
 .vela-tzd-row {
@@ -15416,11 +16014,11 @@ var CSS17 = css.css`@layer vela.chrome {
 var TimezoneDrawer = class {
   constructor(opts) {
     this.opts = opts;
-    injectChromeStyles(STYLE_ID17, CSS17, opts.host.ownerDocument);
-    this.drawer = new drawer.Drawer({ host: opts.host, title: textOf(opts.i18n, TEXT17.title), onOpenChange: opts.onOpenChange });
+    injectChromeStyles(STYLE_ID18, CSS18, opts.host.ownerDocument);
+    this.drawer = new drawer.Drawer({ host: opts.host, title: textOf(opts.i18n, TEXT18.title), onOpenChange: opts.onOpenChange });
   }
   open() {
-    this.drawer.setTitle(textOf(this.opts.i18n, TEXT17.title));
+    this.drawer.setTitle(textOf(this.opts.i18n, TEXT18.title));
     this.render();
     this.drawer.show();
   }
@@ -15454,7 +16052,7 @@ var TimezoneDrawer = class {
 };
 
 // src/widget/context-menu-model.ts
-var TEXT18 = {
+var TEXT19 = {
   regular: msg("widget.contextMenu.scale.regular", "Regular"),
   percent: msg("widget.contextMenu.scale.percent", "Percent"),
   indexed: msg("widget.contextMenu.scale.indexed", "Indexed to 100"),
@@ -15466,6 +16064,8 @@ var TEXT18 = {
   axisLabels: msg("widget.contextMenu.axisLabels", "Price axis labels"),
   priceLabel: msg("widget.contextMenu.priceLabel", "Last price label"),
   countdown: msg("widget.contextMenu.countdown", "Countdown to bar close"),
+  indicatorValueLabels: msg("widget.contextMenu.indicatorValueLabels", "Indicator value labels"),
+  indicatorNameLabels: msg("widget.contextMenu.indicatorNameLabels", "Indicator name labels"),
   levels: msg("widget.contextMenu.levels", "Levels"),
   priceLine: msg("widget.contextMenu.priceLine", "Last price line"),
   moreSettings: msg("widget.contextMenu.moreSettings", "More settings…"),
@@ -15487,10 +16087,10 @@ function settingsSectionOf(id) {
   return id.slice("settings:".length) || void 0;
 }
 var SCALE_CHOICES = [
-  ["regular", TEXT18.regular],
-  ["percent", TEXT18.percent],
-  ["indexed", TEXT18.indexed],
-  ["log", TEXT18.log]
+  ["regular", TEXT19.regular],
+  ["percent", TEXT19.percent],
+  ["indexed", TEXT19.indexed],
+  ["log", TEXT19.log]
 ];
 function paneScaleAt(panes, y) {
   return panes.find((p) => y >= p.top && y < p.top + p.height) ?? panes[0] ?? null;
@@ -15525,52 +16125,54 @@ function invertWrite(next, pane) {
   return mainScale(pane) ? ["invertScale", next] : ["invertScale", { pane: pane.id, value: next }];
 }
 function priceAxisItems(s, i18n) {
-  const t33 = (m) => textOf(i18n, m);
+  const t34 = (m) => textOf(i18n, m);
   return [
-    { id: "auto", label: t33(TEXT18.auto), checked: s.auto },
-    ...s.priceOnly === void 0 ? [] : [{ id: "price-only", label: t33(TEXT18.priceOnly), checked: s.priceOnly }],
-    { id: "invert", label: t33(TEXT18.invert), checked: s.invert },
+    { id: "auto", label: t34(TEXT19.auto), checked: s.auto },
+    ...s.priceOnly === void 0 ? [] : [{ id: "price-only", label: t34(TEXT19.priceOnly), checked: s.priceOnly }],
+    { id: "invert", label: t34(TEXT19.invert), checked: s.invert },
     ...SCALE_CHOICES.map(([choice, label], i) => ({
       id: `scale:${choice}`,
-      label: t33(label),
+      label: t34(label),
       checked: s.choice === choice,
       separatorBefore: i === 0
     })),
     {
       id: "labels",
-      label: t33(TEXT18.labels),
+      label: t34(TEXT19.labels),
       separatorBefore: true,
       submenu: [
-        { id: "toggle:axisLabels", label: t33(TEXT18.axisLabels), checked: s.axisLabels },
-        { id: "toggle:priceLabel", label: t33(TEXT18.priceLabel), checked: s.priceLabel },
-        { id: "toggle:countdown", label: t33(TEXT18.countdown), checked: s.countdown }
+        { id: "toggle:axisLabels", label: t34(TEXT19.axisLabels), checked: s.axisLabels },
+        { id: "toggle:priceLabel", label: t34(TEXT19.priceLabel), checked: s.priceLabel },
+        { id: "toggle:countdown", label: t34(TEXT19.countdown), checked: s.countdown },
+        { id: "toggle:indicatorValueLabels", label: t34(TEXT19.indicatorValueLabels), checked: s.indicatorValueLabels },
+        { id: "toggle:indicatorNameLabels", label: t34(TEXT19.indicatorNameLabels), checked: s.indicatorNameLabels }
       ]
     },
     {
       id: "levels",
-      label: t33(TEXT18.levels),
-      submenu: [{ id: "toggle:currentPriceLine", label: t33(TEXT18.priceLine), checked: s.priceLine }]
+      label: t34(TEXT19.levels),
+      submenu: [{ id: "toggle:currentPriceLine", label: t34(TEXT19.priceLine), checked: s.priceLine }]
     },
-    settingsItem("price-axis", t33(TEXT18.moreSettings))
+    settingsItem("price-axis", t34(TEXT19.moreSettings))
   ];
 }
 function timeAxisItems(timezone, i18n) {
   return [
     {
       id: "timezone",
-      label: textOf(i18n, TEXT18.timezone),
+      label: textOf(i18n, TEXT19.timezone),
       submenu: timezoneMenuRows(timezone, i18n).map((r) => ({ id: `tz:${r.value}`, label: r.label, checked: r.checked }))
     },
-    settingsItem("time-axis", textOf(i18n, TEXT18.moreSettings))
+    settingsItem("time-axis", textOf(i18n, TEXT19.moreSettings))
   ];
 }
 function bodyItems(counts, i18n) {
-  const t33 = (m) => textOf(i18n, m);
+  const t34 = (m) => textOf(i18n, m);
   return [
-    { id: "reset-view", label: t33(TEXT18.resetView), icon: "reset" },
-    { id: "remove-drawings", label: t33(TEXT18.removeDrawings), icon: "eraser", disabled: counts.drawings === 0, separatorBefore: true },
-    { id: "remove-indicators", label: t33(TEXT18.removeIndicators), icon: "indicators", disabled: counts.indicators === 0 },
-    settingsItem("body", t33(TEXT18.settings), "gear")
+    { id: "reset-view", label: t34(TEXT19.resetView), icon: "reset" },
+    { id: "remove-drawings", label: t34(TEXT19.removeDrawings), icon: "eraser", disabled: counts.drawings === 0, separatorBefore: true },
+    { id: "remove-indicators", label: t34(TEXT19.removeIndicators), icon: "indicators", disabled: counts.indicators === 0 },
+    settingsItem("body", t34(TEXT19.settings), "gear")
   ];
 }
 var CONTEXT_MENU_BUILTIN_ORDER = {
@@ -15601,8 +16203,8 @@ function composeMenu(zone, builtin, contributed) {
   rows.sort((a, b) => a.rank - b.rank);
   return rows.map(({ item, group: g }, i) => ({ ...item, separatorBefore: i > 0 && rows[i - 1].group !== g }));
 }
-var STYLE_ID18 = "vela-widget-price-scale-drawer";
-var CSS18 = css.css`@layer vela.chrome {
+var STYLE_ID19 = "vela-widget-price-scale-drawer";
+var CSS19 = css.css`@layer vela.chrome {
 
 .vela-psd-list { padding: 2px 0 4px; }
 .vela-psd-row {
@@ -15629,21 +16231,21 @@ var CSS18 = css.css`@layer vela.chrome {
 }
 
 }`;
-var TEXT19 = {
+var TEXT20 = {
   title: msg("widget.priceScaleDrawer.title", "Price scale")
 };
 var PriceScaleDrawer = class {
   constructor(opts) {
     this.opts = opts;
     this.pane = null;
-    injectChromeStyles(STYLE_ID18, CSS18, opts.host.ownerDocument);
-    this.drawer = new drawer.Drawer({ host: opts.host, title: textOf(opts.chart()?.i18n, TEXT19.title), onOpenChange: opts.onOpenChange });
+    injectChromeStyles(STYLE_ID19, CSS19, opts.host.ownerDocument);
+    this.drawer = new drawer.Drawer({ host: opts.host, title: textOf(opts.chart()?.i18n, TEXT20.title), onOpenChange: opts.onOpenChange });
   }
   open() {
     const chart = this.opts.chart();
     const panes = chart?.renderer.get("paneScales");
     this.pane = Array.isArray(panes) ? paneScaleAt(panes, this.opts.pressY()) : null;
-    this.drawer.setTitle(textOf(chart?.i18n, TEXT19.title));
+    this.drawer.setTitle(textOf(chart?.i18n, TEXT20.title));
     this.render();
     this.drawer.show();
   }
@@ -15670,6 +16272,8 @@ var PriceScaleDrawer = class {
       axisLabels: this.flag("axisLabels"),
       priceLabel: this.flag("priceLabel"),
       countdown: this.flag("countdown"),
+      indicatorValueLabels: this.flag("indicatorValueLabels"),
+      indicatorNameLabels: this.flag("indicatorNameLabels"),
       priceLine: this.flag("currentPriceLine")
     }, chart.i18n);
     const list = doc.createElement("div");
@@ -15813,11 +16417,11 @@ function captureToolDefaults(d) {
   if (props !== void 0) out.props = clonePlain(props);
   return out;
 }
-function applyToolDefaults(d, defaults7) {
-  if (!defaults7) return;
-  if (defaults7.style) d.style = { ...d.style, ...defaults7.style };
-  if (defaults7.text) d.text = { ...d.text ?? defaultText(), ...defaults7.text, value: d.text?.value ?? "" };
-  if (defaults7.props) d.applyProps(clonePlain(defaults7.props));
+function applyToolDefaults(d, defaults8) {
+  if (!defaults8) return;
+  if (defaults8.style) d.style = { ...d.style, ...defaults8.style };
+  if (defaults8.text) d.text = { ...d.text ?? defaultText(), ...defaults8.text, value: d.text?.value ?? "" };
+  if (defaults8.props) d.applyProps(clonePlain(defaults8.props));
 }
 function sameToolDefaults(a, b) {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -16194,7 +16798,7 @@ function toolsByRegistryGroup(allowed) {
 }
 function resolveSection(source, byGroup, toolMap) {
   if ("registryGroup" in source) return byGroup.get(source.registryGroup) ?? [];
-  return source.types.map((type) => toolMap.get(type)).filter((t33) => t33 != null);
+  return source.types.map((type) => toolMap.get(type)).filter((t34) => t34 != null);
 }
 function assembleToolbar(allowed) {
   const byGroup = toolsByRegistryGroup(allowed);
@@ -16232,18 +16836,18 @@ function groupTools(tools) {
 function resolveGroups(groups) {
   const out = [];
   for (const g of groups) {
-    const tools = g.tools.map(toolFor).filter((t33) => t33 != null);
+    const tools = g.tools.map(toolFor).filter((t34) => t34 != null);
     if (tools.length > 0) out.push({ id: g.id, label: g.label, tools });
   }
   return { groups: out };
 }
 function resolveToolbar(source, i18n) {
   const tools = /* @__PURE__ */ new Map();
-  const tool = (t33) => {
-    let out = tools.get(t33);
+  const tool = (t34) => {
+    let out = tools.get(t34);
     if (!out) {
-      out = { type: t33.type, label: textOf(i18n, t33.label), icon: t33.icon };
-      tools.set(t33, out);
+      out = { type: t34.type, label: textOf(i18n, t34.label), icon: t34.icon };
+      tools.set(t34, out);
     }
     return out;
   };
@@ -16322,8 +16926,8 @@ var DrawingController = class {
     if (!this.port) return;
     const changed = type !== this.activeTool;
     this.activeTool = type;
-    const defaults7 = type ? this.defaults.get(type) : void 0;
-    this.port.setActiveTool(type, defaults7?.style, defaults7);
+    const defaults8 = type ? this.defaults.get(type) : void 0;
+    this.port.setActiveTool(type, defaults8?.style, defaults8);
     if (changed) this.events.emit("drawing:tool", { type });
   }
   getTool() {
@@ -16381,8 +16985,8 @@ var DrawingController = class {
   }
   /** Replace the whole favorite set (bulk restore) — unknown types are dropped. */
   setFavorites(types) {
-    const next = types.filter((t33) => getDrawingType(t33) != null);
-    if (next.length === this.favs.size && next.every((t33) => this.favs.has(t33))) return;
+    const next = types.filter((t34) => getDrawingType(t34) != null);
+    if (next.length === this.favs.size && next.every((t34) => this.favs.has(t34))) return;
     this.favs = new Set(next);
     this.pushFavorites();
   }
@@ -16418,9 +17022,9 @@ var DrawingController = class {
    *  start from the factory defaults again. */
   resetToolDefaults(type) {
     const types = type ? this.defaults.has(type) ? [type] : [] : [...this.defaults.keys()];
-    for (const t33 of types) {
-      this.defaults.delete(t33);
-      this.events.emit("drawing:defaults", { type: t33 });
+    for (const t34 of types) {
+      this.defaults.delete(t34);
+      this.events.emit("drawing:defaults", { type: t34 });
     }
   }
   /** Every tool's saved looks, by type (plain JSON — persist it as-is). */
@@ -16439,7 +17043,7 @@ var DrawingController = class {
       if (list.length > 0) next.set(type, list);
     }
     const changed = [.../* @__PURE__ */ new Set([...this.templates.keys(), ...next.keys()])].filter(
-      (t33) => JSON.stringify(this.templates.get(t33) ?? []) !== JSON.stringify(next.get(t33) ?? [])
+      (t34) => JSON.stringify(this.templates.get(t34) ?? []) !== JSON.stringify(next.get(t34) ?? [])
     );
     if (changed.length === 0) return;
     this.templates = next;
@@ -16451,7 +17055,7 @@ var DrawingController = class {
     if (!getDrawingType(type)) return;
     const [entry] = sanitizeToolTemplates([{ name, settings }]);
     if (!entry) return;
-    const list = (this.templates.get(type) ?? []).filter((t33) => t33.name !== entry.name);
+    const list = (this.templates.get(type) ?? []).filter((t34) => t34.name !== entry.name);
     this.templates.set(type, [...list, clonePlain(entry)]);
     this.pushTemplates();
     this.events.emit("drawing:templates", { type });
@@ -16459,8 +17063,8 @@ var DrawingController = class {
   /** Delete a tool's saved look by name. */
   removeToolTemplate(type, name) {
     const list = this.templates.get(type);
-    if (!list?.some((t33) => t33.name === name)) return;
-    const rest = list.filter((t33) => t33.name !== name);
+    if (!list?.some((t34) => t34.name === name)) return;
+    const rest = list.filter((t34) => t34.name !== name);
     if (rest.length > 0) this.templates.set(type, rest);
     else this.templates.delete(type);
     this.pushTemplates();
@@ -16489,7 +17093,7 @@ var DrawingController = class {
   // ── programmatic CRUD (facade-facing) ── each is one undo step
   add(type, init = {}) {
     if (!this.enabled) return null;
-    const defaults7 = this.defaults.get(type);
+    const defaults8 = this.defaults.get(type);
     const d = createDrawing(type, {
       id: this.store.nextId(),
       paneId: init.paneId ?? "price",
@@ -16498,7 +17102,7 @@ var DrawingController = class {
       zIndex: init.zIndex ?? this.startZ(type, init.paneId ?? "price")
     });
     if (!d) return null;
-    applyToolDefaults(d, defaults7);
+    applyToolDefaults(d, defaults8);
     if (init.style) d.style = { ...d.style, ...init.style };
     if (init.text) d.text = { ...d.text ?? init.text, ...init.text };
     if (init.props) d.applyProps(init.props);
@@ -16863,14 +17467,14 @@ var DrawingController = class {
     }
   }
 };
-var TEXT20 = {
+var TEXT21 = {
   magnet: msg("widget.drawingPill.magnet", "Magnet snap"),
   stay: msg("widget.drawingPill.stay", "Stay in drawing mode"),
   eraser: msg("widget.drawingPill.eraser", "Eraser"),
   exit: msg("widget.drawingPill.exit", "Exit drawing mode")
 };
-var STYLE_ID19 = "vela-widget-drawing-pill";
-var CSS19 = css.css`@layer vela.chrome {
+var STYLE_ID20 = "vela-widget-drawing-pill";
+var CSS20 = css.css`@layer vela.chrome {
 
 .vela-drawpill { display: none; }
 [data-layout='mobile'] .vela-drawpill {
@@ -16940,7 +17544,7 @@ var DrawingPill = class {
     /** Each button's accessible name, re-read in the chart's language on every sync. */
     this.labels = [];
     const doc = host.ownerDocument;
-    injectChromeStyles(STYLE_ID19, CSS19, doc);
+    injectChromeStyles(STYLE_ID20, CSS20, doc);
     this.el = doc.createElement("div");
     this.el.className = "vela-drawpill";
     this.el.hidden = true;
@@ -16955,7 +17559,7 @@ var DrawingPill = class {
       b.addEventListener("click", onClick);
       return b;
     };
-    this.magnetBtn = btn("magnet", TEXT20.magnet, () => {
+    this.magnetBtn = btn("magnet", TEXT21.magnet, () => {
       const order = ["off", "weak", "strong"];
       const cur = this.chart?.drawings.getSnapMode() ?? "off";
       this.chart?.drawings.setSnapMode(order[(order.indexOf(cur) + 1) % order.length]);
@@ -16965,13 +17569,13 @@ var DrawingPill = class {
     this.magnetBadge.setAttribute("aria-hidden", "true");
     this.magnetBadge.append(doc.createElement("i"), doc.createElement("i"));
     this.magnetBtn.appendChild(this.magnetBadge);
-    this.stayBtn = btn(icons.iconMarkup("pen-lock") ? "pen-lock" : "pen", TEXT20.stay, () => {
+    this.stayBtn = btn(icons.iconMarkup("pen-lock") ? "pen-lock" : "pen", TEXT21.stay, () => {
       this.chart?.drawings.setStayMode(!this.chart.drawings.getStayMode());
     });
-    this.eraserBtn = btn("eraser", TEXT20.eraser, () => {
+    this.eraserBtn = btn("eraser", TEXT21.eraser, () => {
       this.chart?.drawings.setMode(this.chart.drawings.getMode() === "eraser" ? null : "eraser");
     });
-    const close = btn("close", TEXT20.exit, () => {
+    const close = btn("close", TEXT21.exit, () => {
       this.chart?.drawings.setTool(null);
       this.chart?.drawings.setMode(null);
     });
@@ -17041,28 +17645,30 @@ async function resolveIndicators(config, fetchImpl = fetch) {
   } else {
     manifest = config;
   }
-  const out = [];
-  for (const entry of entriesOf(manifest)) {
-    try {
-      let script = entry.script;
-      if (script === void 0 && entry.url !== void 0) {
-        let url = entry.url;
-        try {
-          const base = typeof location !== "undefined" ? new URL(baseUrl ?? ".", location.href) : new URL(baseUrl ?? "");
-          url = new URL(entry.url, base).href;
-        } catch {
+  const resolved3 = await Promise.all(
+    entriesOf(manifest).map(async (entry) => {
+      try {
+        let script = entry.script;
+        if (script === void 0 && entry.url !== void 0) {
+          let url = entry.url;
+          try {
+            const base = typeof location !== "undefined" ? new URL(baseUrl ?? ".", location.href) : new URL(baseUrl ?? "");
+            url = new URL(entry.url, base).href;
+          } catch {
+          }
+          const res = await fetchImpl(url);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          script = await res.text();
         }
-        const res = await fetchImpl(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        script = await res.text();
+        if (script === void 0) throw new Error("entry has neither script nor url");
+        return { name: entry.name, script, language: entry.language, enabled: entry.enabled !== false, category: entry.category };
+      } catch (err) {
+        console.warn(`[vela] indicator "${entry.name}" skipped:`, err);
+        return null;
       }
-      if (script === void 0) throw new Error("entry has neither script nor url");
-      out.push({ name: entry.name, script, language: entry.language, enabled: entry.enabled !== false, category: entry.category });
-    } catch (err) {
-      console.warn(`[vela] indicator "${entry.name}" skipped:`, err);
-    }
-  }
-  return out;
+    })
+  );
+  return resolved3.filter((r) => r !== null);
 }
 var ledgerEntryName = (e) => typeof e === "string" ? e : e.name;
 var ledgerNativeType = (e) => typeof e === "string" ? e : e.type;
@@ -17151,7 +17757,7 @@ function chromeHint(text, opts) {
   const dispose = attachChromeTooltip(el, { host: opts.host, theme: opts.theme, text: () => text, wrap: true, delayMs: 250 });
   return { el, dispose };
 }
-var TEXT21 = {
+var TEXT22 = {
   cursor: msg("drawing.toolbar.cursor", "Cursor"),
   measure: msg("drawing.toolbar.measure", "Measure"),
   eraser: msg("drawing.toolbar.eraser", "Eraser (click/drag to delete)"),
@@ -17266,12 +17872,12 @@ var DrawingToolbar = class {
    *  hover/active state without per-frame JS — and so a workspace can dock the bar outside a
    *  chart container and still resolve them. */
   styleRoot() {
-    const t33 = this.theme;
-    applyChromeTokens(this.root, t33);
+    const t34 = this.theme;
+    applyChromeTokens(this.root, t34);
     const width = this.collapsed ? TOOLBAR_COLLAPSED_WIDTH : this.width;
     this.root.dataset.collapsed = this.collapsed ? "1" : "";
     const placement = this.dock === "absolute" ? `position:absolute;left:0;top:0;height:100%;width:${width}px;z-index:21;` : `position:relative;height:100%;width:${width}px;flex:none;`;
-    this.root.style.cssText = placement + `display:${this.visible ? "flex" : "none"};flex-direction:column;gap:4px;padding:6px 0;box-sizing:border-box;background:${t33.background};border-right:1px solid ${this.borderColor};color:var(--vela-fg-muted);pointer-events:auto;overflow-y:auto;overflow-x:hidden;`;
+    this.root.style.cssText = placement + `display:${this.visible ? "flex" : "none"};flex-direction:column;gap:4px;padding:6px 0;box-sizing:border-box;background:${t34.background};border-right:1px solid ${this.borderColor};color:var(--vela-fg-muted);pointer-events:auto;overflow-y:auto;overflow-x:hidden;`;
   }
   setDefinition(def) {
     this.def = def;
@@ -17296,7 +17902,7 @@ var DrawingToolbar = class {
   paintStar(el, type) {
     const on = this.favorites.has(type);
     el.classList.toggle("vela-fav", on);
-    el.setAttribute("aria-label", this.t(on ? TEXT21.removeFavorite : TEXT21.addFavorite));
+    el.setAttribute("aria-label", this.t(on ? TEXT22.removeFavorite : TEXT22.addFavorite));
     el.setAttribute("aria-pressed", on ? "true" : "false");
     el.innerHTML = sizedIcon(on ? STAR_FILLED_ICON : STAR_ICON);
   }
@@ -17307,7 +17913,7 @@ var DrawingToolbar = class {
   setActiveTool(type) {
     this.active = type;
     if (type) {
-      const group = this.def.groups.find((g) => g.tools.some((t33) => t33.type === type));
+      const group = this.def.groups.find((g) => g.tools.some((t34) => t34.type === type));
       if (group) {
         this.lastUsed.set(group.id, type);
         this.paintGroupIcon(group);
@@ -17333,7 +17939,7 @@ var DrawingToolbar = class {
     this.root.replaceChildren();
     this.groupCells.clear();
     this.groupIcons.clear();
-    this.cursorBtn = this.makeButton(CURSOR_ICON, this.t(TEXT21.cursor), () => this.onCursorClick());
+    this.cursorBtn = this.makeButton(CURSOR_ICON, this.t(TEXT22.cursor), () => this.onCursorClick());
     this.root.appendChild(this.cursorBtn);
     if (this.def.groups.length > 0) this.root.appendChild(this.divider());
     for (const g of this.def.groups) {
@@ -17342,18 +17948,18 @@ var DrawingToolbar = class {
       this.paintGroupIcon(g);
     }
     this.root.appendChild(this.divider());
-    this.measureBtn = this.makeButton(RULER_ICON, this.t(TEXT21.measure), () => this.onMeasure());
+    this.measureBtn = this.makeButton(RULER_ICON, this.t(TEXT22.measure), () => this.onMeasure());
     this.root.appendChild(this.measureBtn);
-    this.eraserBtn = this.makeButton(ERASER_ICON, this.t(TEXT21.eraser), () => this.onEraser());
+    this.eraserBtn = this.makeButton(ERASER_ICON, this.t(TEXT22.eraser), () => this.onEraser());
     this.root.appendChild(this.eraserBtn);
     this.root.appendChild(this.makeMagnetCell());
-    this.stayBtn = this.makeButton(STAY_ICON, this.t(TEXT21.stay), () => this.toggleStay());
+    this.stayBtn = this.makeButton(STAY_ICON, this.t(TEXT22.stay), () => this.toggleStay());
     this.root.appendChild(this.stayBtn);
     if (this.onDrawingsSync) {
-      this.syncBtn = this.makeButton(SYNC_ICON, this.t(TEXT21.sync), () => this.toggleDrawingsSync());
+      this.syncBtn = this.makeButton(SYNC_ICON, this.t(TEXT22.sync), () => this.toggleDrawingsSync());
       this.root.appendChild(this.syncBtn);
     }
-    this.collapseBtn = this.makeButton(COLLAPSE_ICON, this.t(TEXT21.collapse), () => this.toggleCollapsed());
+    this.collapseBtn = this.makeButton(COLLAPSE_ICON, this.t(TEXT22.collapse), () => this.toggleCollapsed());
     this.collapseBtn.classList.add("vela-dtb-collapse");
     this.root.appendChild(this.collapseBtn);
     this.paintMeasure();
@@ -17376,7 +17982,7 @@ var DrawingToolbar = class {
   paintCollapse() {
     const b = this.collapseBtn;
     if (!b) return;
-    const label = this.t(this.collapsed ? TEXT21.expand : TEXT21.collapse);
+    const label = this.t(this.collapsed ? TEXT22.expand : TEXT22.collapse);
     b.innerHTML = hitHtml(this.collapsed ? EXPAND_ICON : COLLAPSE_ICON, 12);
     b.setAttribute("aria-label", label);
     this.tipText.set(b, label);
@@ -17402,7 +18008,7 @@ var DrawingToolbar = class {
       arrow = document.createElement("button");
       arrow.type = "button";
       arrow.className = "vela-dtb-arrow";
-      arrow.setAttribute("aria-label", this.t(TEXT21.more, { tool: label }));
+      arrow.setAttribute("aria-label", this.t(TEXT22.more, { tool: label }));
       arrow.innerHTML = arrowHitHtml(ARROW_ICON2);
       arrow.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -17427,7 +18033,7 @@ var DrawingToolbar = class {
     return cell;
   }
   makeMagnetCell() {
-    const { cell, icon: icon2 } = this.makeCell(this.t(TEXT21.magnetSnap), {
+    const { cell, icon: icon2 } = this.makeCell(this.t(TEXT22.magnetSnap), {
       iconSvg: MAGNET_ICON,
       multi: true,
       onIcon: () => this.toggleMagnet(),
@@ -17506,7 +18112,7 @@ var DrawingToolbar = class {
     const cell = this.magnetCell;
     const icon2 = this.magnetIcon;
     if (!cell || !icon2) return;
-    this.tipText.set(cell, this.t(this.magnetMode === "off" ? TEXT21.magnetOff : this.magnetMode === "weak" ? TEXT21.magnetWeak : TEXT21.magnetStrong));
+    this.tipText.set(cell, this.t(this.magnetMode === "off" ? TEXT22.magnetOff : this.magnetMode === "weak" ? TEXT22.magnetWeak : TEXT22.magnetStrong));
     const on = this.magnetMode !== "off";
     cell.dataset.active = on ? "1" : "";
     icon2.style.opacity = on ? "1" : "0.5";
@@ -17549,7 +18155,7 @@ var DrawingToolbar = class {
   /** Create the positioned flyout panel anchored to a cell, register it as open, and start the
    *  outside-dismiss. Callers fill it with items. */
   beginFlyout(ownerId, cell) {
-    const t33 = this.theme;
+    const t34 = this.theme;
     const back = this.exitingFlyouts.get(ownerId);
     if (back) {
       this.exitingFlyouts.delete(ownerId);
@@ -17559,7 +18165,7 @@ var DrawingToolbar = class {
     const fly = back?.fly ?? document.createElement("div");
     fly.className = "vela-dtb-flyout";
     fly.style.cssText = `position:absolute;z-index:23;display:flex;flex-direction:column;gap:2px;padding:4px;border-radius:var(--vela-radius-md);background:var(--vela-surface);border:1px solid ${this.borderOverride ?? "var(--vela-border-strong)"};box-shadow:var(--vela-shadow);pointer-events:auto;overflow-y:auto;overscroll-behavior:contain;`;
-    applyChromeTokens(fly, t33);
+    applyChromeTokens(fly, t34);
     this.host.appendChild(fly);
     const r = cell.getBoundingClientRect();
     const rootR = this.root.getBoundingClientRect();
@@ -17611,11 +18217,11 @@ var DrawingToolbar = class {
     const cell = this.magnetCell;
     if (!cell) return;
     const fly = this.beginFlyout(MAGNET_ID, cell);
-    fly.appendChild(this.flyoutHeader(this.t(TEXT21.magnet)));
+    fly.appendChild(this.flyoutHeader(this.t(TEXT22.magnet)));
     const modes = [
-      ["off", TEXT21.off],
-      ["weak", TEXT21.weak],
-      ["strong", TEXT21.strong]
+      ["off", TEXT22.off],
+      ["weak", TEXT22.weak],
+      ["strong", TEXT22.strong]
     ];
     for (const [mode, label] of modes) {
       fly.appendChild(
@@ -17632,10 +18238,10 @@ var DrawingToolbar = class {
     surfaceEvents.announceSurface(fly, true, "menu", cell);
   }
   flyoutHeader(text) {
-    const t33 = this.theme;
+    const t34 = this.theme;
     const header = document.createElement("div");
     header.textContent = upperCase(text, this.i18n?.().locale);
-    header.style.cssText = `padding:6px 12px 2px 8px;font:var(--vela-font-size-sm) ${t33.fontFamily};font-weight:600;letter-spacing:0.04em;color:var(--vela-fg-muted);user-select:none;`;
+    header.style.cssText = `padding:6px 12px 2px 8px;font:var(--vela-font-size-sm) ${t34.fontFamily};font-weight:600;letter-spacing:0.04em;color:var(--vela-fg-muted);user-select:none;`;
     return header;
   }
   flyoutSeparator() {
@@ -17647,14 +18253,14 @@ var DrawingToolbar = class {
    *  selected entry, an optional shortcut hint, and — at the far right — the favorite star (tool
    *  rows). Hover tint is CSS (`.vela-dtb-item:hover`), so navigating the menu stays smooth. */
   makeFlyoutItem(opts) {
-    const t33 = this.theme;
+    const t34 = this.theme;
     const item = document.createElement("button");
     item.type = "button";
     item.className = "vela-dtb-item";
     item.setAttribute("aria-label", opts.label);
     const badged = opts.badge === true || !!opts.icon;
     const box = badged ? "gap:10px;padding:4px 10px 4px 6px;" : "gap:8px;padding:5px 10px 5px 8px;";
-    item.style.cssText = `display:flex;align-items:center;${box}cursor:pointer;color:${t33.textColor};border-radius:var(--vela-radius-sm);font:13px ${t33.fontFamily};white-space:nowrap;min-width:148px;`;
+    item.style.cssText = `display:flex;align-items:center;${box}cursor:pointer;color:${t34.textColor};border-radius:var(--vela-radius-sm);font:13px ${t34.fontFamily};white-space:nowrap;min-width:148px;`;
     if (opts.selected) item.dataset.selected = "1";
     if (badged) {
       const badge = document.createElement("span");
@@ -17674,7 +18280,7 @@ var DrawingToolbar = class {
       const hint = document.createElement("span");
       hint.className = "vela-dtb-hint";
       hint.textContent = opts.shortcut;
-      hint.style.cssText = `flex:none;font:var(--vela-font-size-md) ${t33.fontFamily};color:var(--vela-fg-muted);`;
+      hint.style.cssText = `flex:none;font:var(--vela-font-size-md) ${t34.fontFamily};color:var(--vela-fg-muted);`;
       item.appendChild(hint);
     }
     if (opts.favorite) {
@@ -17722,7 +18328,7 @@ var DrawingToolbar = class {
     const iconBtn = this.groupIcons.get(group.id);
     if (!iconBtn) return;
     const type = this.lastUsed.get(group.id) ?? group.tools[0]?.type;
-    const tool = group.tools.find((t33) => t33.type === type) ?? group.tools[0];
+    const tool = group.tools.find((t34) => t34.type === type) ?? group.tools[0];
     iconBtn.innerHTML = hitHtml(tool?.icon ?? "");
     const cell = this.groupCells.get(group.id);
     if (cell) this.tipText.set(cell, this.t(tool?.label ?? group.label));
@@ -17730,7 +18336,7 @@ var DrawingToolbar = class {
   /** Reconcile active tints from state (armed group / open flyout / cursor / modes). Active is a
    *  `data-active` attribute the stylesheet paints — no inline background, so hover never sticks. */
   highlight() {
-    const activeGroup = this.active ? this.def.groups.find((g) => g.tools.some((t33) => t33.type === this.active)) : null;
+    const activeGroup = this.active ? this.def.groups.find((g) => g.tools.some((t34) => t34.type === this.active)) : null;
     for (const [id, cell] of this.groupCells) {
       const on = id === activeGroup?.id;
       cell.dataset.active = on ? "1" : "";
@@ -17761,13 +18367,13 @@ var DrawingToolbar = class {
   }
 };
 var MAGNET_ID = "__magnet__";
-var STYLE_ID20 = "vela-drawing-toolbar-styles";
+var STYLE_ID21 = "vela-drawing-toolbar-styles";
 function ensureStyles() {
   if (typeof document === "undefined") return;
-  let s = document.getElementById(STYLE_ID20);
+  let s = document.getElementById(STYLE_ID21);
   if (!s) {
     s = document.createElement("style");
-    s.id = STYLE_ID20;
+    s.id = STYLE_ID21;
     document.head.appendChild(s);
   }
   s.textContent = css.css`@layer vela.chrome {
@@ -17837,8 +18443,8 @@ function arrowHitHtml(svg) {
 var VELA_MARK_SVG = '<svg viewBox="0 -142 161.66 148" aria-hidden="true"><g fill="currentColor"><path d="M0 -140L32.91 -140L77.52 -62.73L61.06 -34.24Z"/><path d="M161.66 -140L128.75 -140L84.14 -62.73L100.59 -34.24Z"/><path d="M80.83 -52.04L95.85 -26.02L80.83 0L65.81 -26.02Z"/></g></svg>';
 var VELA_LETTERS_SVG = '<svg viewBox="161.66 -142 310.57 148" aria-hidden="true"><g fill="currentColor"><path d="M226.3 1.17Q200.81 1.17 186.12 -12.99Q171.42 -27.15 171.42 -51.17Q171.42 -75.2 185.87 -89.6Q200.33 -104 224.25 -104Q247.4 -104 261.7 -90.58Q276.01 -77.15 276.3 -54.59Q276.3 -49.9 275.42 -45.02H200.81V-43.55Q201.2 -32.62 207.75 -26.42Q214.29 -20.21 225.03 -20.21Q233.72 -20.21 239.34 -23.93Q244.95 -27.64 246.81 -34.77H274.64Q272.1 -19.14 259.16 -8.98Q246.22 1.17 226.3 1.17ZM201.5 -63.38H247.88Q246.42 -72.75 240.27 -77.88Q234.12 -83.01 224.45 -83.01Q215.17 -83.01 208.92 -77.73Q202.67 -72.46 201.5 -63.38ZM287.54 0V-140.04H315.76V0ZM429.34 -23.83H432.56V0H418.11Q407.76 0 403.36 -4.44Q398.97 -8.89 399.16 -16.8Q387.83 1.17 365.57 1.17Q348.48 1.17 337.88 -6.74Q327.29 -14.65 327.29 -29Q327.29 -45.41 339.45 -54.3Q351.6 -63.18 374.55 -63.18H394.96V-68.16Q394.96 -75.2 390.08 -79.3Q385.2 -83.4 376.51 -83.4Q368.3 -83.4 363.03 -79.98Q357.76 -76.56 356.88 -70.8H329.73Q331.19 -85.84 344.08 -94.92Q356.97 -104 377.29 -104Q399.06 -104 410.88 -94.43Q422.7 -84.86 422.7 -66.6V-30.18Q422.7 -26.37 424.26 -25.1Q425.82 -23.83 429.34 -23.83ZM394.96 -42.38V-44.43H374.36Q365.47 -44.43 360.59 -40.92Q355.7 -37.4 355.7 -30.96Q355.7 -25.59 359.81 -22.41Q363.91 -19.24 370.94 -19.24Q381.97 -19.24 388.37 -25.54Q394.77 -31.84 394.96 -42.38Z"/><path fill-opacity="0.55" d="M437.44 -124.28H441.96V-113.41H445.34V-124.28H449.87V-127.4H437.44ZM451.43 -113.41H454.7V-123.29L458.97 -113.41H461.62L465.99 -123.29V-113.41H469.21V-127.4H464.53L460.42 -117.68L456.16 -127.4H451.43Z"/></g></svg>';
 var ATTRIBUTION_URL = "https://velacharts.dev/?utm_source=vela&utm_medium=attribution";
-var STYLE_ID21 = "vela-attribution-styles";
-var CSS20 = css.css`@layer vela.chrome {
+var STYLE_ID22 = "vela-attribution-styles";
+var CSS21 = css.css`@layer vela.chrome {
 
 .vela-attribution {
     text-decoration: none;
@@ -17896,13 +18502,13 @@ var CSS20 = css.css`@layer vela.chrome {
 
 }`;
 function ensureStyles2(doc) {
-  let s = doc.getElementById(STYLE_ID21);
+  let s = doc.getElementById(STYLE_ID22);
   if (!s) {
     s = doc.createElement("style");
-    s.id = STYLE_ID21;
+    s.id = STYLE_ID22;
     doc.head.appendChild(s);
   }
-  s.textContent = CSS20;
+  s.textContent = CSS21;
 }
 function attributionMarkColor(background) {
   return color.isDarkColor(background) ? "#ffffff" : "#000000";
@@ -18072,11 +18678,11 @@ function sanitizeDrawingTools(raw) {
   const r = raw;
   const out = {};
   if (r.defaults != null && typeof r.defaults === "object" && !Array.isArray(r.defaults)) {
-    const defaults7 = {};
+    const defaults8 = {};
     for (const [type, value] of Object.entries(r.defaults)) {
-      if (type.length > 0 && value != null && typeof value === "object" && !Array.isArray(value)) defaults7[type] = value;
+      if (type.length > 0 && value != null && typeof value === "object" && !Array.isArray(value)) defaults8[type] = value;
     }
-    if (Object.keys(defaults7).length > 0) out.defaults = defaults7;
+    if (Object.keys(defaults8).length > 0) out.defaults = defaults8;
   }
   if (r.templates != null && typeof r.templates === "object" && !Array.isArray(r.templates)) {
     const templates = {};
@@ -18123,6 +18729,10 @@ function sanitizeCell(raw) {
     const parts = {};
     for (const key of STATUSLINE_PART_KEYS) if (typeof bag[key] === "boolean") parts[key] = bag[key];
     if (Object.keys(parts).length > 0) out.statuslineParts = parts;
+  }
+  if (c.scaleBeforeCompare != null && typeof c.scaleBeforeCompare === "object") {
+    const { mode, log } = c.scaleBeforeCompare;
+    if (typeof mode === "string" && mode && typeof log === "boolean") out.scaleBeforeCompare = { mode, log };
   }
   if (c.rendererConfig != null && typeof c.rendererConfig === "object") out.rendererConfig = c.rendererConfig;
   if (c.drawings != null && typeof c.drawings === "object") out.drawings = c.drawings;
@@ -18194,10 +18804,10 @@ function sanitizeTrackSizes(raw) {
   const out = {};
   for (const [layoutId, ts] of Object.entries(raw)) {
     if (ts == null || typeof ts !== "object") continue;
-    const t33 = ts;
+    const t34 = ts;
     const entry = {};
     for (const axis of ["cols", "rows"]) {
-      const arr = t33[axis];
+      const arr = t34[axis];
       if (Array.isArray(arr) && arr.length > 0 && arr.every((w) => typeof w === "number" && Number.isFinite(w) && w > 0)) {
         entry[axis] = arr;
       }
@@ -18395,6 +19005,18 @@ function resolveAnimations(animations) {
     animLiveBar: resolveLiveBarEaseMs(cfg.liveBar),
     animIntro: resolveIntro(cfg.intro ?? true)
   };
+}
+
+// src/core/model/ohlcv.ts
+function isSameBar(a, b) {
+  if (a.time !== b.time) return false;
+  if (a.seq !== void 0 && b.seq !== void 0) return a.seq === b.seq;
+  return true;
+}
+function isNewerBar(bar, last) {
+  if (bar.time > last.time) return true;
+  if (bar.time === last.time && bar.seq !== void 0 && last.seq !== void 0) return bar.seq > last.seq;
+  return false;
 }
 
 // src/core/model/series.ts
@@ -18810,6 +19432,7 @@ var DrawingSeriesService = class {
    *  distinguish "this pick isn't lower" from "NOTHING lower exists" (the chart is already
    *  at the finest offered step) so the consumer can word its notice honestly. */
   resolveTimeframe(timeframe) {
+    if (isVariableDurationTimeframe(this.deps.chartTimeframe())) return { reason: "none-lower" };
     const chartMs = timeframeToMs(this.deps.chartTimeframe());
     const finest = AUTO_STEPS[AUTO_STEPS.length - 1];
     if (timeframeToMs(finest) >= chartMs) return { reason: "none-lower" };
@@ -19221,7 +19844,8 @@ var EngineOrchestrator = class _EngineOrchestrator {
    */
   async fetchSeries(symbol, timeframe, range) {
     const parsed2 = parseExtendedTicker(symbol);
-    const cfg = { symbol: parsed2.symbol, timeframe };
+    const session = normalizeSession(range.session);
+    const cfg = { symbol: parsed2.symbol, timeframe, ...session ? { session } : {} };
     const bars = await (this.feed.loadRange ? this.feed.loadRange(cfg, range) : this.feed.load({ ...cfg, bars: range.limit }));
     return parsed2.transform ? parsed2.transform.full(bars) : bars;
   }
@@ -19496,7 +20120,7 @@ var EngineOrchestrator = class _EngineOrchestrator {
    */
   async setMarket(next) {
     const m = this.config.market;
-    const identityChanged = next.symbol !== void 0 && next.symbol !== m.symbol || next.timeframe !== void 0 && next.timeframe !== m.timeframe || // A session switch changes WHICH bars exist (RTH vs ETH) — a full reload,
+    const identityChanged = next.force === true || next.symbol !== void 0 && next.symbol !== m.symbol || next.timeframe !== void 0 && next.timeframe !== m.timeframe || // A session switch changes WHICH bars exist (RTH vs ETH) — a full reload,
     // exactly like a timeframe change; the cache keys the sessions apart.
     next.session !== void 0 && next.session !== m.session || next.data !== void 0;
     const depthChanged = next.bars !== void 0 && next.bars !== m.bars;
@@ -19712,7 +20336,7 @@ var EngineOrchestrator = class _EngineOrchestrator {
           return;
         }
         for (let i = 1; i < head.length; i += 1) {
-          if (head[i].time <= head[i - 1].time) {
+          if (!isNewerBar(head[i], head[i - 1])) {
             console.warn("[vela] non-monotonic history chunk — stopping the backfill");
             this.completeHistory("aborted");
             return;
@@ -19959,7 +20583,7 @@ var EngineOrchestrator = class _EngineOrchestrator {
    *  `count` ticks — default: one timed update's worth). */
   openFormingBar(ticks, count) {
     const bar = this.replayQueue.shift();
-    const volumeEach = ticks.every((t33) => t33.volume === void 0) ? (bar.volume ?? 0) / ticks.length : null;
+    const volumeEach = ticks.every((t34) => t34.volume === void 0) ? (bar.volume ?? 0) / ticks.length : null;
     const forming = { bar, ticks, next: 0, candle: null, volumeEach, batch: 1, delayMs: this.replayIntervalMs, origin: 0 };
     this.paceFormingBar(forming);
     this.replayForming = forming;
@@ -19981,15 +20605,15 @@ var EngineOrchestrator = class _EngineOrchestrator {
     let c = f.candle;
     const stop = Math.min(f.ticks.length, f.next + count);
     for (; f.next < stop; f.next += 1) {
-      const t33 = f.ticks[f.next];
-      const v = f.volumeEach ?? t33.volume ?? 0;
-      const hi = Math.max(t33.high ?? t33.price, t33.price);
-      const lo = Math.min(t33.low ?? t33.price, t33.price);
+      const t34 = f.ticks[f.next];
+      const v = f.volumeEach ?? t34.volume ?? 0;
+      const hi = Math.max(t34.high ?? t34.price, t34.price);
+      const lo = Math.min(t34.low ?? t34.price, t34.price);
       if (c) {
-        c = { ...c, high: Math.max(c.high, hi), low: Math.min(c.low, lo), close: t33.price, volume: (c.volume ?? 0) + v };
+        c = { ...c, high: Math.max(c.high, hi), low: Math.min(c.low, lo), close: t34.price, volume: (c.volume ?? 0) + v };
       } else {
-        const open = t33.open ?? t33.price;
-        c = { time: f.bar.time, open, high: Math.max(open, hi), low: Math.min(open, lo), close: t33.price, volume: v };
+        const open = t34.open ?? t34.price;
+        c = { time: f.bar.time, open, high: Math.max(open, hi), low: Math.min(open, lo), close: t34.price, volume: v };
       }
     }
     f.candle = c;
@@ -20185,9 +20809,10 @@ var EngineOrchestrator = class _EngineOrchestrator {
    */
   syncSymbolFacts({ refresh = false } = {}) {
     const probe2 = ++this.factsProbe;
+    const symbol = this.qualifiedSymbol();
+    this.renderer.setSymbolName?.(symbol ? parseSymbol(symbol).ticker : void 0);
     const known = this.feed.symbolInfo?.(this.config.market);
     this.applySymbolFacts(symbolFactsOf(known));
-    const symbol = this.qualifiedSymbol();
     if (!symbol || this.config.market.data?.length || known !== void 0 && !refresh) return;
     void this.dataControl.symbolInfo(symbol).catch(() => void 0).then((info) => {
       if (this.factsProbe !== probe2 || this.qualifiedSymbol() !== symbol) return;
@@ -20341,7 +20966,10 @@ var EngineOrchestrator = class _EngineOrchestrator {
   setBarSeries(raw, opts) {
     this.rawBars = raw;
     this.bars = this.barTransform ? this.barTransform.full(raw) : raw;
-    this.renderer.setBars(this.bars, { preserveView: opts?.preserveView });
+    this.renderer.setBars(this.bars, {
+      preserveView: opts?.preserveView,
+      variableDuration: isVariableDurationTimeframe(this.config.market.timeframe ?? "")
+    });
     if (!opts?.clearing && this.bars.length > 0) this.endLoad();
   }
   /**
@@ -20356,14 +20984,14 @@ var EngineOrchestrator = class _EngineOrchestrator {
   applyBar(bar, notify = true) {
     const last = this.rawBars[this.rawBars.length - 1];
     let viewBar = bar;
-    if (last && bar.time === last.time) {
+    if (last && isSameBar(last, bar)) {
       this.rawBars[this.rawBars.length - 1] = bar;
       this.barCause = "tick";
       if (this.barTransform) {
         viewBar = this.barTransform.next(bar, this.bars[this.bars.length - 2]);
         this.bars[this.bars.length - 1] = viewBar;
       }
-    } else if (!last || bar.time > last.time) {
+    } else if (!last || isNewerBar(bar, last)) {
       this.rawBars.push(bar);
       this.barCause = "bar";
       if (this.barTransform) {
@@ -20422,9 +21050,11 @@ var EngineOrchestrator = class _EngineOrchestrator {
       if (record.native?.heldForHistory && !record.hidden) this.pokeNative(record);
     }
   }
-  /** Gap healing needs a ranged feed and a provider-backed series (offline `data` has no source). */
+  /** Gap healing needs a ranged feed, a provider-backed series (offline `data` has no
+   *  source), and a fixed-duration timeframe (variable-duration series have no fixed
+   *  bar interval to detect missed bars against). */
   canHeal() {
-    return !!this.feed.loadRange && !this.config.market.data?.length;
+    return !!this.feed.loadRange && !this.config.market.data?.length && !isVariableDurationTimeframe(this.config.market.timeframe ?? "");
   }
   /** Duration of one chart bar in ms (for live-bar continuity checks). */
   barIntervalMs() {
@@ -20512,7 +21142,7 @@ var EngineOrchestrator = class _EngineOrchestrator {
   /** The native types present on the chart, one entry per INSTANCE in registry order (a
    *  multi-instance type repeats) — SYNC (registry state; no support probe). */
   presentNativeIndicators() {
-    return this.registry.all().map((r) => r.native?.type).filter((t33) => !!t33);
+    return this.registry.all().map((r) => r.native?.type).filter((t34) => !!t34);
   }
   /**
    * The catalog of registered native-indicator types with their live state on THIS chart: each
@@ -20525,7 +21155,7 @@ var EngineOrchestrator = class _EngineOrchestrator {
     const symbol = this.qualifiedSymbol();
     const present = new Set(this.presentNativeIndicators());
     return Promise.all(
-      nativeIndicatorEntries().map(async (d) => ({
+      nativeIndicatorEntries().filter((d) => d.catalog !== false).map(async (d) => ({
         type: d.type,
         title: textOf(this.i18n, d.title),
         supported: await this.isNativeSupported(d, symbol),
@@ -20884,9 +21514,9 @@ var EngineOrchestrator = class _EngineOrchestrator {
       const prepared = await engine.prepare(source, id);
       if (record.source !== source) return;
       record.prepared = prepared;
-      const defaults7 = {};
-      for (const input of prepared.inputs) defaults7[input.key] = input.defval;
-      record.inputValues = { ...defaults7, ...record.inputValues };
+      const defaults8 = {};
+      for (const input of prepared.inputs) defaults8[input.key] = input.defval;
+      record.inputValues = { ...defaults8, ...record.inputValues };
       handle.setSchema(prepared.inputs);
       const propDefaults = {};
       for (const prop of prepared.props ?? []) propDefaults[prop.key] = prop.defval;
@@ -20977,8 +21607,10 @@ var EngineOrchestrator = class _EngineOrchestrator {
       native.heldForHistory = false;
       const channel = this.nativeChannel(record);
       let alive = true;
+      const secondaryUnsubs = [];
       native.revokeContext = () => {
         alive = false;
+        for (const off of secondaryUnsubs.splice(0)) off();
       };
       const ctx = {
         id,
@@ -20988,6 +21620,27 @@ var EngineOrchestrator = class _EngineOrchestrator {
         session: this.config.market.session,
         bars: () => this.bars,
         data: this.dataControl,
+        fetchSeries: (symbol, timeframe, range) => this.fetchSeries(symbol, timeframe, { ...this.config.market.session ? { session: this.config.market.session } : {}, ...range }),
+        subscribeSeries: (symbol, timeframe, onBar) => {
+          if (!alive || !this.config.live || this.replayQueue !== null) return () => {
+          };
+          const parsed2 = parseExtendedTicker(symbol);
+          const cfg = {
+            symbol: parsed2.symbol,
+            timeframe,
+            ...this.config.market.session ? { session: this.config.market.session } : {}
+          };
+          const rawOff = this.feed.subscribe(cfg, (bar) => {
+            if (alive) onBar(bar);
+          });
+          const off = () => {
+            const idx = secondaryUnsubs.indexOf(off);
+            if (idx >= 0) secondaryUnsubs.splice(idx, 1);
+            rawOff();
+          };
+          secondaryUnsubs.push(off);
+          return off;
+        },
         emit: (out) => {
           if (alive) this.applyModel(id, this.buildNativeModel(record, out, this.bars[0]?.time));
         },
@@ -21030,16 +21683,29 @@ var EngineOrchestrator = class _EngineOrchestrator {
     const d = record.native.descriptor;
     const type = record.native.type;
     const channel = this.nativeChannel(record);
-    const displayTitle = messageOnly(d.title);
-    const displayShorttitle = messageOnly(d.shortTitle);
+    const titleSrc = out.title ?? d.title;
+    const shortSrc = out.shortTitle !== void 0 ? out.shortTitle : out.title !== void 0 ? void 0 : d.shortTitle;
+    const title = out.title !== void 0 ? textOf(this.i18n, out.title) : record.title;
+    if (out.title !== void 0) {
+      record.title = title;
+      const h = this.handles.get(record.id);
+      if (h) h.title = title;
+    }
+    const displayTitle = messageOnly(titleSrc);
+    const displayShorttitle = messageOnly(shortSrc);
+    const paneHint = out.paneHint ?? d.paneHint;
+    const overlay = out.paneHint !== void 0 ? out.paneHint === "price" : d.overlay;
     return {
       id: record.id,
-      title: record.title,
-      ...d.shortTitle ? { shorttitle: textOf(this.i18n, d.shortTitle) } : {},
+      title,
+      ...shortSrc !== void 0 ? { shorttitle: textOf(this.i18n, shortSrc) } : {},
       ...displayTitle ? { displayTitle } : {},
       ...displayShorttitle ? { displayShorttitle } : {},
-      overlay: d.overlay,
-      paneHint: d.paneHint,
+      overlay,
+      paneHint,
+      ...out.ownScale ? { ownScale: true } : {},
+      ...out.percentBaseline !== void 0 ? { percentBaseline: out.percentBaseline } : {},
+      ...out.priceAxisLabel ? { priceAxisLabel: true } : {},
       native: { type, ...channel !== type ? { channel } : {} },
       ...anchorTime != null ? { anchorTime } : {},
       ...d.legend === false ? { legend: false } : {},
@@ -21191,12 +21857,16 @@ var EngineOrchestrator = class _EngineOrchestrator {
     for (const r of this.registry.all()) {
       const d = r.native?.descriptor;
       if (!d) continue;
-      r.title = textOf(this.i18n, d.title);
-      const handle = this.handles.get(r.id);
-      if (handle) handle.title = r.title;
+      const titleMsg = r.model ? r.model.displayTitle : d.title;
+      if (titleMsg !== void 0) {
+        r.title = textOf(this.i18n, titleMsg);
+        const handle = this.handles.get(r.id);
+        if (handle) handle.title = r.title;
+        if (r.model) r.model.title = r.title;
+      }
       if (r.model) {
-        r.model.title = r.title;
-        if (d.shortTitle !== void 0) r.model.shorttitle = textOf(this.i18n, d.shortTitle);
+        const shortMsg = r.model.displayShorttitle;
+        if (shortMsg !== void 0) r.model.shorttitle = textOf(this.i18n, shortMsg);
       }
     }
   }
@@ -21415,9 +22085,10 @@ var EngineOrchestrator = class _EngineOrchestrator {
       return true;
     }
     let paneId = record.model?.paneId ?? "price";
-    const prevOwnScale = record.model?.ownScale === true;
+    const prevModel = record.model;
+    const prevOwnScale = prevModel?.ownScale === true;
     let rerouted = false;
-    if (record.loading && !record.paneLocked) {
+    if (!record.paneLocked && (record.loading || record.native)) {
       const routed = this.routePane(id, model, record.options ?? {});
       if (routed !== paneId) {
         if (paneId !== "price" && !this.registry.all().some((r) => r.id !== id && r.model?.paneId === paneId)) {
@@ -21432,6 +22103,9 @@ var EngineOrchestrator = class _EngineOrchestrator {
     }
     this.placeModel(model, id, paneId);
     if (record.paneLocked) model.ownScale = prevOwnScale;
+    if (prevModel && (model.title !== prevModel.title || model.shorttitle !== prevModel.shorttitle || model.ownScale === true !== prevOwnScale || model.percentBaseline !== prevModel.percentBaseline || model.priceAxisLabel !== prevModel.priceAxisLabel)) {
+      record.pendingStructural = true;
+    }
     record.model = model;
     if (record.pendingStructural) {
       record.renderHandle = this.renderer.mountIndicator(model);
@@ -21555,7 +22229,7 @@ function usableTicks(value) {
   if (!Array.isArray(value)) return [];
   const optional = (n) => n === void 0 || Number.isFinite(n);
   return value.filter(
-    (t33) => t33 != null && Number.isFinite(t33.price) && optional(t33.volume) && optional(t33.high) && optional(t33.low) && optional(t33.open)
+    (t34) => t34 != null && Number.isFinite(t34.price) && optional(t34.volume) && optional(t34.high) && optional(t34.low) && optional(t34.open)
   );
 }
 function yieldToPaint() {
@@ -22565,9 +23239,9 @@ var ALLOWED_ATTRS = {
 };
 var BLOCKED_SCHEMES = /* @__PURE__ */ new Set(["javascript", "vbscript", "data", "file", "blob"]);
 function tagDisposition(tag) {
-  const t33 = tag.toLowerCase();
-  if (DROPPED_TAGS.has(t33)) return "drop";
-  return ALLOWED_TAGS.has(t33) ? "keep" : "unwrap";
+  const t34 = tag.toLowerCase();
+  if (DROPPED_TAGS.has(t34)) return "drop";
+  return ALLOWED_TAGS.has(t34) ? "keep" : "unwrap";
 }
 function attributeAllowed(tag, name) {
   const n = name.toLowerCase();
@@ -22633,7 +23307,7 @@ function bagOf(row2, decl) {
   return decl.prop ? row2.propValues : row2.values;
 }
 var SOURCES = ["close", "open", "high", "low", "hl2", "hlc3", "ohlc4", "volume"];
-var TEXT22 = {
+var TEXT23 = {
   cancel: msg("chart.indicatorSettings.cancel", "Cancel"),
   ok: msg("chart.indicatorSettings.ok", "OK"),
   resetDefaults: msg("chart.indicatorSettings.resetDefaults", "Reset defaults"),
@@ -22664,6 +23338,13 @@ var IndicatorInputsDialog = class {
     this.calendarAnchor = null;
     this.onDialogKey = (e) => {
       if (e.key === "Escape") {
+        const targetDialog = e.target?.closest('[role="dialog"]');
+        if (targetDialog && targetDialog !== this.dialog) return;
+        const doc = this.dialog?.ownerDocument ?? document;
+        const hasDialogAbove = [...doc.querySelectorAll('[role="dialog"][data-state="open"]')].some(
+          (el) => el !== this.dialog && (!this.dialog || !!(this.dialog.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING))
+        );
+        if (hasDialogAbove) return;
         e.preventDefault();
         if (popover.isPopoverOpen()) {
           popover.closeOpenPopovers();
@@ -22694,7 +23375,7 @@ var IndicatorInputsDialog = class {
     this.snapshot = { ...row2.values };
     this.propSnapshot = { ...row2.propValues };
     ensureDialogStyles();
-    const t33 = this.host.theme();
+    const t34 = this.host.theme();
     const host = this.host.dialogHost() ?? this.host.container;
     const i18n = this.i18n;
     const ui = new dialog.Dialog({
@@ -22714,8 +23395,8 @@ var IndicatorInputsDialog = class {
       footer: (foot) => {
         foot.append(
           this.resetAction(),
-          this.dialogButton(this.t(TEXT22.cancel), false, () => this.revertAndClose()),
-          this.dialogButton(this.t(TEXT22.ok), true, () => this.close())
+          this.dialogButton(this.t(TEXT23.cancel), false, () => this.revertAndClose()),
+          this.dialogButton(this.t(TEXT23.ok), true, () => this.close())
         );
       },
       // Stale-guard: destroying a dialog fires its machine's onOpenChange(false)
@@ -22725,12 +23406,12 @@ var IndicatorInputsDialog = class {
         if (!open && this.uiDialog === ui) this.close();
       }
     });
-    applyChromeTokens(ui.panel, t33);
+    applyChromeTokens(ui.panel, t34);
     ui.panel.style.colorScheme = this.isDarkTheme() ? "dark" : "light";
     this.dialogTips.push(attachChromeTooltip(ui.panel.querySelector(".vela-dialog-close"), {
       host: this.host.container,
       theme: () => this.host.theme(),
-      text: () => this.t(TEXT22.close)
+      text: () => this.t(TEXT23.close)
     }));
     const tabDefs = tabInputs(row2.inputs);
     if (row2.props.length > 0) {
@@ -22739,7 +23420,7 @@ var IndicatorInputsDialog = class {
         delete d.tab;
         return d;
       });
-      const existing = tabDefs.find((t34) => t34.name === PROPS_TAB);
+      const existing = tabDefs.find((t35) => t35.name === PROPS_TAB);
       if (existing) existing.inputs.push(...propDecls);
       else tabDefs.push({ name: PROPS_TAB, inputs: propDecls });
     }
@@ -22872,7 +23553,7 @@ var IndicatorInputsDialog = class {
   /** The footer's reset button — same chip as Cancel, pinned to the LEFT edge
    *  (`margin-right:auto` against the footer's flex-end keeps Cancel/Ok right). */
   resetAction() {
-    const b = this.dialogButton(this.t(TEXT22.resetDefaults), false, () => this.resetToDefaults());
+    const b = this.dialogButton(this.t(TEXT23.resetDefaults), false, () => this.resetToDefaults());
     b.style.marginRight = "auto";
     return b;
   }
@@ -22954,11 +23635,12 @@ var IndicatorInputsDialog = class {
       }));
     }
     const fit = isFitControl(lead);
+    const controlWidth = fit ? void 0 : lead.type === "symbol" ? SYMBOL_CONTROL_PX : CONTROL_PX;
     return append(field.fieldRow({
       label: nameOf(lead, this.i18n),
       id,
       fit,
-      controlWidth: fit ? void 0 : CONTROL_PX,
+      controlWidth,
       info,
       control: this.buildControl(row2, lead, id)
     }));
@@ -23031,8 +23713,8 @@ var IndicatorInputsDialog = class {
   /** A tab's strip label: the built-in tabs read translated, a script's own tab names
    *  read as declared. */
   tabLabel(name) {
-    if (name === DEFAULT_INPUT_TAB) return this.t(TEXT22.inputsTab);
-    if (name === PROPS_TAB) return this.t(TEXT22.propertiesTab);
+    if (name === DEFAULT_INPUT_TAB) return this.t(TEXT23.inputsTab);
+    if (name === PROPS_TAB) return this.t(TEXT23.propertiesTab);
     return name;
   }
   /** The shared ⓘ hint carrying an input's `tooltip` (see {@link chromeHint}). */
@@ -23053,7 +23735,7 @@ var IndicatorInputsDialog = class {
       size: 16,
       icon: "help",
       href,
-      label: this.t(TEXT22.help)
+      label: this.t(TEXT23.help)
     });
     this.dialogTips.push(dispose);
     return el;
@@ -23101,7 +23783,7 @@ var IndicatorInputsDialog = class {
     btn.append(text, chevron);
     const paint = () => {
       const shown = checked.map((v) => labelOf.get(v) ?? v).join(sep);
-      text.textContent = shown || this.t(TEXT22.noneChecked);
+      text.textContent = shown || this.t(TEXT23.noneChecked);
       text.toggleAttribute("data-placeholder", shown === "");
     };
     paint();
@@ -23257,7 +23939,7 @@ var IndicatorInputsDialog = class {
     chevron.type = "button";
     chevron.tabIndex = -1;
     chevron.className = "vela-ind-combo-chevron";
-    chevron.setAttribute("aria-label", this.t(TEXT22.openTimeList));
+    chevron.setAttribute("aria-label", this.t(TEXT23.openTimeList));
     chevron.innerHTML = CLOCK_SVG;
     let value = current;
     const commitTyped = () => {
@@ -23327,7 +24009,7 @@ var IndicatorInputsDialog = class {
     chevron.type = "button";
     chevron.tabIndex = -1;
     chevron.className = "vela-ind-combo-chevron";
-    chevron.setAttribute("aria-label", this.t(TEXT22.openCalendar));
+    chevron.setAttribute("aria-label", this.t(TEXT23.openCalendar));
     chevron.innerHTML = CALENDAR_SVG;
     let value = current;
     const commitTyped = () => {
@@ -23429,13 +24111,17 @@ var IndicatorInputsDialog = class {
     btn.id = id;
     btn.style.cssText = `${this.ctrlStyle()}display:flex;align-items:center;cursor:pointer;text-align:left;`;
     const label = document.createElement("span");
-    label.textContent = value || this.t(TEXT22.selectSymbol);
+    const syncLabel = () => {
+      label.textContent = value || this.t(TEXT23.selectSymbol);
+      label.style.color = value ? "" : "var(--vela-fg-muted)";
+    };
     label.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+    syncLabel();
     btn.append(label);
     btn.addEventListener("click", () => picker(value, (picked) => {
       if (!picked) return;
       value = picked;
-      label.textContent = picked;
+      syncLabel();
       emit(picked);
     }));
     return btn;
@@ -23453,6 +24139,7 @@ var IndicatorInputsDialog = class {
   }
 };
 var CONTROL_PX = 100;
+var SYMBOL_CONTROL_PX = 160;
 function isSelectInput(inp) {
   return inp.type !== "bool" && ((inp.options?.length ?? 0) > 0 || inp.type === "source" || inp.type === "timeframe");
 }
@@ -23475,8 +24162,8 @@ function hugWidest(control, labels2, mobile) {
   return wrap;
 }
 function nameOf(inp, i18n) {
-  const t33 = inp.display?.title ? textOf(i18n, inp.display.title) : inp.title;
-  return t33.length > 0 ? t33.charAt(0).toUpperCase() + t33.slice(1) : "";
+  const t34 = inp.display?.title ? textOf(i18n, inp.display.title) : inp.title;
+  return t34.length > 0 ? t34.charAt(0).toUpperCase() + t34.slice(1) : "";
 }
 var INPUT_DIALOG_GAP_PX = field.FIELD_GAP_PX;
 function inputDialogBodyStyle(mobile) {
@@ -23610,8 +24297,8 @@ var TIME_OPTIONS = Array.from({ length: 48 }, (_, i) => {
   return { value: v, label: v };
 });
 function normalizeTimeInput(raw) {
-  const t33 = raw.trim();
-  const m = /^(\d{1,2}):(\d{2})$/.exec(t33) ?? /^(\d{2})(\d{2})$/.exec(t33);
+  const t34 = raw.trim();
+  const m = /^(\d{1,2}):(\d{2})$/.exec(t34) ?? /^(\d{2})(\d{2})$/.exec(t34);
   if (!m) return null;
   const hh = Number(m[1]);
   const mm = Number(m[2]);
@@ -23653,7 +24340,7 @@ var LEGEND_TITLE_STATUS_GAP_PX = 8;
 var LEGEND_ACTION_GAP_PX = 6;
 var LEGEND_CTL_CSS = `cursor:pointer;display:inline-flex;align-items:center;justify-content:center;border:none;line-height:0;padding:0;width:${LEGEND_CTL_PX}px;height:${LEGEND_CTL_PX}px;border-radius:3px;box-sizing:border-box;flex:none;`;
 var LEGEND_ROW_MIN_H = LEGEND_CTL_PX + LEGEND_ROW_PAD_Y * 2;
-var TEXT23 = {
+var TEXT24 = {
   moveToMainChart: msg("chart.legend.moveToMainChart", "Move to main chart"),
   moveToPane: msg("chart.legend.moveToPane", "Move to {pane}"),
   newPaneAbove: msg("chart.legend.newPaneAbove", "New panel above"),
@@ -23783,19 +24470,19 @@ var InputsUI = class {
   /** Re-read the chrome text of every row in the current language (tooltips read it live). */
   relabel() {
     for (const row2 of this.rows.values()) {
-      row2.eyeEl?.setAttribute("aria-label", this.t(row2.hidden ? TEXT23.show : TEXT23.hide));
+      row2.eyeEl?.setAttribute("aria-label", this.t(row2.hidden ? TEXT24.show : TEXT24.hide));
       const label = (ctl, m) => row2.el.querySelector(`[data-vela-ctl="${ctl}"]`)?.setAttribute("aria-label", this.t(m));
-      label("settings", TEXT23.settings);
-      label("move", TEXT23.moveToPaneButton);
-      label("remove", TEXT23.remove);
+      label("settings", TEXT24.settings);
+      label("move", TEXT24.moveToPaneButton);
+      label("remove", TEXT24.remove);
       const beta = row2.el.querySelector('[data-vela-ctl="beta"]');
-      if (beta) beta.textContent = this.t(TEXT23.beta);
+      if (beta) beta.textContent = this.t(TEXT24.beta);
     }
     if (this.foldToggle) this.foldToggle.setAttribute("aria-label", this.foldLabel());
   }
   /** The fold toggle's label for its current state. */
   foldLabel() {
-    return this.t(this.overviewAction !== null ? TEXT23.indicators : this.legendFolded ? TEXT23.showLegend : TEXT23.hideLegend);
+    return this.t(this.overviewAction !== null ? TEXT24.indicators : this.legendFolded ? TEXT24.showLegend : TEXT24.hideLegend);
   }
   setDialogHost(host) {
     this.dialogHost = host;
@@ -24017,13 +24704,13 @@ var InputsUI = class {
     const items = [];
     for (const p of panes) {
       if (p.id === currentPane) continue;
-      const label = p.kind === "price" ? this.t(TEXT23.moveToMainChart) : this.t(TEXT23.moveToPane, { pane: p.label });
+      const label = p.kind === "price" ? this.t(TEXT24.moveToMainChart) : this.t(TEXT24.moveToPane, { pane: p.label });
       items.push({ label, target: p.kind === "price" ? "price" : { pane: p.id } });
     }
     const soleInStudyPane = currentPane !== "price" && [...this.rows.values()].filter((r2) => r2.paneId === currentPane).length <= 1;
     if (!soleInStudyPane) {
-      if (currentPane !== "price") items.push({ label: this.t(TEXT23.newPaneAbove), target: { newPane: { before: currentPane } } });
-      items.push({ label: this.t(TEXT23.newPaneBelow), target: { newPane: { after: currentPane } } });
+      if (currentPane !== "price") items.push({ label: this.t(TEXT24.newPaneAbove), target: { newPane: { before: currentPane } } });
+      items.push({ label: this.t(TEXT24.newPaneBelow), target: { newPane: { after: currentPane } } });
     }
     this.moveTargets = items.map((it) => it.target);
     this.moveMenuId = id;
@@ -24084,7 +24771,7 @@ var InputsUI = class {
       ...stack,
       {
         id: "values",
-        label: this.t(TEXT23.indicatorValues),
+        label: this.t(TEXT24.indicatorValues),
         checked: this.rowValuesShown(row2),
         separatorBefore: stack.length > 0
       }
@@ -24095,9 +24782,9 @@ var InputsUI = class {
     const api = this.stackApi;
     if (!api) return [];
     const items = [];
-    const forward = this.stackLabel(api.above(id), { price: TEXT23.bringInFrontOfPrice, named: TEXT23.bringInFrontOf, unnamed: TEXT23.bringInFrontOfNext });
+    const forward = this.stackLabel(api.above(id), { price: TEXT24.bringInFrontOfPrice, named: TEXT24.bringInFrontOf, unnamed: TEXT24.bringInFrontOfNext });
     if (forward) items.push({ id: STACK_RAISE, label: forward });
-    const back = this.stackLabel(api.below(id), { price: TEXT23.sendBehindPrice, named: TEXT23.sendBehind, unnamed: TEXT23.sendBehindNext });
+    const back = this.stackLabel(api.below(id), { price: TEXT24.sendBehindPrice, named: TEXT24.sendBehind, unnamed: TEXT24.sendBehindNext });
     if (back) items.push({ id: STACK_LOWER, label: back });
     return items;
   }
@@ -24305,7 +24992,7 @@ var InputsUI = class {
     titleWrap.appendChild(titleEl);
     if (opts.beta) {
       const beta = document.createElement("sup");
-      beta.textContent = this.t(TEXT23.beta);
+      beta.textContent = this.t(TEXT24.beta);
       beta.dataset.velaCtl = "beta";
       beta.style.cssText = "font-size:8px;font-weight:700;opacity:0.7;margin-left:1px;letter-spacing:0.2px;";
       titleWrap.appendChild(beta);
@@ -24324,8 +25011,8 @@ var InputsUI = class {
     if (this.onToggleVisible) {
       const eye = document.createElement("button");
       eye.type = "button";
-      eye.setAttribute("aria-label", this.t(TEXT23.hide));
-      this.tip(this.rowTips, id, eye, () => this.t(this.rows.get(id)?.hidden ? TEXT23.show : TEXT23.hide));
+      eye.setAttribute("aria-label", this.t(TEXT24.hide));
+      this.tip(this.rowTips, id, eye, () => this.t(this.rows.get(id)?.hidden ? TEXT24.show : TEXT24.hide));
       eye.innerHTML = EYE_SVG;
       eye.className = "vela-ind-ctl";
       eye.style.cssText = LEGEND_CTL_CSS;
@@ -24339,9 +25026,9 @@ var InputsUI = class {
     if (inputs.length > 0 || (opts.props ?? []).length > 0) {
       const gear = document.createElement("button");
       gear.type = "button";
-      gear.setAttribute("aria-label", this.t(TEXT23.settings));
+      gear.setAttribute("aria-label", this.t(TEXT24.settings));
       gear.dataset.velaCtl = "settings";
-      this.tip(this.rowTips, id, gear, () => this.t(TEXT23.settings));
+      this.tip(this.rowTips, id, gear, () => this.t(TEXT24.settings));
       gear.innerHTML = GEAR_SVG;
       gear.className = "vela-ind-ctl";
       gear.style.cssText = LEGEND_CTL_CSS;
@@ -24351,9 +25038,9 @@ var InputsUI = class {
     if (this.moveApi) {
       const mv = document.createElement("button");
       mv.type = "button";
-      mv.setAttribute("aria-label", this.t(TEXT23.moveToPaneButton));
+      mv.setAttribute("aria-label", this.t(TEXT24.moveToPaneButton));
       mv.dataset.velaCtl = "move";
-      this.tip(this.rowTips, id, mv, () => this.t(TEXT23.moveToPaneButton));
+      this.tip(this.rowTips, id, mv, () => this.t(TEXT24.moveToPaneButton));
       mv.innerHTML = icons.iconAt("move", LEGEND_ICON_PX2);
       mv.className = "vela-ind-ctl";
       mv.style.cssText = LEGEND_CTL_CSS;
@@ -24369,9 +25056,9 @@ var InputsUI = class {
     controlsEl.appendChild(extrasEl);
     const close = document.createElement("button");
     close.type = "button";
-    close.setAttribute("aria-label", this.t(TEXT23.remove));
+    close.setAttribute("aria-label", this.t(TEXT24.remove));
     close.dataset.velaCtl = "remove";
-    this.tip(this.rowTips, id, close, () => this.t(TEXT23.remove));
+    this.tip(this.rowTips, id, close, () => this.t(TEXT24.remove));
     close.innerHTML = CLOSE_SVG;
     close.className = "vela-ind-close";
     close.style.cssText = LEGEND_CTL_CSS;
@@ -24439,7 +25126,7 @@ var InputsUI = class {
     row2.el.style.opacity = visible ? "1" : "0.5";
     if (row2.eyeEl) {
       row2.eyeEl.innerHTML = visible ? EYE_SVG : EYE_OFF_SVG;
-      row2.eyeEl.setAttribute("aria-label", this.t(visible ? TEXT23.hide : TEXT23.show));
+      row2.eyeEl.setAttribute("aria-label", this.t(visible ? TEXT24.hide : TEXT24.show));
     }
     this.syncRowActions(row2);
   }
@@ -24560,7 +25247,7 @@ var InputsUI = class {
     return "var(--vela-border)";
   }
 };
-var TEXT24 = {
+var TEXT25 = {
   moveUp: msg("chart.paneControls.moveUp", "Move panel up"),
   moveDown: msg("chart.paneControls.moveDown", "Move panel down"),
   expand: msg("chart.paneControls.expand", "Expand panel"),
@@ -24576,13 +25263,13 @@ var ICONS = {
   maximize: icons.icon("maximize"),
   restore: icons.icon("restore")
 };
-var STYLE_ID22 = "vela-pane-controls";
+var STYLE_ID23 = "vela-pane-controls";
 var ICON_PX = 12;
 var CLUSTER_PILL = "rgba(0,0,0,0.65)";
 function ensureStyles3() {
-  if (typeof document === "undefined" || document.getElementById(STYLE_ID22)) return;
+  if (typeof document === "undefined" || document.getElementById(STYLE_ID23)) return;
   const st = document.createElement("style");
-  st.id = STYLE_ID22;
+  st.id = STYLE_ID23;
   st.textContent = css.css`@layer vela.chrome {
 
 .vela-pc-btn{display:inline-flex;align-items:center;justify-content:center;padding:0;border:none;border-radius:${t.t.radius.sm};background:transparent;line-height:0;font-size:${ICON_PX}px;color:${t.t.fg.muted};}
@@ -24667,10 +25354,10 @@ var PaneControls = class {
   buildButtons(cluster, p) {
     cluster.textContent = "";
     if (p.kind === "study") {
-      cluster.appendChild(this.button(ICONS.up, this.t(TEXT24.moveUp), p.index <= 1, () => this.deps.onMove(p.id, "up"), { role: "up" }));
-      cluster.appendChild(this.button(ICONS.down, this.t(TEXT24.moveDown), p.index >= p.count - 1, () => this.deps.onMove(p.id, "down"), { role: "down" }));
+      cluster.appendChild(this.button(ICONS.up, this.t(TEXT25.moveUp), p.index <= 1, () => this.deps.onMove(p.id, "up"), { role: "up" }));
+      cluster.appendChild(this.button(ICONS.down, this.t(TEXT25.moveDown), p.index >= p.count - 1, () => this.deps.onMove(p.id, "down"), { role: "down" }));
       cluster.appendChild(
-        this.button(p.collapsed ? ICONS.expand : ICONS.collapse, this.t(p.collapsed ? TEXT24.expand : TEXT24.collapse), false, () => this.deps.onToggleCollapse(p.id), {
+        this.button(p.collapsed ? ICONS.expand : ICONS.collapse, this.t(p.collapsed ? TEXT25.expand : TEXT25.collapse), false, () => this.deps.onToggleCollapse(p.id), {
           role: "collapse",
           // A collapsed pane keeps its expand button permanently visible; the "selected"
           // white-on-black chip makes it read as an active state the user can always click.
@@ -24680,7 +25367,7 @@ var PaneControls = class {
     }
     if (p.count > 1) {
       cluster.appendChild(
-        this.button(p.maximized ? ICONS.restore : ICONS.maximize, this.t(p.maximized ? TEXT24.restore : TEXT24.maximize), false, () => this.deps.onToggleMaximize(p.id), {
+        this.button(p.maximized ? ICONS.restore : ICONS.maximize, this.t(p.maximized ? TEXT25.restore : TEXT25.maximize), false, () => this.deps.onToggleMaximize(p.id), {
           role: "maximize",
           // Same inverse-chip treatment as the collapsed pane's expand toggle: the
           // maximized state must read as an active state, not just a swapped glyph.
@@ -24766,17 +25453,20 @@ var PANE_SEPARATOR_PX = 3;
 function axisColumnX(dataW, column) {
   return column === 0 ? dataW : dataW + AXIS_MASTER_W + (column - 1) * AXIS_MERGED_W;
 }
-var TEXT25 = {
+var TEXT26 = {
   auto: msg("chart.axisButtons.auto", "Auto (fits data to screen)"),
   log: msg("chart.axisButtons.log", "Logarithmic scale"),
+  percent: msg("chart.axisButtons.percent", "Percentage scale"),
   /** The auto button's letter: the first of "Auto". */
   autoLetter: msg("chart.axisButtons.autoLetter", "A"),
   /** The log button's letter: the first of "Logarithmic". */
-  logLetter: msg("chart.axisButtons.logLetter", "L")
+  logLetter: msg("chart.axisButtons.logLetter", "L"),
+  /** The percent button's symbol. */
+  percentLetter: msg("chart.axisButtons.percentLetter", "%")
 };
-var STYLE_ID23 = "vela-axis-scale-buttons";
+var STYLE_ID24 = "vela-axis-scale-buttons";
 var BTN_PX = 18;
-var BTN_GAP = 4;
+var BTN_GAP = 3;
 var AXIS_BORDER = 1;
 var CLUSTER_W = AXIS_MASTER_W - AXIS_BORDER;
 var PAD_TOP = 8;
@@ -24784,9 +25474,9 @@ var PAD_BOTTOM = 6;
 var CLUSTER_H = BTN_PX + PAD_TOP + PAD_BOTTOM;
 var MIN_PANE_H = 48;
 function ensureStyles4() {
-  if (typeof document === "undefined" || document.getElementById(STYLE_ID23)) return;
+  if (typeof document === "undefined" || document.getElementById(STYLE_ID24)) return;
   const st = document.createElement("style");
-  st.id = STYLE_ID23;
+  st.id = STYLE_ID24;
   st.textContent = css.css`@layer vela.chrome {
 
 .vela-axis-btn{display:inline-flex;align-items:center;justify-content:center;padding:0;border:none;border-radius:${t.t.radius.sm};background:transparent;cursor:pointer;font:600 10px/1 -apple-system,Segoe UI,sans-serif;color:${t.t.fg.muted};}
@@ -24840,9 +25530,10 @@ var AxisScaleButtons = class {
       pointerEvents: "auto"
     });
     this.applyTheme();
-    this.autoBtn = this.button(TEXT25.autoLetter, TEXT25.auto, () => this.deps.onToggleAuto(this.hoverPaneId ?? ""));
-    this.logBtn = this.button(TEXT25.logLetter, TEXT25.log, () => this.deps.onToggleLog(this.hoverPaneId ?? ""));
-    this.cluster.append(this.autoBtn, this.logBtn);
+    this.percentBtn = this.button(TEXT26.percentLetter, TEXT26.percent, () => this.deps.onTogglePercent(this.hoverPaneId ?? ""));
+    this.logBtn = this.button(TEXT26.logLetter, TEXT26.log, () => this.deps.onToggleLog(this.hoverPaneId ?? ""));
+    this.autoBtn = this.button(TEXT26.autoLetter, TEXT26.auto, () => this.deps.onToggleAuto(this.hoverPaneId ?? ""));
+    this.cluster.append(this.percentBtn, this.logBtn, this.autoBtn);
     this.plot.appendChild(this.cluster);
     this.plot.addEventListener("pointermove", this.onPlotMove);
     this.plot.addEventListener("pointerleave", this.onPlotLeave);
@@ -24852,10 +25543,12 @@ var AxisScaleButtons = class {
   }
   /** Re-read the buttons' labels in the current language (tooltips read it live). */
   relabel() {
-    this.autoBtn.setAttribute("aria-label", this.t(TEXT25.auto));
-    this.logBtn.setAttribute("aria-label", this.t(TEXT25.log));
-    this.autoBtn.textContent = this.t(TEXT25.autoLetter);
-    this.logBtn.textContent = this.t(TEXT25.logLetter);
+    this.percentBtn.setAttribute("aria-label", this.t(TEXT26.percent));
+    this.autoBtn.setAttribute("aria-label", this.t(TEXT26.auto));
+    this.logBtn.setAttribute("aria-label", this.t(TEXT26.log));
+    this.percentBtn.textContent = this.t(TEXT26.percentLetter);
+    this.autoBtn.textContent = this.t(TEXT26.autoLetter);
+    this.logBtn.textContent = this.t(TEXT26.logLetter);
   }
   button(label, title, onClick) {
     const b = document.createElement("button");
@@ -24903,10 +25596,11 @@ var AxisScaleButtons = class {
     this.cluster.style.display = "flex";
     this.sync();
   }
-  /** Reflect the hovered pane's current auto/log state on the buttons. */
+  /** Reflect the hovered pane's current auto/log/percent state on the buttons. */
   sync() {
     const pane = this.deps.panes().find((p) => p.id === this.hoverPaneId);
     if (!pane) return;
+    this.percentBtn.classList.toggle("vela-axis-on", pane.percent);
     this.autoBtn.classList.toggle("vela-axis-on", pane.auto);
     this.logBtn.classList.toggle("vela-axis-on", pane.log);
   }
@@ -25281,17 +25975,17 @@ var probe = null;
 var CAP = 8192;
 var cache = /* @__PURE__ */ new Map();
 var prev = /* @__PURE__ */ new Map();
-function parseColor(css35) {
-  if (!css35) return FALLBACK;
-  let v = cache.get(css35);
+function parseColor(css36) {
+  if (!css36) return FALLBACK;
+  let v = cache.get(css36);
   if (v) return v;
-  v = prev.get(css35);
+  v = prev.get(css36);
   if (v) {
-    cache.set(css35, v);
+    cache.set(css36, v);
     return v;
   }
-  v = readBack(css35);
-  cache.set(css35, v);
+  v = readBack(css36);
+  cache.set(css36, v);
   if (cache.size >= CAP) {
     prev = cache;
     cache = /* @__PURE__ */ new Map();
@@ -25317,7 +26011,7 @@ function readableText(bg, over = "#000000") {
 function linearize(c) {
   return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
 }
-function readBack(css35) {
+function readBack(css36) {
   if (!probe) {
     const c = document.createElement("canvas");
     c.width = 1;
@@ -25327,7 +26021,7 @@ function readBack(css35) {
   if (!probe) return FALLBACK;
   probe.clearRect(0, 0, 1, 1);
   probe.fillStyle = "#000";
-  probe.fillStyle = css35;
+  probe.fillStyle = css36;
   probe.fillRect(0, 0, 1, 1);
   const d = probe.getImageData(0, 0, 1, 1).data;
   return [d[0] / 255, d[1] / 255, d[2] / 255, d[3] / 255];
@@ -25795,20 +26489,22 @@ var WebGL2Backend = class {
   /** The "neon" elements that glow: line/area/step lines + point markers (not candles/fills/bars).
    *  Routing mirrors the main pass: own series per pane, force_overlay series on the price pane. */
   emitGlowSources(b, scene, pane, coords, i0, i1) {
-    const emitOne = (s, off) => {
+    const emitOne = (s, mp, off) => {
       if (!isLineLikeSeries(s) || !seriesShownOn(s, "pane")) return;
       if (s.kind === "histogram" || s.kind === "columns") return;
-      if (s.kind === "circles" || s.kind === "cross") this.emitPointMarkers(b, s, pane, coords, i0, i1, off);
-      else this.emitPolyline(b, s, pane, coords, i0, i1, s.kind === "step", off);
+      if (s.kind === "circles" || s.kind === "cross") this.emitPointMarkers(b, s, mp, coords, i0, i1, off);
+      else this.emitPolyline(b, s, mp, coords, i0, i1, s.kind === "step", off);
     };
     for (const m of scene.indicatorsForPane(pane.id)) {
       const off = scene.offsetOf(m.id);
-      for (const s of m.series) if (s.overlay !== true) emitOne(s, off);
+      const sc = scene.scaleFor(m, pane);
+      const mp = sc === pane.scale ? pane : { ...pane, scale: sc };
+      for (const s of m.series) if (s.overlay !== true) emitOne(s, mp, off);
     }
     if (pane.kind === "price") {
       for (const m of scene.indicators.values()) {
         const off = scene.offsetOf(m.id);
-        for (const s of m.series) if (s.overlay === true) emitOne(s, off);
+        for (const s of m.series) if (s.overlay === true) emitOne(s, pane, off);
       }
     }
   }
@@ -25860,6 +26556,9 @@ var WebGL2Backend = class {
       const bPrev = coords.priceToY(b0.value, pane.scale, pane.bounds);
       const tCur = coords.priceToY(a1.value, pane.scale, pane.bounds);
       const bCur = coords.priceToY(b1.value, pane.scale, pane.bounds);
+      const dPrev = tPrev - bPrev;
+      const dCur = tCur - bCur;
+      const crosses = dPrev * dCur < 0;
       const grad = fill2.gradient?.[i - 1 - off];
       if (grad) {
         const yTop = coords.priceToY(grad.topValue, pane.scale, pane.bounds);
@@ -25869,11 +26568,29 @@ var WebGL2Backend = class {
         const bc = parseColor(grad.bottomColor);
         const span = yBot - yTop;
         const at = (y) => lerpColor(tc, bc, clamp01((y - yTop) / span));
-        b.quad4(xPrev, tPrev, at(tPrev), xCur, tCur, at(tCur), xCur, bCur, at(bCur), xPrev, bPrev, at(bPrev));
+        if (crosses) {
+          const frac = dPrev / (dPrev - dCur);
+          const xCross = xPrev + frac * (xCur - xPrev);
+          const yCross = tPrev + frac * (tCur - tPrev);
+          const cCross = at(yCross);
+          b.tri(xPrev, tPrev, at(tPrev), xCross, yCross, cCross, xPrev, bPrev, at(bPrev));
+          b.tri(xCross, yCross, cCross, xCur, tCur, at(tCur), xCur, bCur, at(bCur));
+        } else {
+          b.quad4(xPrev, tPrev, at(tPrev), xCur, tCur, at(tCur), xCur, bCur, at(bCur), xPrev, bPrev, at(bPrev));
+        }
       } else {
         const color = fill2.colors ? fill2.colors[i - 1 - off] : fill2.color;
         if (!color) continue;
-        b.quad(xPrev, tPrev, xCur, tCur, xCur, bCur, xPrev, bPrev, parseColor(color));
+        const c = parseColor(color);
+        if (crosses) {
+          const frac = dPrev / (dPrev - dCur);
+          const xCross = xPrev + frac * (xCur - xPrev);
+          const yCross = tPrev + frac * (tCur - tPrev);
+          b.tri(xPrev, tPrev, c, xCross, yCross, c, xPrev, bPrev, c);
+          b.tri(xCross, yCross, c, xCur, tCur, c, xCur, bCur, c);
+        } else {
+          b.quad(xPrev, tPrev, xCur, tCur, xCur, bCur, xPrev, bPrev, c);
+        }
       }
     }
   }
@@ -26088,15 +26805,15 @@ var WebGL2Backend = class {
     const sideFill = (y) => {
       const above = y <= baseY;
       const region = above ? baseY - top : bottom - baseY;
-      const t33 = region > 0 ? clamp01(Math.abs(y - baseY) / region) : 0;
-      return lerpColor(above ? topFill2 : bottomFill2, above ? topFill : bottomFill, t33);
+      const t34 = region > 0 ? clamp01(Math.abs(y - baseY) / region) : 0;
+      return lerpColor(above ? topFill2 : bottomFill2, above ? topFill : bottomFill, t34);
     };
     for (let k = 1; k < pts.length; k += 1) {
       const a = pts[k - 1];
       const c = pts[k];
       if (a.y <= baseY !== c.y <= baseY && c.y !== a.y) {
-        const t33 = (baseY - a.y) / (c.y - a.y);
-        const xCross = a.x + (c.x - a.x) * t33;
+        const t34 = (baseY - a.y) / (c.y - a.y);
+        const xCross = a.x + (c.x - a.x) * t34;
         b.tri(a.x, a.y, sideFill(a.y), xCross, baseY, farFill(a.y), a.x, baseY, farFill(a.y));
         b.tri(xCross, baseY, farFill(c.y), c.x, c.y, sideFill(c.y), c.x, baseY, farFill(c.y));
       } else {
@@ -26110,8 +26827,8 @@ var WebGL2Backend = class {
       const aUp = a.y <= baseY;
       const cUp = c.y <= baseY;
       if (aUp !== cUp && c.y !== a.y) {
-        const t33 = (baseY - a.y) / (c.y - a.y);
-        const xCross = a.x + (c.x - a.x) * t33;
+        const t34 = (baseY - a.y) / (c.y - a.y);
+        const xCross = a.x + (c.x - a.x) * t34;
         b.seg(a.x, a.y, xCross, baseY, bs.width, aUp ? topLine : bottomLine);
         b.seg(xCross, baseY, c.x, c.y, bs.width, cUp ? topLine : bottomLine);
       } else {
@@ -26384,14 +27101,14 @@ function compile(gl, type, src) {
   return sh;
 }
 var ZERO = [0, 0, 0, 0];
-function clamp01(t33) {
-  return t33 < 0 ? 0 : t33 > 1 ? 1 : t33;
+function clamp01(t34) {
+  return t34 < 0 ? 0 : t34 > 1 ? 1 : t34;
 }
-function lerpColor(a, b, t33) {
-  return [a[0] + (b[0] - a[0]) * t33, a[1] + (b[1] - a[1]) * t33, a[2] + (b[2] - a[2]) * t33, a[3] + (b[3] - a[3]) * t33];
+function lerpColor(a, b, t34) {
+  return [a[0] + (b[0] - a[0]) * t34, a[1] + (b[1] - a[1]) * t34, a[2] + (b[2] - a[2]) * t34, a[3] + (b[3] - a[3]) * t34];
 }
-function fadeAlpha(c, t33) {
-  const k = 1 - t33;
+function fadeAlpha(c, t34) {
+  const k = 1 - t34;
   return [c[0] * k, c[1] * k, c[2] * k, c[3] * k];
 }
 function findPoints(model, seriesId) {
@@ -26578,23 +27295,23 @@ var CoordinateSystem = class {
   priceToY(price, scale, bounds) {
     if (scale.log && scale.min > 0 && scale.max > scale.min && price > 0) {
       const lo = Math.log(scale.min);
-      const t34 = (Math.log(price) - lo) / (Math.log(scale.max) - lo);
-      return bounds.top + bounds.height * (scale.invert ? t34 : 1 - t34);
+      const t35 = (Math.log(price) - lo) / (Math.log(scale.max) - lo);
+      return bounds.top + bounds.height * (scale.invert ? t35 : 1 - t35);
     }
     const span = scale.max - scale.min;
     if (span <= 0) return bounds.top + bounds.height / 2;
-    const t33 = (price - scale.min) / span;
-    return bounds.top + bounds.height * (scale.invert ? t33 : 1 - t33);
+    const t34 = (price - scale.min) / span;
+    return bounds.top + bounds.height * (scale.invert ? t34 : 1 - t34);
   }
   yToPrice(y, scale, bounds) {
     if (bounds.height <= 0) return scale.min;
     const u = (y - bounds.top) / bounds.height;
-    const t33 = scale.invert ? u : 1 - u;
+    const t34 = scale.invert ? u : 1 - u;
     if (scale.log && scale.min > 0 && scale.max > scale.min) {
       const lo = Math.log(scale.min);
-      return Math.exp(lo + t33 * (Math.log(scale.max) - lo));
+      return Math.exp(lo + t34 * (Math.log(scale.max) - lo));
     }
-    return scale.min + (scale.max - scale.min) * t33;
+    return scale.min + (scale.max - scale.min) * t34;
   }
   // ── visible ranges ──
   visibleLogicalRange() {
@@ -26672,9 +27389,9 @@ var Animator = class {
     this.last = 0;
     this.stopped = false;
     this.loop = () => {
-      const t33 = this.now();
-      const dt = t33 - this.last;
-      this.last = t33;
+      const t34 = this.now();
+      const dt = t34 - this.last;
+      this.last = t34;
       const more = this.tick(Math.min(dt, 64));
       this.handle = more && !this.stopped ? this.raf(this.loop) : null;
     };
@@ -27221,14 +27938,14 @@ var InputController = class {
   }
   /** Pair clean taps into a double-tap — the touch equivalent of dblclick (same
    *  routing: axis taps reset that axis' view, a plot tap toggles pane maximize). */
-  registerTap(t33, x, y) {
-    const paired = this.lastTapT > 0 && t33 - this.lastTapT <= DOUBLE_TAP_MS && Math.hypot(x - this.lastTapX, y - this.lastTapY) <= DOUBLE_TAP_SLOP;
+  registerTap(t34, x, y) {
+    const paired = this.lastTapT > 0 && t34 - this.lastTapT <= DOUBLE_TAP_MS && Math.hypot(x - this.lastTapX, y - this.lastTapY) <= DOUBLE_TAP_SLOP;
     if (paired) {
       this.lastTapT = 0;
       this.doubleActivate(this.lastTapX, this.lastTapY);
       return;
     }
-    this.lastTapT = t33;
+    this.lastTapT = t34;
     this.lastTapX = x;
     this.lastTapY = y;
   }
@@ -27549,6 +28266,14 @@ var SceneGraph = class {
      *  also shown, the two merge into one stacked block (countdown under the label);
      *  when either shows alone it's centered on the latest price level. */
     this.showCountdown = true;
+    /** Draw each indicator plot's latest value as a chip on its pane's price scale. */
+    this.showIndicatorValueLabels = true;
+    /** Draw each tagged plot's name in a tinted chip just inside the plot, beside its value chip. */
+    this.showIndicatorNameLabels = false;
+    /** True while the active series has variable bar durations (tick charts, etc.):
+     *  suppresses the wall-clock bar countdown, preserves same-millisecond bars, and
+     *  formats crosshair stamps with seconds. */
+    this.variableDuration = false;
     /** Logarithmic price scale on the price pane. */
     this.logScale = false;
     /** Inverted price axis on the price pane (high at the bottom). Study panes carry their own. */
@@ -27560,11 +28285,16 @@ var SceneGraph = class {
      *  price-axis decimals — the instrument's true precision instead of the zoom-derived
      *  formula. Undefined until symbol metadata loads (the formula is the fallback). */
     this.priceMintick = void 0;
+    /** Active symbol's short display name (bare ticker, e.g. `'AAPL'`), shown beside the
+     *  main last-price chip when compared instruments are also labeled on the price axis. */
+    this.symbolName = void 0;
     /** Price-axis mode on the price pane: `'price'` (absolute) or `'percent'` (change
      *  vs `percentBaseline`). Gridlines, axis labels and crosshair chip all follow it. */
     this.scaleMode = "price";
     /** Reference price for percent mode (first visible bar's close); recomputed per frame. */
     this.percentBaseline = 0;
+    /** Per-model visible percent baseline for `percentBaseline: 'own'` models (recomputed per frame). */
+    this.modelPercentBaselines = /* @__PURE__ */ new Map();
     /** IANA time zone for the time axis + crosshair/data-window stamps (`'UTC'` default). */
     this.timezone = "UTC";
     /** The chart's formatters (`chart.i18n.format`) for axis labels, chips and readouts;
@@ -27669,11 +28399,24 @@ var SceneGraph = class {
   dropIndicatorScale(id) {
     this.indicatorScales.delete(id);
   }
-  /** The price window a model renders on: its own scale when merged (`ownScale`), else the pane's. */
+  /** The price window a model renders on: its own scale when merged (`ownScale`), an
+   *  affine-rebased window when `percentBaseline === 'own'` in percent/indexed mode so its
+   *  first visible bar aligns with the pane's 0% / 100 baseline, else the pane's master scale. */
   scaleFor(model, pane) {
     if (model.ownScale === true) {
       const s = this.indicatorScales.get(model.id);
       if (s) return s.scale;
+    }
+    if (model.percentBaseline === "own") {
+      const pct = percentScaleFor(this, pane);
+      const ownBase = this.modelPercentBaselines.get(model.id);
+      if (pct && ownBase != null && Number.isFinite(ownBase) && ownBase !== 0) {
+        const ratio = ownBase / pct.baseline;
+        if (ratio < 0) {
+          return { ...pane.scale, min: pane.scale.max * ratio, max: pane.scale.min * ratio, invert: !pane.scale.invert };
+        }
+        return { ...pane.scale, min: pane.scale.min * ratio, max: pane.scale.max * ratio };
+      }
     }
     return pane.scale;
   }
@@ -27717,12 +28460,12 @@ var SceneGraph = class {
    *  height — matching `CoordinateSystem.yToPrice`. */
   baselinePriceFor(scale) {
     if (this.baselineValue != null) return this.baselineValue;
-    const t33 = this.style.baseline.baselineLevel / 100;
+    const t34 = this.style.baseline.baselineLevel / 100;
     if (scale.log && scale.min > 0 && scale.max > scale.min) {
       const lo = Math.log(scale.min);
-      return Math.exp(lo + t33 * (Math.log(scale.max) - lo));
+      return Math.exp(lo + t34 * (Math.log(scale.max) - lo));
     }
-    return scale.min + (scale.max - scale.min) * t33;
+    return scale.min + (scale.max - scale.min) * t34;
   }
   /** Assign a default z on mount: the current bottom of the stack, so a new indicator
    *  paints behind the candles and behind every indicator already there — the price stays
@@ -27811,6 +28554,19 @@ function percentScaleFor(scene, pane) {
   const baseline = pane.percentBaseline;
   if (!Number.isFinite(baseline) || baseline === 0) return void 0;
   return { baseline, indexed: mode === "indexed" };
+}
+function percentScaleForModel(scene, pane, model) {
+  if (model.ownScale === true) return void 0;
+  const pct = percentScaleFor(scene, pane);
+  if (!pct) return void 0;
+  if (model.percentBaseline === "own") {
+    const ownBase = scene.modelPercentBaselines.get(model.id);
+    if (ownBase != null && Number.isFinite(ownBase) && ownBase !== 0) {
+      return { baseline: ownBase, indexed: pct.indexed };
+    }
+    return void 0;
+  }
+  return pct;
 }
 
 // src/renderers/native/backend/Canvas2dBackend.ts
@@ -28187,8 +28943,8 @@ var Canvas2dBackend = class {
       const aUp = a.y <= baseY;
       const cUp = c.y <= baseY;
       if (aUp !== cUp && c.y !== a.y) {
-        const t33 = (baseY - a.y) / (c.y - a.y);
-        const xCross = a.x + (c.x - a.x) * t33;
+        const t34 = (baseY - a.y) / (c.y - a.y);
+        const xCross = a.x + (c.x - a.x) * t34;
         seg(a.x, a.y, xCross, baseY, aUp ? topLine : bottomLine);
         seg(xCross, baseY, c.x, c.y, cUp ? topLine : bottomLine);
       } else {
@@ -28573,6 +29329,120 @@ function mergeBarColors2(indicators) {
     if (m.barColors) for (const bc of m.barColors) map2.set(bc.time, bc.color);
   }
   return map2;
+}
+
+// src/renderers/native/chrome/axisTags.ts
+function spreadAxisTags(slots2, minTop, maxBottom) {
+  const order = slots2.map((_, i) => i).sort((a, b) => slots2[a].top - slots2[b].top || Number(slots2[b].fixed === true) - Number(slots2[a].fixed === true) || a - b);
+  let clusters = order.map((i) => ({ items: [i], top: slots2[i].top, height: slots2[i].height }));
+  const place = (c) => {
+    let offset = 0;
+    let fixedTop = null;
+    let sum2 = 0;
+    for (const i of c.items) {
+      const s = slots2[i];
+      if (s.fixed && fixedTop === null) fixedTop = s.top - offset;
+      sum2 += s.top - offset;
+      offset += s.height;
+    }
+    c.height = offset;
+    if (fixedTop !== null) {
+      c.top = fixedTop;
+      return;
+    }
+    const top = sum2 / c.items.length;
+    const room = maxBottom - minTop;
+    c.top = c.height > room ? minTop : Math.min(Math.max(top, minTop), maxBottom - c.height);
+  };
+  clusters.forEach(place);
+  for (; ; ) {
+    let merged2 = false;
+    const next = [];
+    for (const c of clusters) {
+      const prev2 = next[next.length - 1];
+      if (prev2 && prev2.top + prev2.height > c.top + 1e-6) {
+        prev2.items.push(...c.items);
+        place(prev2);
+        merged2 = true;
+      } else {
+        next.push(c);
+      }
+    }
+    clusters = next;
+    if (!merged2) break;
+  }
+  const out = new Array(slots2.length);
+  for (const c of clusters) {
+    let y = c.top;
+    for (const i of c.items) {
+      out[i] = y;
+      y += slots2[i].height;
+    }
+  }
+  return out;
+}
+
+// src/renderers/native/chrome/tagColors.ts
+var clamp012 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+var alphaOf = (v) => v === void 0 ? 1 : clamp012(v.endsWith("%") ? parseFloat(v) / 100 : parseFloat(v));
+function hslToRgb(h, s, l) {
+  const hue = (h % 360 + 360) % 360 / 360;
+  if (s === 0) return [l, l, l];
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const channel = (t0) => {
+    const t34 = t0 < 0 ? t0 + 1 : t0 > 1 ? t0 - 1 : t0;
+    if (t34 < 1 / 6) return p + (q - p) * 6 * t34;
+    if (t34 < 1 / 2) return q;
+    if (t34 < 2 / 3) return p + (q - p) * (2 / 3 - t34) * 6;
+    return p;
+  };
+  return [channel(hue + 1 / 3), channel(hue), channel(hue - 1 / 3)];
+}
+function cssRgba(css36) {
+  const s = css36.trim().toLowerCase();
+  if (s === "transparent") return [0, 0, 0, 0];
+  const hex = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/.exec(s);
+  if (hex) {
+    let h = hex[1];
+    if (h.length <= 4) h = [...h].map((c) => c + c).join("");
+    const byte = (i) => parseInt(h.slice(i, i + 2), 16) / 255;
+    return [byte(0), byte(2), byte(4), h.length === 8 ? byte(6) : 1];
+  }
+  const rgb = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+%?)\s*)?\)$/.exec(s);
+  if (rgb) return [clamp012(+rgb[1] / 255), clamp012(+rgb[2] / 255), clamp012(+rgb[3] / 255), alphaOf(rgb[4])];
+  const hsl = /^hsla?\(\s*(-?[\d.]+)(?:deg)?\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%\s*(?:,\s*([\d.]+%?)\s*)?\)$/.exec(s);
+  if (hsl) return [...hslToRgb(+hsl[1], clamp012(+hsl[2] / 100), clamp012(+hsl[3] / 100)), alphaOf(hsl[4])];
+  return parseColor(css36);
+}
+function rgbaCss(color, alpha) {
+  const byte = (v) => Math.round(clamp012(v) * 255);
+  return `rgba(${byte(color[0])}, ${byte(color[1])}, ${byte(color[2])}, ${alpha})`;
+}
+function blend(under, over, alpha) {
+  const mix2 = (a, b) => a * (1 - alpha) + b * alpha;
+  return [mix2(under[0], over[0]), mix2(under[1], over[1]), mix2(under[2], over[2]), 1];
+}
+function luminance(c) {
+  const lin = (v) => v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  return 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);
+}
+function contrastRatio(a, b) {
+  const la = luminance(a);
+  const lb = luminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+var READABLE_CONTRAST = 4.5;
+function readableInk(color, background) {
+  if (contrastRatio(color, background) >= READABLE_CONTRAST) return color;
+  const black = [0, 0, 0, 1];
+  const white = [1, 1, 1, 1];
+  const toward = contrastRatio(black, background) >= contrastRatio(white, background) ? black : white;
+  for (let step = 1; step <= 20; step += 1) {
+    const ink = blend(color, toward, step / 20);
+    if (contrastRatio(ink, background) >= READABLE_CONTRAST) return ink;
+  }
+  return toward;
 }
 
 // src/renderers/shared/drawing-geometry.ts
@@ -29029,7 +29899,7 @@ var DrawingSceneRenderer = class {
     return cached;
   }
   wrapText(ctx, font, text, maxWidth) {
-    return wrapTextLines(text, maxWidth, (t33) => this.measure(ctx, font, t33));
+    return wrapTextLines(text, maxWidth, (t34) => this.measure(ctx, font, t34));
   }
   drawBoxText(ctx, bx, left, top, w, h) {
     const text = bx.text;
@@ -29486,8 +30356,9 @@ var STEP_LADDER = [
   3 * MONTH,
   YEAR
 ];
-function formatTimeStamp2(ms, timeZone, barIntervalMs, fmt = ENGLISH_FORMAT, surface = "crosshair") {
-  return fmt.timeStamp(ms, { timeZone: displayZone(timeZone, barIntervalMs), withTime: barIntervalMs < DAY2, surface });
+function formatTimeStamp2(ms, timeZone, barIntervalMs, fmt = ENGLISH_FORMAT, surface = "crosshair", withSeconds) {
+  const showSeconds = withSeconds ?? (barIntervalMs > 0 && barIntervalMs < MIN2);
+  return fmt.timeStamp(ms, { timeZone: displayZone(timeZone, barIntervalMs), withTime: barIntervalMs < DAY2, withSeconds: showSeconds, surface });
 }
 function pickStep(targetMs) {
   for (const step of STEP_LADDER) if (step >= targetMs) return step;
@@ -29562,13 +30433,13 @@ function timeTickCandidates(fromMs, toMs, target, offsetMs, notBeforeMs, isInCom
   const clockUnit = step < MIN2 ? "second" : step < HOUR2 ? "minute" : "hour";
   const out = [];
   for (let zt = first; zt <= zTo; zt += step) {
-    const t33 = zt - offsetMs;
+    const t34 = zt - offsetMs;
     const d = new Date(zt);
     let unit;
     let major = false;
     if (step < DAY2) {
       major = d.getUTCHours() === 0 && d.getUTCMinutes() === 0;
-      if (zt % DAY2 !== 0 && isInCompressedGap?.(t33)) continue;
+      if (zt % DAY2 !== 0 && isInCompressedGap?.(t34)) continue;
       unit = major ? "day" : clockUnit;
     } else if (step < YEAR) {
       major = d.getUTCDate() === 1;
@@ -29577,7 +30448,7 @@ function timeTickCandidates(fromMs, toMs, target, offsetMs, notBeforeMs, isInCom
       unit = "year";
       major = true;
     }
-    out.push({ time: t33, unit, major });
+    out.push({ time: t34, unit, major });
   }
   return out;
 }
@@ -29637,8 +30508,8 @@ var PriceAxisTickSource = class {
     if (m && m.kind === pane.kind && m.min === s.min && m.max === s.max && m.log === !!s.log && m.invert === !!s.invert && m.height === height && m.baseline === pct?.baseline && m.indexed === !!pct?.indexed && m.mintick === scene.priceMintick && m.format === format && m.fmt === scene.format && m.fontSize === fontSize) {
       return m.ticks;
     }
-    const defaults7 = paneAxisTicks(s, height, pct, scene.priceMintick, format, scene.format);
-    const ticks = this.callHook(fn, scene, pane, coords, defaults7, pct?.baseline, pct ? pct.indexed ? "indexed" : "percent" : "price");
+    const defaults8 = paneAxisTicks(s, height, pct, scene.priceMintick, format, scene.format);
+    const ticks = this.callHook(fn, scene, pane, coords, defaults8, pct?.baseline, pct ? pct.indexed ? "indexed" : "percent" : "price");
     this.memo.set(pane, {
       kind: pane.kind,
       min: s.min,
@@ -29656,7 +30527,7 @@ var PriceAxisTickSource = class {
     });
     return ticks;
   }
-  callHook(fn, scene, pane, coords, defaults7, baseline, mode) {
+  callHook(fn, scene, pane, coords, defaults8, baseline, mode) {
     const scale = { min: pane.scale.min, max: pane.scale.max, log: !!pane.scale.log, invert: !!pane.scale.invert };
     const bounds = { top: 0, height: pane.bounds.height };
     const ctx = {
@@ -29670,24 +30541,24 @@ var PriceAxisTickSource = class {
       mintick: scene.priceMintick,
       fontSize: scene.style.fontSize,
       priceToY: (price) => coords.priceToY(price, scale, bounds),
-      defaults: defaults7
+      defaults: defaults8
     };
     let out;
     try {
       out = fn(ctx);
     } catch (err) {
       this.warnOnce("threw", err);
-      return defaults7;
+      return defaults8;
     }
-    if (out == null) return defaults7;
+    if (out == null) return defaults8;
     if (!Array.isArray(out)) {
       this.warnOnce("returned a non-array", out);
-      return defaults7;
+      return defaults8;
     }
     const ticks = [];
-    for (const t33 of out) {
-      if (!t33 || typeof t33 !== "object") continue;
-      const { price, label, major } = t33;
+    for (const t34 of out) {
+      if (!t34 || typeof t34 !== "object") continue;
+      const { price, label, major } = t34;
       if (typeof price !== "number" || !Number.isFinite(price) || typeof label !== "string") continue;
       ticks.push(typeof major === "boolean" ? { price, label, major } : { price, label });
     }
@@ -30053,6 +30924,25 @@ function standaloneSvg(markup, ink, px) {
 
 // src/renderers/native/chrome/ChromeRenderer.ts
 var MINOR_LABEL_ALPHA = 0.5;
+var TAG_H = 16;
+var TAG_PAD = 8;
+var NAME_MAX_W = 160;
+var NAME_TINT = 0.18;
+var NAME_BORDER_ALPHA = 0.55;
+function taggedPlots(m, index) {
+  const out = [];
+  for (const s of m.series) {
+    if (!isLineLikeSeries(s) || !seriesShownOn(s, "priceScale")) continue;
+    const p = s.points[index];
+    if (!p || p.value === null || !Number.isFinite(p.value)) continue;
+    const css36 = p.color ?? s.style.color;
+    if (!css36) continue;
+    const [r, g, b, a] = cssRgba(css36);
+    if (!(a > 0)) continue;
+    out.push({ series: s, value: p.value, color: [r, g, b, 1] });
+  }
+  return out;
+}
 var ChromeRenderer = class {
   /** `axisTicks` is shared with the backdrop layer, so price labels and gridlines agree. */
   constructor(axisTicks = new PriceAxisTickSource()) {
@@ -30071,6 +30961,8 @@ var ChromeRenderer = class {
     /** Bar open times of the current series, rebuilt only when the array or its length changes (a live tick keeps both). */
     this.barTimesSrc = null;
     this.barTimesCache = [];
+    /** The chart's translator, for the indicator name labels (English when absent). */
+    this.i18n = null;
   }
   mount(canvas) {
     this.canvas = canvas;
@@ -30157,6 +31049,7 @@ var ChromeRenderer = class {
     this.drawPriceAxes(ctx, scene, coords, theme, dataW, panes);
     this.drawMergedScaleColumns(ctx, scene, coords, dataW);
     this.drawPaneSeparators(ctx, scene, theme, fullW, panes);
+    this.drawIndicatorTags(ctx, scene, coords, theme, dataW, fullW, panes, pricePane);
     this.drawPriceLineAndCountdown(ctx, scene, coords, theme, dataW, pricePane);
     this.drawTimeAxis(ctx, scene, coords, theme, dataW, dataH, fullH);
     this.drawMarkLane(ctx, scene, coords, theme, dataW, dataH);
@@ -30259,14 +31152,14 @@ var ChromeRenderer = class {
     const alpha = ctx.globalAlpha;
     for (const pane of panes) {
       if (pane.collapsed) continue;
-      for (const t33 of this.axisTicks.ticksFor(scene, pane, coords)) {
-        const y = coords.priceToY(t33.price, pane.scale, pane.bounds);
+      for (const t34 of this.axisTicks.ticksFor(scene, pane, coords)) {
+        const y = coords.priceToY(t34.price, pane.scale, pane.bounds);
         if (y < pane.bounds.top + 6 || y > pane.bounds.top + pane.bounds.height - 4) continue;
-        if (t33.major === true) ctx.font = majorFont;
-        else if (t33.major === false) ctx.globalAlpha = alpha * MINOR_LABEL_ALPHA;
-        ctx.fillText(t33.label, dataW + 6, y);
-        if (t33.major === true) ctx.font = font;
-        else if (t33.major === false) ctx.globalAlpha = alpha;
+        if (t34.major === true) ctx.font = majorFont;
+        else if (t34.major === false) ctx.globalAlpha = alpha * MINOR_LABEL_ALPHA;
+        ctx.fillText(t34.label, dataW + 6, y);
+        if (t34.major === true) ctx.font = font;
+        else if (t34.major === false) ctx.globalAlpha = alpha;
       }
       if (pane.axisBands) {
         for (const b of pane.axisBands) {
@@ -30309,14 +31202,141 @@ var ChromeRenderer = class {
         const sc = scene.indicatorScales.get(model.id)?.scale;
         if (!sc) return;
         const x = axisColumnX(dataW, k + 1);
-        for (const t33 of paneAxisTicks(sc, pane.bounds.height, void 0, scene.priceMintick, void 0, scene.format)) {
-          const y = coords.priceToY(t33.price, sc, pane.bounds);
+        for (const t34 of paneAxisTicks(sc, pane.bounds.height, void 0, scene.priceMintick, void 0, scene.format)) {
+          const y = coords.priceToY(t34.price, sc, pane.bounds);
           if (y < pane.bounds.top + 6 || y > pane.bounds.top + pane.bounds.height - 4) continue;
-          ctx.fillText(t33.label, x + 5, y);
+          ctx.fillText(t34.label, x + 5, y);
         }
       });
     }
     ctx.textAlign = "start";
+  }
+  /**
+   * Indicator value tags: each indicator plot's value on the last bar, as a chip in its
+   * plot color on the scale it draws against (the pane's master scale, or its own merged
+   * column), with its name in a tinted chip at the plot's right edge when name labels are on.
+   *
+   * Chips that would overlap are spread apart; the last-price chip keeps its place and the
+   * tags make room around it. Each scale column spreads its own chips, except with name
+   * labels on: the names all sit at the plot's edge, whatever column their value is in, so
+   * the pane's tags then share one set of rows and every name sits level with its own value.
+   * A tag pushed out of its pane (crowded against an edge, or a pane too short for them all)
+   * is left off, and each pane draws clipped to its own band.
+   *
+   * A plot gets no tag when it is off the price scale (`display.priceScale`), has no value or
+   * an invisible color on the last bar (`color = na`, a fill anchor), or sits outside its pane.
+   */
+  drawIndicatorTags(ctx, scene, coords, theme, dataW, fullW, panes, pricePane) {
+    const showValues = scene.showIndicatorValueLabels;
+    const showNames = scene.showIndicatorNameLabels;
+    const hasOptIn = scene.showPriceLabel && [...scene.indicators.values()].some((m) => m.priceAxisLabel === true);
+    if (!showValues && !showNames && !hasOptIn) return;
+    const last = scene.bars.length - 1;
+    if (last < 0) return;
+    const background = cssRgba(theme.background);
+    const nameMaxW = Math.min(NAME_MAX_W, dataW * 0.4);
+    const labelled = /* @__PURE__ */ new Map();
+    for (const m of scene.indicators.values()) labelled.set(m.id, taggedPlots(m, last - scene.offsetOf(m.id)));
+    for (const pane of panes) {
+      if (pane.collapsed || !(pane.bounds.height > 0)) continue;
+      const top = pane.bounds.top;
+      const bottom = top + pane.bounds.height;
+      const own = scene.ownScaleIndicatorsForPane(pane.id);
+      const tags = [];
+      const add = (m, plot, column, scale, master) => {
+        const solidPill = m.priceAxisLabel === true && scene.showPriceLabel;
+        if (!showValues && !showNames && !solidPill) return;
+        const y = coords.priceToY(plot.value, scale, pane.bounds);
+        if (!(y >= top && y <= bottom)) return;
+        const mintick = m.percentBaseline === "own" ? void 0 : scene.priceMintick;
+        const text = master ? formatAxisValue(scale, pane.bounds.height, plot.value, percentScaleForModel(scene, pane, m), mintick, pane.axisFormat, scene.format, solidPill ? "lastPrice" : "priceAxis") : formatAxisValue(scale, pane.bounds.height, plot.value, void 0, mintick, void 0, scene.format, solidPill ? "lastPrice" : "priceAxis");
+        if (!text) return;
+        const name = solidPill ? plot.series.title || this.tagName(m, plot.series, labelled.get(m.id).length) : this.tagName(m, plot.series, labelled.get(m.id).length);
+        tags.push({ column, slot: { top: y - TAG_H / 2, height: TAG_H }, text, color: plot.color, name, ...solidPill ? { solidPill: true } : {} });
+      };
+      for (const m of scene.orderedIndicatorsForPane(pane.id)) {
+        const k = m.ownScale === true ? own.indexOf(m) : -1;
+        for (const plot of labelled.get(m.id)) if (plot.series.overlay !== true) add(m, plot, k + 1, scene.scaleFor(m, pane), k < 0);
+      }
+      if (pane === pricePane) {
+        for (const m of scene.indicators.values()) for (const plot of labelled.get(m.id)) if (plot.series.overlay === true) add(m, plot, 0, pane.scale, true);
+      }
+      if (tags.length === 0) continue;
+      const priceChip = pane === pricePane ? this.priceChipSlot(scene, coords, pane) : null;
+      const anyEdgeNames = showNames || tags.some((t34) => t34.solidPill && t34.column === 0);
+      const groups = /* @__PURE__ */ new Map();
+      for (const t34 of tags) {
+        const key = anyEdgeNames ? 0 : t34.column;
+        const group = groups.get(key);
+        if (group) group.push(t34);
+        else groups.set(key, [t34]);
+      }
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, top, fullW, bottom - top);
+      ctx.clip();
+      ctx.textBaseline = "middle";
+      ctx.textAlign = "center";
+      for (const [key, group] of groups) {
+        const slots2 = group.map((t34) => t34.slot);
+        if (priceChip && key === 0) slots2.push(priceChip);
+        const tops = spreadAxisTags(slots2, top, bottom);
+        group.forEach((t34, i) => {
+          const chipTop = tops[i];
+          if (chipTop < top || chipTop + TAG_H > bottom) return;
+          const y = chipTop + TAG_H / 2;
+          const fill2 = rgbaCss(t34.color, 1);
+          if (showValues || t34.solidPill) {
+            const x = axisColumnX(dataW, t34.column) + 1;
+            const w = ctx.measureText(t34.text).width + TAG_PAD;
+            ctx.fillStyle = fill2;
+            ctx.fillRect(x, chipTop, w, TAG_H);
+            ctx.fillStyle = tagTextColor(fill2, theme.background);
+            ctx.fillText(t34.text, x + w / 2, y);
+          }
+          if (t34.solidPill && t34.column === 0 && t34.name) {
+            const name = fitText(ctx, t34.name, nameMaxW);
+            drawAxisNameTag(ctx, name, dataW, y, fill2, tagTextColor(fill2, theme.background));
+            ctx.textAlign = "center";
+          } else if (showNames && t34.name) {
+            const name = fitText(ctx, t34.name, nameMaxW);
+            const w = ctx.measureText(name).width + TAG_PAD;
+            const x = dataW - w - 2;
+            const chip = blend(background, t34.color, NAME_TINT);
+            ctx.fillStyle = rgbaCss(chip, 1);
+            ctx.fillRect(x, chipTop, w, TAG_H);
+            ctx.strokeStyle = rgbaCss(t34.color, NAME_BORDER_ALPHA);
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x + 0.5, chipTop + 0.5, w - 1, TAG_H - 1);
+            ctx.fillStyle = rgbaCss(readableInk(t34.color, chip), 1);
+            ctx.fillText(name, x + w / 2, y);
+          }
+        });
+      }
+      ctx.restore();
+    }
+    ctx.textAlign = "start";
+  }
+  /** What a plot's name label reads: the indicator's short name, plus the plot's own name
+   *  when the indicator tags more than one plot (`BB Upper`, `BB Basis`). */
+  tagName(m, s, plots) {
+    const short = m.displayShorttitle ?? m.shorttitle;
+    const indicator = textOf(this.i18n, short ?? m.displayTitle ?? m.title);
+    if (plots <= 1) return indicator;
+    const plot = s.displayTitle ? textOf(this.i18n, s.displayTitle) : s.title;
+    return plot && plot !== indicator ? `${indicator} ${plot}` : indicator;
+  }
+  /** The band the last-price chip (and the countdown merged under it) takes on the price
+   *  scale, or null when neither shows — the slot indicator tags make room around. */
+  priceChipSlot(scene, coords, pricePane) {
+    const n = scene.bars.length;
+    if (n === 0 || scene.candlesHidden) return null;
+    const last = scene.bars[n - 1];
+    const y = coords.priceToY(last.close, pricePane.scale, pricePane.bounds);
+    if (y < pricePane.bounds.top || y > pricePane.bounds.top + pricePane.bounds.height) return null;
+    const countdown = scene.showCountdown && !scene.variableDuration && countdownText2(last.time, coords.barInterval, clockCorrection.now(), scene.format) !== null;
+    if (!scene.showPriceLabel && !countdown) return null;
+    return { top: y - 8, height: scene.showPriceLabel && countdown ? 32 : 16, fixed: true };
   }
   /**
    * The latest-price chrome on the price pane, all colored with the price element's own
@@ -30347,7 +31367,7 @@ var ChromeRenderer = class {
       ctx.stroke();
       setDash2(ctx, "solid");
     }
-    const cdText = scene.showCountdown ? countdownText2(last.time, coords.barInterval, clockCorrection.now(), scene.format) : null;
+    const cdText = scene.showCountdown && !scene.variableDuration ? countdownText2(last.time, coords.barInterval, clockCorrection.now(), scene.format) : null;
     const showCountdown = cdText !== null;
     const showLabel = scene.showPriceLabel;
     if (!showLabel && !showCountdown) return;
@@ -30356,6 +31376,10 @@ var ChromeRenderer = class {
     const x = dataW + 1;
     const textColor = tagTextColor(color, theme.background);
     ctx.textBaseline = "middle";
+    const hasLabeledOverlay = showLabel && !!scene.symbolName && scene.indicatorsForPane(pricePane.id).some((m) => m.priceAxisLabel === true && m.ownScale !== true && taggedPlots(m, n - 1 - scene.offsetOf(m.id)).length > 0);
+    if (hasLabeledOverlay && scene.symbolName) {
+      drawAxisNameTag(ctx, scene.symbolName, dataW, y, color, textColor);
+    }
     if (showLabel && cdText !== null) {
       const w2 = Math.max(ctx.measureText(priceText).width, ctx.measureText(cdText).width) + PAD;
       const top = y - 8;
@@ -30411,6 +31435,29 @@ function unionRange(a, b) {
   if (!b) return a;
   return { min: Math.min(a.min, b.min), max: Math.max(a.max, b.max) };
 }
+function drawAxisNameTag(ctx, name, dataW, y, fill2, textColor) {
+  const PAD_X2 = 6;
+  const H = 16;
+  const w = Math.ceil(ctx.measureText(name).width) + PAD_X2 * 2;
+  const x = dataW - w - 1;
+  const top = y - H / 2;
+  const r = 2;
+  ctx.fillStyle = fill2;
+  ctx.beginPath();
+  ctx.moveTo(x + r, top);
+  ctx.lineTo(x + w, top);
+  ctx.lineTo(x + w, top + H);
+  ctx.lineTo(x + r, top + H);
+  ctx.quadraticCurveTo(x, top + H, x, top + H - r);
+  ctx.lineTo(x, top + r);
+  ctx.quadraticCurveTo(x, top, x + r, top);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = textColor;
+  ctx.textAlign = "center";
+  ctx.fillText(name, x + w / 2, y);
+  ctx.textAlign = "start";
+}
 function setDash2(ctx, style) {
   if (style === "dashed") ctx.setLineDash([6, 4]);
   else if (style === "dotted") ctx.setLineDash([2, 3]);
@@ -30446,6 +31493,12 @@ function priceElementColor(scene, coords, theme, last) {
       return body;
     }
   }
+}
+function fitText(ctx, text, maxW) {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let s = text;
+  while (s.length > 1 && ctx.measureText(`${s}…`).width > maxW) s = s.slice(0, -1);
+  return `${s.trimEnd()}…`;
 }
 
 // src/renderers/native/chrome/LabelTooltip.ts
@@ -30585,7 +31638,8 @@ var CrosshairRenderer = class {
       const price = coords.yToPrice(ch.y, pane.scale, pane.bounds);
       this.chip(ctx, dataW + 1, ch.y, formatAxisValue(pane.scale, pane.bounds.height, price, percentScaleFor(scene, pane), scene.priceMintick, pane.axisFormat, scene.format, "crosshair"), chipBg, "left", false, theme.background);
     }
-    if (vertical) this.chip(ctx, x, dataH + 1, formatTimeStamp2(coords.logicalToTime(logical), scene.timezone, coords.barInterval, scene.format), chipBg, "center", true, theme.background);
+    const showSeconds = scene.variableDuration || coords.barInterval > 0 && coords.barInterval < 6e4;
+    if (vertical) this.chip(ctx, x, dataH + 1, formatTimeStamp2(coords.logicalToTime(logical), scene.timezone, coords.barInterval, scene.format, "crosshair", showSeconds), chipBg, "center", true, theme.background);
   }
   destroy() {
     this.canvas = null;
@@ -30643,7 +31697,8 @@ var CrosshairRenderer = class {
         this.chip(ctx, dataW + 1, ext.y, formatAxisValue(pane.scale, pane.bounds.height, ext.price, percentScaleFor(scene, pane), scene.priceMintick, pane.axisFormat, scene.format, "crosshair"), chipBg, "left", false, theme.background);
       }
     }
-    this.chip(ctx, x, dataH + 1, formatTimeStamp2(ext.time, scene.timezone, coords.barInterval, scene.format), chipBg, "center", true, theme.background);
+    const showSeconds = scene.variableDuration || coords.barInterval > 0 && coords.barInterval < 6e4;
+    this.chip(ctx, x, dataH + 1, formatTimeStamp2(ext.time, scene.timezone, coords.barInterval, scene.format, "crosshair", showSeconds), chipBg, "center", true, theme.background);
     ctx.globalAlpha = 1;
   }
   /** Paint the `shadeRight` veil from `from` to the price scale and record the veiled area. */
@@ -30810,6 +31865,8 @@ var BUILTIN_SETTINGS_IDS = [
   "scales.price-scale.last-price-line",
   "scales.price-scale.last-price-label",
   "scales.price-scale.countdown",
+  "scales.price-scale.indicator-value-labels",
+  "scales.price-scale.indicator-name-labels",
   "scales.price-scale.axis-labels",
   "scales.price-scale.border-color",
   "scales.crosshair",
@@ -30864,7 +31921,7 @@ function settingsIdCatalog(hostSections, markGroups = []) {
   }
   return [...ids];
 }
-var TEXT26 = {
+var TEXT27 = {
   sections: msg("chart.settings.sections", "Sections"),
   chartSettings: msg("chart.settings.chartSettings", "Chart settings"),
   resetDefaults: msg("chart.settings.resetDefaults", "Reset defaults"),
@@ -30918,6 +31975,8 @@ var TEXT26 = {
   lastPriceLine: msg("chart.settings.lastPriceLine", "Last price line"),
   lastPriceLabel: msg("chart.settings.lastPriceLabel", "Last price label"),
   countdownToBarClose: msg("chart.settings.countdownToBarClose", "Countdown to bar close"),
+  indicatorValueLabels: msg("chart.settings.indicatorValueLabels", "Indicator value labels"),
+  indicatorNameLabels: msg("chart.settings.indicatorNameLabels", "Indicator name labels"),
   axisLabels: msg("chart.settings.axisLabels", "Axis labels"),
   scaleBorderColor: msg("chart.settings.scaleBorderColor", "Scale border color"),
   crosshair: msg("chart.settings.crosshair", "Crosshair"),
@@ -31172,7 +32231,7 @@ var SettingsDialog = class {
   }
   /** Switch an already-open dialog to a tab by title — no-op when closed or unknown. */
   showSection(section) {
-    this.tabs.find((t33) => t33.title.toLowerCase() === section.toLowerCase())?.show();
+    this.tabs.find((t34) => t34.title.toLowerCase() === section.toLowerCase())?.show();
   }
   open(config, onChange, onImport, onReset, section) {
     this.close();
@@ -31188,13 +32247,13 @@ var SettingsDialog = class {
       burger.type = "button";
       burger.className = "vela-sd-burger";
       burger.innerHTML = icons.iconAt("burger", 16);
-      burger.title = this.t(TEXT26.sections);
+      burger.title = this.t(TEXT27.sections);
       burger.addEventListener("click", () => this.toggleRail?.());
     }
     const i18n = this.i18n?.();
     const ui = new dialog.Dialog({
       host: this.container,
-      title: this.t(TEXT26.chartSettings),
+      title: this.t(TEXT27.chartSettings),
       ...i18n ? { i18n } : {},
       // Non-modal: a live-edit dialog must leave the page interactive — a modal
       // machine locks pointer events on the whole body, killing the chart, the
@@ -31211,7 +32270,7 @@ var SettingsDialog = class {
         foot.style.cssText = `padding:10px 14px;display:flex;align-items:center;justify-content:flex-start;gap:8px;`;
         const resetBtn = document.createElement("button");
         resetBtn.type = "button";
-        resetBtn.textContent = this.t(TEXT26.resetDefaults);
+        resetBtn.textContent = this.t(TEXT27.resetDefaults);
         resetBtn.className = "vela-sd-btn";
         resetBtn.addEventListener("click", () => this.onReset?.());
         foot.appendChild(resetBtn);
@@ -31275,8 +32334,8 @@ var SettingsDialog = class {
       el.dataset.sdId = id;
       return el;
     };
-    body.append(sid(this.section(TEXT26.symbol), "symbol"));
-    body.append(sid(this.sectionTitle(TEXT26.chartType), "symbol.type"));
+    body.append(sid(this.section(TEXT27.symbol), "symbol"));
+    body.append(sid(this.sectionTitle(TEXT27.chartType), "symbol.type"));
     const styles = this.priceStyleState?.() ?? { shown: config.series.style, unavailable: [] };
     const shownStyle = styles.shown;
     const unavailable = new Set(styles.unavailable);
@@ -31288,71 +32347,71 @@ var SettingsDialog = class {
       }
     };
     body.append(
-      sid(this.selectRowLabeled(TEXT26.type, shownStyle, priceStyleIds().map((id) => [id, priceStyleMessage(id)]), (v) => {
+      sid(this.selectRowLabeled(TEXT27.type, shownStyle, priceStyleIds().map((id) => [id, priceStyleMessage(id)]), (v) => {
         this.emit({ series: { style: v } });
         showActive(v);
         this.syncTypeTabs?.(v);
       }, { ids: unavailable, title: PRICE_STYLE_UNAVAILABLE }), "symbol.type")
     );
     const candles = sid(this.group(), "symbol.style.candles");
-    candles.append(this.sectionTitle(TEXT26.candles));
-    candles.append(sid(this.toggleRow(TEXT26.body, config.candles.bodyVisible, (v) => this.emit({ candles: { bodyVisible: v } }), [
+    candles.append(this.sectionTitle(TEXT27.candles));
+    candles.append(sid(this.toggleRow(TEXT27.body, config.candles.bodyVisible, (v) => this.emit({ candles: { bodyVisible: v } }), [
       this.swatch(config.candles.upColor, (v) => this.emit({ candles: { upColor: v } })),
       this.swatch(config.candles.downColor, (v) => this.emit({ candles: { downColor: v } }))
     ]), "symbol.style.candles.body"));
-    candles.append(sid(this.toggleRow(TEXT26.borders, config.candles.borderVisible, (v) => this.emit({ candles: { borderVisible: v } }), [
+    candles.append(sid(this.toggleRow(TEXT27.borders, config.candles.borderVisible, (v) => this.emit({ candles: { borderVisible: v } }), [
       this.swatch(config.candles.borderUpColor, (v) => this.emit({ candles: { borderUpColor: v } })),
       this.swatch(config.candles.borderDownColor, (v) => this.emit({ candles: { borderDownColor: v } }))
     ]), "symbol.style.candles.borders"));
-    candles.append(sid(this.toggleRow(TEXT26.wick, config.candles.wickVisible, (v) => this.emit({ candles: { wickVisible: v } }), [
+    candles.append(sid(this.toggleRow(TEXT27.wick, config.candles.wickVisible, (v) => this.emit({ candles: { wickVisible: v } }), [
       this.swatch(config.candles.wickUpColor, (v) => this.emit({ candles: { wickUpColor: v } })),
       this.swatch(config.candles.wickDownColor, (v) => this.emit({ candles: { wickDownColor: v } }))
     ]), "symbol.style.candles.wick"));
-    candles.append(sid(this.numberRow(TEXT26.spacing, config.series.spacing, 0.1, 10, 0.1, (v) => this.emit({ series: { spacing: v } })), "symbol.style.candles.spacing"));
+    candles.append(sid(this.numberRow(TEXT27.spacing, config.series.spacing, 0.1, 10, 0.1, (v) => this.emit({ series: { spacing: v } })), "symbol.style.candles.spacing"));
     groups.candles = candles;
     body.append(candles);
     const bars = sid(this.group(), "symbol.style.bars");
-    bars.append(this.sectionTitle(TEXT26.bars));
-    bars.append(sid(this.colorRow(TEXT26.colorUp, config.bars.upColor, (v) => this.emit({ bars: { upColor: v } })), "symbol.style.bars.up-color"));
-    bars.append(sid(this.colorRow(TEXT26.colorDown, config.bars.downColor, (v) => this.emit({ bars: { downColor: v } })), "symbol.style.bars.down-color"));
-    bars.append(sid(this.numberRow(TEXT26.spacing, config.series.spacing, 0.1, 10, 0.1, (v) => this.emit({ series: { spacing: v } })), "symbol.style.bars.spacing"));
+    bars.append(this.sectionTitle(TEXT27.bars));
+    bars.append(sid(this.colorRow(TEXT27.colorUp, config.bars.upColor, (v) => this.emit({ bars: { upColor: v } })), "symbol.style.bars.up-color"));
+    bars.append(sid(this.colorRow(TEXT27.colorDown, config.bars.downColor, (v) => this.emit({ bars: { downColor: v } })), "symbol.style.bars.down-color"));
+    bars.append(sid(this.numberRow(TEXT27.spacing, config.series.spacing, 0.1, 10, 0.1, (v) => this.emit({ series: { spacing: v } })), "symbol.style.bars.spacing"));
     groups.bars = bars;
     body.append(bars);
     const line = sid(this.group(), "symbol.style.line");
-    line.append(this.sectionTitle(TEXT26.line));
-    line.append(sid(this.colorRow(TEXT26.color, config.line.color, (v) => this.emit({ line: { color: v } })), "symbol.style.line.color"));
-    line.append(sid(this.numberRow(TEXT26.width, config.line.width, 1, 10, 1, (v) => this.emit({ line: { width: v } })), "symbol.style.line.width"));
+    line.append(this.sectionTitle(TEXT27.line));
+    line.append(sid(this.colorRow(TEXT27.color, config.line.color, (v) => this.emit({ line: { color: v } })), "symbol.style.line.color"));
+    line.append(sid(this.numberRow(TEXT27.width, config.line.width, 1, 10, 1, (v) => this.emit({ line: { width: v } })), "symbol.style.line.width"));
     groups.line = line;
     body.append(line);
     const area = sid(this.group(), "symbol.style.area");
-    area.append(this.sectionTitle(TEXT26.area));
-    area.append(sid(this.colorRow(TEXT26.lineColor, config.area.lineColor, (v) => this.emit({ area: { lineColor: v } })), "symbol.style.area.line-color"));
-    area.append(sid(this.numberRow(TEXT26.width, config.area.width, 1, 10, 1, (v) => this.emit({ area: { width: v } })), "symbol.style.area.width"));
-    area.append(sid(this.colorRow(TEXT26.topFill, config.area.topColor, (v) => this.emit({ area: { topColor: v } })), "symbol.style.area.top-fill"));
-    area.append(sid(this.colorRow(TEXT26.bottomFill, config.area.bottomColor, (v) => this.emit({ area: { bottomColor: v } })), "symbol.style.area.bottom-fill"));
+    area.append(this.sectionTitle(TEXT27.area));
+    area.append(sid(this.colorRow(TEXT27.lineColor, config.area.lineColor, (v) => this.emit({ area: { lineColor: v } })), "symbol.style.area.line-color"));
+    area.append(sid(this.numberRow(TEXT27.width, config.area.width, 1, 10, 1, (v) => this.emit({ area: { width: v } })), "symbol.style.area.width"));
+    area.append(sid(this.colorRow(TEXT27.topFill, config.area.topColor, (v) => this.emit({ area: { topColor: v } })), "symbol.style.area.top-fill"));
+    area.append(sid(this.colorRow(TEXT27.bottomFill, config.area.bottomColor, (v) => this.emit({ area: { bottomColor: v } })), "symbol.style.area.bottom-fill"));
     groups.area = area;
     body.append(area);
     const baseline = sid(this.group(), "symbol.style.baseline");
-    baseline.append(this.sectionTitle(TEXT26.baseline));
-    baseline.append(sid(this.rowWith(TEXT26.topLine, [this.swatch(config.baseline.topLineColor, (v) => this.emit({ baseline: { topLineColor: v } }))]), "symbol.style.baseline.top-line"));
-    baseline.append(sid(this.rowWith(TEXT26.bottomLine, [this.swatch(config.baseline.bottomLineColor, (v) => this.emit({ baseline: { bottomLineColor: v } }))]), "symbol.style.baseline.bottom-line"));
-    baseline.append(sid(this.rowWith(TEXT26.fillTopArea, [
+    baseline.append(this.sectionTitle(TEXT27.baseline));
+    baseline.append(sid(this.rowWith(TEXT27.topLine, [this.swatch(config.baseline.topLineColor, (v) => this.emit({ baseline: { topLineColor: v } }))]), "symbol.style.baseline.top-line"));
+    baseline.append(sid(this.rowWith(TEXT27.bottomLine, [this.swatch(config.baseline.bottomLineColor, (v) => this.emit({ baseline: { bottomLineColor: v } }))]), "symbol.style.baseline.bottom-line"));
+    baseline.append(sid(this.rowWith(TEXT27.fillTopArea, [
       this.swatch(config.baseline.topFillColor, (v) => this.emit({ baseline: { topFillColor: v } })),
       this.swatch(config.baseline.topFillColor2, (v) => this.emit({ baseline: { topFillColor2: v } }))
     ]), "symbol.style.baseline.fill-top"));
-    baseline.append(sid(this.rowWith(TEXT26.fillBottomArea, [
+    baseline.append(sid(this.rowWith(TEXT27.fillBottomArea, [
       this.swatch(config.baseline.bottomFillColor2, (v) => this.emit({ baseline: { bottomFillColor2: v } })),
       this.swatch(config.baseline.bottomFillColor, (v) => this.emit({ baseline: { bottomFillColor: v } }))
     ]), "symbol.style.baseline.fill-bottom"));
-    baseline.append(sid(this.numberRow(TEXT26.baseLevelPct, config.baseline.baselineLevel, 0, 100, 1, (v) => this.emit({ baseline: { baselineLevel: v } })), "symbol.style.baseline.base-level"));
-    baseline.append(sid(this.numberRow(TEXT26.width, config.baseline.width, 1, 10, 1, (v) => this.emit({ baseline: { width: v } })), "symbol.style.baseline.width"));
+    baseline.append(sid(this.numberRow(TEXT27.baseLevelPct, config.baseline.baselineLevel, 0, 100, 1, (v) => this.emit({ baseline: { baselineLevel: v } })), "symbol.style.baseline.base-level"));
+    baseline.append(sid(this.numberRow(TEXT27.width, config.baseline.width, 1, 10, 1, (v) => this.emit({ baseline: { width: v } })), "symbol.style.baseline.width"));
     groups.baseline = baseline;
     body.append(baseline);
     const columns = sid(this.group(), "symbol.style.columns");
-    columns.append(this.sectionTitle(TEXT26.columns));
-    columns.append(sid(this.colorRow(TEXT26.colorUp, config.columns.upColor, (v) => this.emit({ columns: { upColor: v } })), "symbol.style.columns.up-color"));
-    columns.append(sid(this.colorRow(TEXT26.colorDown, config.columns.downColor, (v) => this.emit({ columns: { downColor: v } })), "symbol.style.columns.down-color"));
-    columns.append(sid(this.numberRow(TEXT26.spacing, config.series.spacing, 0.1, 10, 0.1, (v) => this.emit({ series: { spacing: v } })), "symbol.style.columns.spacing"));
+    columns.append(this.sectionTitle(TEXT27.columns));
+    columns.append(sid(this.colorRow(TEXT27.colorUp, config.columns.upColor, (v) => this.emit({ columns: { upColor: v } })), "symbol.style.columns.up-color"));
+    columns.append(sid(this.colorRow(TEXT27.colorDown, config.columns.downColor, (v) => this.emit({ columns: { downColor: v } })), "symbol.style.columns.down-color"));
+    columns.append(sid(this.numberRow(TEXT27.spacing, config.series.spacing, 0.1, 10, 0.1, (v) => this.emit({ series: { spacing: v } })), "symbol.style.columns.spacing"));
     groups.columns = columns;
     body.append(columns);
     for (const def of chartTypes()) {
@@ -31361,57 +32420,57 @@ var SettingsDialog = class {
       const colorOf2 = (key, shared) => typeof bag[key] === "string" && bag[key] !== "" ? bag[key] : shared;
       const boolOf = (key, shared) => typeof bag[key] === "boolean" ? bag[key] : shared;
       const g = sid(this.group(), `symbol.style.${def.id}`);
-      g.append(this.sectionTitle(TEXT26.candles));
-      g.append(sid(this.toggleRow(TEXT26.body, boolOf("candleBodyVisible", config.candles.bodyVisible), (v) => this.emitType(def.id, "candleBodyVisible", v), [
+      g.append(this.sectionTitle(TEXT27.candles));
+      g.append(sid(this.toggleRow(TEXT27.body, boolOf("candleBodyVisible", config.candles.bodyVisible), (v) => this.emitType(def.id, "candleBodyVisible", v), [
         this.swatch(colorOf2("candleUpColor", config.candles.upColor), (v) => this.emitType(def.id, "candleUpColor", v)),
         this.swatch(colorOf2("candleDownColor", config.candles.downColor), (v) => this.emitType(def.id, "candleDownColor", v))
       ]), `symbol.style.${def.id}.body`));
-      g.append(sid(this.toggleRow(TEXT26.borders, boolOf("candleBorderVisible", config.candles.borderVisible), (v) => this.emitType(def.id, "candleBorderVisible", v), [
+      g.append(sid(this.toggleRow(TEXT27.borders, boolOf("candleBorderVisible", config.candles.borderVisible), (v) => this.emitType(def.id, "candleBorderVisible", v), [
         this.swatch(colorOf2("candleBorderUpColor", config.candles.borderUpColor), (v) => this.emitType(def.id, "candleBorderUpColor", v)),
         this.swatch(colorOf2("candleBorderDownColor", config.candles.borderDownColor), (v) => this.emitType(def.id, "candleBorderDownColor", v))
       ]), `symbol.style.${def.id}.borders`));
-      g.append(sid(this.toggleRow(TEXT26.wick, boolOf("candleWickVisible", config.candles.wickVisible), (v) => this.emitType(def.id, "candleWickVisible", v), [
+      g.append(sid(this.toggleRow(TEXT27.wick, boolOf("candleWickVisible", config.candles.wickVisible), (v) => this.emitType(def.id, "candleWickVisible", v), [
         this.swatch(colorOf2("candleWickUpColor", config.candles.wickUpColor), (v) => this.emitType(def.id, "candleWickUpColor", v)),
         this.swatch(colorOf2("candleWickDownColor", config.candles.wickDownColor), (v) => this.emitType(def.id, "candleWickDownColor", v))
       ]), `symbol.style.${def.id}.wick`));
-      g.append(sid(this.numberRow(TEXT26.spacing, config.series.spacing, 0.1, 10, 0.1, (v) => this.emit({ series: { spacing: v } })), `symbol.style.${def.id}.spacing`));
+      g.append(sid(this.numberRow(TEXT27.spacing, config.series.spacing, 0.1, 10, 0.1, (v) => this.emit({ series: { spacing: v } })), `symbol.style.${def.id}.spacing`));
       groups[def.id] = g;
       body.append(g);
     }
     showActive(shownStyle);
-    body.append(sid(this.sectionTitle(TEXT26.animation), "symbol.animation"));
+    body.append(sid(this.sectionTitle(TEXT27.animation), "symbol.animation"));
     body.append(sid(this.boolRow(
-      TEXT26.animateZoom,
+      TEXT27.animateZoom,
       config.animations.zoom,
       (v) => this.emit({ animations: { zoom: v } }),
-      this.hint(TEXT26.animateZoomHint)
+      this.hint(TEXT27.animateZoomHint)
     ), "symbol.animation.zoom"));
     body.append(sid(this.boolRow(
-      TEXT26.panMomentum,
+      TEXT27.panMomentum,
       config.animations.pan,
       (v) => this.emit({ animations: { pan: v } }),
-      this.hint(TEXT26.panMomentumHint)
+      this.hint(TEXT27.panMomentumHint)
     ), "symbol.animation.pan"));
     body.append(sid(this.boolRow(
-      TEXT26.animatePriceScale,
+      TEXT27.animatePriceScale,
       config.animations.autoscale,
       (v) => this.emit({ animations: { autoscale: v } }),
-      this.hint(TEXT26.animatePriceScaleHint)
+      this.hint(TEXT27.animatePriceScaleHint)
     ), "symbol.animation.autoscale"));
     body.append(sid(this.boolRow(
-      TEXT26.animatePriceChanges,
+      TEXT27.animatePriceChanges,
       config.priceScale.animateLastPrice,
       (v) => this.emit({ priceScale: { animateLastPrice: v } }),
-      this.hint(TEXT26.animatePriceChangesHint)
+      this.hint(TEXT27.animatePriceChangesHint)
     ), "symbol.animation.price-changes"));
     body.append(sid(this.boolRow(
-      TEXT26.revealOnLoad,
+      TEXT27.revealOnLoad,
       config.animations.intro,
       (v) => this.emit({ animations: { intro: v } }),
-      this.hint(TEXT26.revealOnLoadHint)
+      this.hint(TEXT27.revealOnLoadHint)
     ), "symbol.animation.intro"));
-    body.append(sid(this.sectionTitle(TEXT26.timeZone), "symbol.timezone"));
-    body.append(sid(this.selectRowLabeled(TEXT26.timeZone, normalizeTimezone(config.timeScale.timezone), this.timezoneOptions(config.timeScale.timezone), (v) => this.emit({ timeScale: { timezone: v } })), "symbol.timezone"));
+    body.append(sid(this.sectionTitle(TEXT27.timeZone), "symbol.timezone"));
+    body.append(sid(this.selectRowLabeled(TEXT27.timeZone, normalizeTimezone(config.timeScale.timezone), this.timezoneOptions(config.timeScale.timezone), (v) => this.emit({ timeScale: { timezone: v } })), "symbol.timezone"));
     const renderHostSections = (placement) => {
       for (const hs of this.hostSections) {
         if ((hs.placement ?? "after-symbol") !== placement) continue;
@@ -31440,55 +32499,57 @@ var SettingsDialog = class {
     renderHostSections("symbol");
     renderChartTypeSections("after-symbol");
     renderHostSections("after-symbol");
-    body.append(sid(this.section(TEXT26.scalesAndLines), "scales"));
-    body.append(sid(this.sectionTitle(TEXT26.priceScale), "scales.price-scale"));
+    body.append(sid(this.section(TEXT27.scalesAndLines), "scales"));
+    body.append(sid(this.sectionTitle(TEXT27.priceScale), "scales.price-scale"));
     body.append(
       sid(this.selectRowLabeled(
-        TEXT26.mode,
+        TEXT27.mode,
         config.priceScale.log ? "log" : config.priceScale.mode,
-        [["price", TEXT26.regular], ["percent", TEXT26.percent], ["indexed", TEXT26.indexedTo100], ["log", TEXT26.logarithmic]],
+        [["price", TEXT27.regular], ["percent", TEXT27.percent], ["indexed", TEXT27.indexedTo100], ["log", TEXT27.logarithmic]],
         (v) => this.emit({ priceScale: v === "log" ? { mode: "price", log: true } : { mode: v, log: false } })
       ), "scales.price-scale.mode")
     );
-    body.append(sid(this.boolRow(TEXT26.invertScale, config.priceScale.invert, (v) => this.emit({ priceScale: { invert: v } })), "scales.price-scale.invert"));
-    body.append(sid(this.boolRow(TEXT26.scalePriceOnly, config.priceScale.priceOnly, (v) => this.emit({ priceScale: { priceOnly: v } })), "scales.price-scale.price-only"));
-    body.append(sid(this.boolRow(TEXT26.freePan, config.priceScale.freePan, (v) => this.emit({ priceScale: { freePan: v } })), "scales.price-scale.free-pan"));
+    body.append(sid(this.boolRow(TEXT27.invertScale, config.priceScale.invert, (v) => this.emit({ priceScale: { invert: v } })), "scales.price-scale.invert"));
+    body.append(sid(this.boolRow(TEXT27.scalePriceOnly, config.priceScale.priceOnly, (v) => this.emit({ priceScale: { priceOnly: v } })), "scales.price-scale.price-only"));
+    body.append(sid(this.boolRow(TEXT27.freePan, config.priceScale.freePan, (v) => this.emit({ priceScale: { freePan: v } })), "scales.price-scale.free-pan"));
     body.append(sid(this.separator(), "scales.price-scale"));
-    body.append(sid(this.boolRow(TEXT26.lastPriceLine, config.priceScale.currentPriceLine, (v) => this.emit({ priceScale: { currentPriceLine: v } })), "scales.price-scale.last-price-line"));
-    body.append(sid(this.boolRow(TEXT26.lastPriceLabel, config.priceScale.priceLabel, (v) => this.emit({ priceScale: { priceLabel: v } })), "scales.price-scale.last-price-label"));
-    body.append(sid(this.boolRow(TEXT26.countdownToBarClose, config.priceScale.countdown, (v) => this.emit({ priceScale: { countdown: v } })), "scales.price-scale.countdown"));
-    body.append(sid(this.boolRow(TEXT26.axisLabels, config.priceScale.labelsVisible, (v) => this.emit({ priceScale: { labelsVisible: v } })), "scales.price-scale.axis-labels"));
-    body.append(sid(this.colorRow(TEXT26.scaleBorderColor, config.priceScale.borderColor, (v) => this.emit({ priceScale: { borderColor: v } })), "scales.price-scale.border-color"));
-    body.append(sid(this.sectionTitle(TEXT26.crosshair), "scales.crosshair"));
-    body.append(sid(this.colorRow(TEXT26.color, config.crosshair.color, (v) => this.emit({ crosshair: { color: v } })), "scales.crosshair.color"));
-    body.append(sid(this.numberRow(TEXT26.width, config.crosshair.width, 0.5, 8, 0.5, (v) => this.emit({ crosshair: { width: v } })), "scales.crosshair.width"));
-    body.append(sid(this.selectRowLabeled(TEXT26.style, config.crosshair.style, [["solid", TEXT26.solid], ["dashed", TEXT26.dashed], ["dotted", TEXT26.dotted]], (v) => this.emit({ crosshair: { style: v } })), "scales.crosshair.style"));
-    body.append(sid(this.section(TEXT26.canvas), "canvas"));
-    body.append(sid(this.sectionTitle(TEXT26.backgroundAndText), "canvas.background"));
-    body.append(sid(this.colorRow(TEXT26.background, config.layout.background, (v) => this.emit({ layout: { background: v } })), "canvas.background.color"));
-    body.append(sid(this.colorRow(TEXT26.textColor, config.layout.textColor, (v) => this.emit({ layout: { textColor: v } })), "canvas.background.text-color"));
-    body.append(sid(this.numberRow(TEXT26.textSize, config.layout.fontSize, 6, 32, 1, (v) => this.emit({ layout: { fontSize: v } })), "canvas.background.text-size"));
-    body.append(sid(this.colorRow(TEXT26.paneSeparatorColor, config.panes.separatorColor, (v) => this.emit({ panes: { separatorColor: v } })), "canvas.background.pane-separator"));
-    body.append(sid(this.sectionTitle(TEXT26.grid), "canvas.grid"));
-    body.append(sid(this.toggleRow(TEXT26.vertical, config.grid.vertLines.visible, (v) => this.emit({ grid: { vertLines: { visible: v } } }), [
+    body.append(sid(this.boolRow(TEXT27.lastPriceLine, config.priceScale.currentPriceLine, (v) => this.emit({ priceScale: { currentPriceLine: v } })), "scales.price-scale.last-price-line"));
+    body.append(sid(this.boolRow(TEXT27.lastPriceLabel, config.priceScale.priceLabel, (v) => this.emit({ priceScale: { priceLabel: v } })), "scales.price-scale.last-price-label"));
+    body.append(sid(this.boolRow(TEXT27.countdownToBarClose, config.priceScale.countdown, (v) => this.emit({ priceScale: { countdown: v } })), "scales.price-scale.countdown"));
+    body.append(sid(this.boolRow(TEXT27.indicatorValueLabels, config.priceScale.indicatorValueLabels, (v) => this.emit({ priceScale: { indicatorValueLabels: v } })), "scales.price-scale.indicator-value-labels"));
+    body.append(sid(this.boolRow(TEXT27.indicatorNameLabels, config.priceScale.indicatorNameLabels, (v) => this.emit({ priceScale: { indicatorNameLabels: v } })), "scales.price-scale.indicator-name-labels"));
+    body.append(sid(this.boolRow(TEXT27.axisLabels, config.priceScale.labelsVisible, (v) => this.emit({ priceScale: { labelsVisible: v } })), "scales.price-scale.axis-labels"));
+    body.append(sid(this.colorRow(TEXT27.scaleBorderColor, config.priceScale.borderColor, (v) => this.emit({ priceScale: { borderColor: v } })), "scales.price-scale.border-color"));
+    body.append(sid(this.sectionTitle(TEXT27.crosshair), "scales.crosshair"));
+    body.append(sid(this.colorRow(TEXT27.color, config.crosshair.color, (v) => this.emit({ crosshair: { color: v } })), "scales.crosshair.color"));
+    body.append(sid(this.numberRow(TEXT27.width, config.crosshair.width, 0.5, 8, 0.5, (v) => this.emit({ crosshair: { width: v } })), "scales.crosshair.width"));
+    body.append(sid(this.selectRowLabeled(TEXT27.style, config.crosshair.style, [["solid", TEXT27.solid], ["dashed", TEXT27.dashed], ["dotted", TEXT27.dotted]], (v) => this.emit({ crosshair: { style: v } })), "scales.crosshair.style"));
+    body.append(sid(this.section(TEXT27.canvas), "canvas"));
+    body.append(sid(this.sectionTitle(TEXT27.backgroundAndText), "canvas.background"));
+    body.append(sid(this.colorRow(TEXT27.background, config.layout.background, (v) => this.emit({ layout: { background: v } })), "canvas.background.color"));
+    body.append(sid(this.colorRow(TEXT27.textColor, config.layout.textColor, (v) => this.emit({ layout: { textColor: v } })), "canvas.background.text-color"));
+    body.append(sid(this.numberRow(TEXT27.textSize, config.layout.fontSize, 6, 32, 1, (v) => this.emit({ layout: { fontSize: v } })), "canvas.background.text-size"));
+    body.append(sid(this.colorRow(TEXT27.paneSeparatorColor, config.panes.separatorColor, (v) => this.emit({ panes: { separatorColor: v } })), "canvas.background.pane-separator"));
+    body.append(sid(this.sectionTitle(TEXT27.grid), "canvas.grid"));
+    body.append(sid(this.toggleRow(TEXT27.vertical, config.grid.vertLines.visible, (v) => this.emit({ grid: { vertLines: { visible: v } } }), [
       this.swatch(config.grid.vertLines.color, (v) => this.emit({ grid: { vertLines: { color: v } } }))
     ]), "canvas.grid.vertical"));
-    body.append(sid(this.toggleRow(TEXT26.horizontal, config.grid.horzLines.visible, (v) => this.emit({ grid: { horzLines: { visible: v } } }), [
+    body.append(sid(this.toggleRow(TEXT27.horizontal, config.grid.horzLines.visible, (v) => this.emit({ grid: { horzLines: { visible: v } } }), [
       this.swatch(config.grid.horzLines.color, (v) => this.emit({ grid: { horzLines: { color: v } } }))
     ]), "canvas.grid.horizontal"));
-    body.append(sid(this.sectionTitle(TEXT26.margins), "canvas.margins"));
-    body.append(sid(this.numberRow(TEXT26.top, config.margins.top, 0, 40, 1, (v) => this.emit({ margins: { top: v } }), "%"), "canvas.margins.top"));
-    body.append(sid(this.numberRow(TEXT26.bottom, config.margins.bottom, 0, 40, 1, (v) => this.emit({ margins: { bottom: v } }), "%"), "canvas.margins.bottom"));
-    body.append(sid(this.numberRow(TEXT26.right, config.margins.right, 0, 200, 1, (v) => this.emit({ margins: { right: v } }), TEXT_UNITS.bars), "canvas.margins.right"));
+    body.append(sid(this.sectionTitle(TEXT27.margins), "canvas.margins"));
+    body.append(sid(this.numberRow(TEXT27.top, config.margins.top, 0, 40, 1, (v) => this.emit({ margins: { top: v } }), "%"), "canvas.margins.top"));
+    body.append(sid(this.numberRow(TEXT27.bottom, config.margins.bottom, 0, 40, 1, (v) => this.emit({ margins: { bottom: v } }), "%"), "canvas.margins.bottom"));
+    body.append(sid(this.numberRow(TEXT27.right, config.margins.right, 0, 200, 1, (v) => this.emit({ margins: { right: v } }), TEXT_UNITS.bars), "canvas.margins.right"));
     if (this.themeControl) {
       const tc = this.themeControl;
-      body.append(sid(this.sectionTitle(TEXT26.theme), "canvas.theme"));
-      const choices2 = [["dark", TEXT_THEME.dark], ["light", TEXT_THEME.light], ...registeredThemes().map((t33) => [t33.id, t33.label])];
+      body.append(sid(this.sectionTitle(TEXT27.theme), "canvas.theme"));
+      const choices2 = [["dark", TEXT_THEME.dark], ["light", TEXT_THEME.light], ...registeredThemes().map((t34) => [t34.id, t34.label])];
       body.append(sid(this.selectRowLabeled(TEXT_THEME.colorTheme, tc.current, choices2, (v) => tc.onSelect(v)), "canvas.theme"));
     }
     if (this.markGroups.length > 0) {
-      body.append(sid(this.section(TEXT26.events), MARKS_SETTINGS_ID));
-      body.append(sid(this.sectionTitle(TEXT26.visibleEvents), MARKS_GROUPS_SETTINGS_ID));
+      body.append(sid(this.section(TEXT27.events), MARKS_SETTINGS_ID));
+      body.append(sid(this.sectionTitle(TEXT27.visibleEvents), MARKS_GROUPS_SETTINGS_ID));
       const rowsById = /* @__PURE__ */ new Map();
       const rows = markGroupRows(this.markGroups);
       const refreshDimming = () => {
@@ -31590,7 +32651,7 @@ var SettingsDialog = class {
       });
       this.activeSection = panes[idx]?.title ?? null;
       if (mobile) {
-        ui.titleEl.textContent = panes[idx]?.label ?? this.t(TEXT26.chartSettings);
+        ui.titleEl.textContent = panes[idx]?.label ?? this.t(TEXT27.chartSettings);
         this.toggleRail?.(false);
       }
     };
@@ -31736,8 +32797,8 @@ var SettingsDialog = class {
       controls.push(el);
     }
     if (n.toggle) {
-      const t33 = n.toggle;
-      const el = this.toggleRow(n.label, bag[t33.key], (v) => put(t33.key, v), controls, () => bag[t33.key] === true);
+      const t34 = n.toggle;
+      const el = this.toggleRow(n.label, bag[t34.key], (v) => put(t34.key, v), controls, () => bag[t34.key] === true);
       refreshers.push(() => el.dispatchEvent(new Event("vela-sync")));
       return el;
     }
@@ -32102,9 +33163,9 @@ var SettingsDialog = class {
    *  present (so an externally-set custom zone still shows selected). */
   timezoneOptions(current) {
     const i18n = this.i18n?.() ?? null;
-    const options = TIMEZONES.map((t33) => [t33.value, tzMenuLabel(t33.value, textOf(i18n, t33.name), i18n)]);
+    const options = TIMEZONES.map((t34) => [t34.value, tzMenuLabel(t34.value, textOf(i18n, t34.name), i18n)]);
     const normalized = normalizeTimezone(current);
-    if (TIMEZONES.some((t33) => t33.value === normalized)) return options;
+    if (TIMEZONES.some((t34) => t34.value === normalized)) return options;
     return [[normalized, tzMenuLabel(normalized, normalized, i18n)], ...options];
   }
 };
@@ -32113,7 +33174,7 @@ function normalizeSelectOptions(options) {
 }
 
 // src/renderers/native/drawings/DrawingPainter.ts
-var TEXT27 = {
+var TEXT28 = {
   loading: msg("drawing.magnifier.loading", "Loading…"),
   noData: msg("drawing.magnifier.noData", "No lower-timeframe data"),
   tooWide: msg("drawing.magnifier.tooWide", "Area too wide for this timeframe"),
@@ -32613,8 +33674,8 @@ var DrawingPainter = class {
    *  though it has no shape of its own: a firm frame once selected, a fainter one under the cursor.
    *  Placed to coincide with the inline editor's frame — clicking into the text doesn't shift it. */
   paintTextFrame(ctx, id, x, top, lines, fs, theme) {
-    const t33 = this.targets;
-    const alpha = t33.selected?.has(id) ? TEXT_FRAME_ALPHA.selected : t33.hovered === id ? TEXT_FRAME_ALPHA.hovered : 0;
+    const t34 = this.targets;
+    const alpha = t34.selected?.has(id) ? TEXT_FRAME_ALPHA.selected : t34.hovered === id ? TEXT_FRAME_ALPHA.hovered : 0;
     if (alpha === 0) return;
     const lh = labelLineHeight(fs);
     const w = Math.max(8, ...lines.map((l) => ctx.measureText(l).width));
@@ -32773,9 +33834,9 @@ var DrawingPainter = class {
       this.applyStroke(ctx, { ...d.style, lineColor: arc.color });
       ctx.beginPath();
       for (let i = 0; i <= N; i += 1) {
-        const t33 = i / N * (Math.PI / 2);
-        const x = g.ox + arc.k * g.bx * Math.cos(t33);
-        const y = g.oy + arc.k * g.py * Math.sin(t33);
+        const t34 = i / N * (Math.PI / 2);
+        const x = g.ox + arc.k * g.bx * Math.cos(t34);
+        const y = g.oy + arc.k * g.py * Math.sin(t34);
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       }
@@ -33037,7 +34098,7 @@ var DrawingPainter = class {
       }
       ctx.restore();
     } else if (res) {
-      const notice = res.state === "loading" ? TEXT27.loading : res.state === "ready" ? TEXT27.noData : res.reason === "too-wide" ? TEXT27.tooWide : res.reason === "none-lower" ? TEXT27.noneLower : res.reason === "not-lower" ? TEXT27.notLower : TEXT27.noSource;
+      const notice = res.state === "loading" ? TEXT28.loading : res.state === "ready" ? TEXT28.noData : res.reason === "too-wide" ? TEXT28.tooWide : res.reason === "none-lower" ? TEXT28.noneLower : res.reason === "not-lower" ? TEXT28.notLower : TEXT28.noSource;
       this.paintMagnifierNotice(ctx, this.t(notice), x0, y0, w, h, theme);
     }
     ctx.save();
@@ -33614,7 +34675,7 @@ var DrawingPainter = class {
     const pct = a.price !== 0 ? priceChange / a.price * 100 : 0;
     const bars = proj.barsBetween ? Math.abs(Math.round(proj.barsBetween(a.time, b.time))) : 0;
     const sign = priceChange >= 0 ? "+" : "";
-    const txt = this.t(TEXT27.infoLine, { change: this.num(`${sign}${priceChange.toFixed(2)}`), percent: this.num(`${sign}${pct.toFixed(2)}`), count: bars, bars: this.num(String(bars)) });
+    const txt = this.t(TEXT28.infoLine, { change: this.num(`${sign}${priceChange.toFixed(2)}`), percent: this.num(`${sign}${pct.toFixed(2)}`), count: bars, bars: this.num(String(bars)) });
     const mx = (x1 + x2) / 2;
     const my = (y1 + y2) / 2;
     ctx.font = "11px monospace";
@@ -33847,13 +34908,13 @@ function labelLayout(d, proj) {
       if (pts.length < 2) return null;
       const [x1, y1] = pts[0];
       const [x2, y2] = pts[1];
-      const t33 = text.place === "start" ? 0.12 : text.place === "end" ? 0.88 : 0.5;
+      const t34 = text.place === "start" ? 0.12 : text.place === "end" ? 0.88 : 0.5;
       const below = text.side === "below";
       return {
         x: 0,
         top: below ? 6 : -6 - lh * lines,
         align: "center",
-        rotate: { angle: uprightLineAngle(x1, y1, x2, y2), cx: x1 + (x2 - x1) * t33, cy: y1 + (y2 - y1) * t33 }
+        rotate: { angle: uprightLineAngle(x1, y1, x2, y2), cx: x1 + (x2 - x1) * t34, cy: y1 + (y2 - y1) * t34 }
       };
     }
     case "box": {
@@ -34090,9 +35151,9 @@ var DrawingInteraction = class {
         return c ? [{ d: c, orig: cloneAnchors(c) }] : [];
       });
     }
-    for (const t33 of this.state.clones ?? this.dragSources(d)) {
-      const { dt, dp } = this.bodyDelta(t33.d.paneId, x, y);
-      t33.d.anchors = t33.d.translateBody(dt, dp, t33.orig);
+    for (const t34 of this.state.clones ?? this.dragSources(d)) {
+      const { dt, dp } = this.bodyDelta(t34.d.paneId, x, y);
+      t34.d.anchors = t34.d.translateBody(dt, dp, t34.orig);
     }
   }
   /** Pointer move: advance the placing ghost, or live-preview a drag once past the slop.
@@ -34332,7 +35393,7 @@ function cloneAnchors(d) {
 function rectsIntersect(a, b) {
   return a.x <= b.x + b.w && b.x <= a.x + a.w && a.y <= b.y + b.h && b.y <= a.y + a.h;
 }
-var TEXT28 = {
+var TEXT29 = {
   account: msg("drawing.section.account", "Account"),
   riskPct: msg("drawing.section.riskPct", "Risk %"),
   accountBalance: msg("drawing.section.accountBalance", "Account balance"),
@@ -34371,10 +35432,10 @@ var FRVP_ANCHOR = [
   { value: "right", label: msg("drawing.fixedrangevp.anchor.right", "Right") },
   { value: "left", label: msg("drawing.fixedrangevp.anchor.left", "Left") }
 ];
-function choices(options, t33) {
-  return options.map((o) => ({ value: o.value, label: t33(o.label) }));
+function choices(options, t34) {
+  return options.map((o) => ({ value: o.value, label: t34(o.label) }));
 }
-function buildPositionSection(grid, drawing, actions, theme, t33) {
+function buildPositionSection(grid, drawing, actions, theme, t34) {
   const live = () => {
     const d = actions.resolve();
     return d instanceof PositionTool ? d : drawing;
@@ -34417,7 +35478,7 @@ function buildPositionSection(grid, drawing, actions, theme, t33) {
     });
     const sel = field.buildFieldControl({
       kind: "select",
-      options: choices(LEVEL_UNITS, t33),
+      options: choices(LEVEL_UNITS, t34),
       value: mode,
       fill: false,
       theme,
@@ -34431,14 +35492,14 @@ function buildPositionSection(grid, drawing, actions, theme, t33) {
     });
     grid.appendChild(field.fieldRow({ label, control: [ni.el, sel.el] }));
   };
-  grid.appendChild(field.fieldSection(t33(TEXT28.account), { variant: "inputs", first: true }));
-  numberRow(t33(TEXT28.riskPct), "riskPercent", { min: 0, max: 100, step: 0.1 });
-  numberRow(t33(TEXT28.accountBalance), "accountBalance", { min: 0, max: 1e12, step: 1, integer: true });
-  numberRow(t33(TEXT28.positionSize), "quantity");
-  grid.appendChild(field.fieldSection(t33(TEXT28.levels), { variant: "inputs" }));
+  grid.appendChild(field.fieldSection(t34(TEXT29.account), { variant: "inputs", first: true }));
+  numberRow(t34(TEXT29.riskPct), "riskPercent", { min: 0, max: 100, step: 0.1 });
+  numberRow(t34(TEXT29.accountBalance), "accountBalance", { min: 0, max: 1e12, step: 1, integer: true });
+  numberRow(t34(TEXT29.positionSize), "quantity");
+  grid.appendChild(field.fieldSection(t34(TEXT29.levels), { variant: "inputs" }));
   const dir = field.buildFieldControl({
     kind: "select",
-    options: choices(DIRECTION_OPTIONS, t33),
+    options: choices(DIRECTION_OPTIONS, t34),
     value: live().direction,
     fill: false,
     theme,
@@ -34448,18 +35509,18 @@ function buildPositionSection(grid, drawing, actions, theme, t33) {
     }
   });
   refreshers.push(() => dir.setValue?.(live().direction));
-  grid.appendChild(field.fieldRow({ label: t33(TEXT28.direction), control: dir.el }));
-  numberRow(t33(TEXT28.entryPrice), "entryPrice");
-  levelRow(t33(TEXT28.stop), "stopPrice", "stop");
-  levelRow(t33(TEXT28.target), "targetPrice", "target");
-  grid.appendChild(field.fieldSection(t33(TEXT28.display), { variant: "inputs" }));
+  grid.appendChild(field.fieldRow({ label: t34(TEXT29.direction), control: dir.el }));
+  numberRow(t34(TEXT29.entryPrice), "entryPrice");
+  levelRow(t34(TEXT29.stop), "stopPrice", "stop");
+  levelRow(t34(TEXT29.target), "targetPrice", "target");
+  grid.appendChild(field.fieldSection(t34(TEXT29.display), { variant: "inputs" }));
   const toggles = [
-    [t33(TEXT28.showText), "showText"],
-    [t33(TEXT28.showDirectionAndRatio), "showHeader"],
-    [t33(TEXT28.showLossAndSize), "showLossSize"],
-    [t33(TEXT28.showTargetLabel), "showTargetLabel"],
-    [t33(TEXT28.showStopLabel), "showStopLabel"],
-    [t33(TEXT28.showLevelPrices), "showPrices"]
+    [t34(TEXT29.showText), "showText"],
+    [t34(TEXT29.showDirectionAndRatio), "showHeader"],
+    [t34(TEXT29.showLossAndSize), "showLossSize"],
+    [t34(TEXT29.showTargetLabel), "showTargetLabel"],
+    [t34(TEXT29.showStopLabel), "showStopLabel"],
+    [t34(TEXT29.showLevelPrices), "showPrices"]
   ];
   for (const [label, path] of toggles) {
     grid.appendChild(field.fieldRow({
@@ -34486,7 +35547,7 @@ function buildPositionSection(grid, drawing, actions, theme, t33) {
   grid.appendChild(summary);
   refreshAll();
 }
-function buildProfileSection(grid, drawing, actions, theme, t33) {
+function buildProfileSection(grid, drawing, actions, theme, t34) {
   const styleOf = () => {
     const d = actions.resolve();
     return d instanceof FixedRangeVolumeProfile ? d.frvp : drawing.frvp;
@@ -34508,14 +35569,14 @@ function buildProfileSection(grid, drawing, actions, theme, t33) {
       }).el
     }));
   };
-  numberRow(t33(TEXT28.rows), "rows", 1, 500, 1);
-  numberRow(t33(TEXT28.valueArea), "valueAreaPct", 0, 100, 1);
-  numberRow(t33(TEXT28.widthPct), "widthPct", 0, 100, 1);
+  numberRow(t34(TEXT29.rows), "rows", 1, 500, 1);
+  numberRow(t34(TEXT29.valueArea), "valueAreaPct", 0, 100, 1);
+  numberRow(t34(TEXT29.widthPct), "widthPct", 0, 100, 1);
   grid.appendChild(field.fieldRow({
-    label: t33(TEXT28.anchor),
+    label: t34(TEXT29.anchor),
     control: field.buildFieldControl({
       kind: "select",
-      options: choices(FRVP_ANCHOR, t33),
+      options: choices(FRVP_ANCHOR, t34),
       value: s.anchor,
       fill: false,
       theme,
@@ -34534,11 +35595,11 @@ function buildProfileSection(grid, drawing, actions, theme, t33) {
       }).el
     }));
   };
-  colorRow(t33(TEXT28.upVolume), "upColor");
-  colorRow(t33(TEXT28.downVolume), "downColor");
-  colorRow(t33(TEXT28.valueAreaUp), "vaUpColor");
-  colorRow(t33(TEXT28.valueAreaDown), "vaDownColor");
-  const styles = choices(LINE_STYLE_OPTIONS, t33);
+  colorRow(t34(TEXT29.upVolume), "upColor");
+  colorRow(t34(TEXT29.downVolume), "downColor");
+  colorRow(t34(TEXT29.valueAreaUp), "vaUpColor");
+  colorRow(t34(TEXT29.valueAreaDown), "vaDownColor");
+  const styles = choices(LINE_STYLE_OPTIONS, t34);
   const levelRow = (label, showPath, colorPath, stylePath) => {
     const row2 = document.createElement("div");
     row2.className = "vela-field-span";
@@ -34575,13 +35636,13 @@ function buildProfileSection(grid, drawing, actions, theme, t33) {
     row2.append(sw.el, lbl, col.el, style.el);
     grid.appendChild(row2);
   };
-  levelRow(t33(TEXT28.vah), "showVah", "vahColor", "vahStyle");
-  levelRow(t33(TEXT28.val), "showVal", "valColor", "valStyle");
-  levelRow(t33(TEXT28.poc), "showPoc", "pocColor", "pocStyle");
-  levelRow(t33(TEXT28.developingPOC), "showDevelopingPoc", "developingPocColor", "developingPocStyle");
-  levelRow(t33(TEXT28.developingVA), "showDevelopingVa", "developingVaColor", "developingVaStyle");
+  levelRow(t34(TEXT29.vah), "showVah", "vahColor", "vahStyle");
+  levelRow(t34(TEXT29.val), "showVal", "valColor", "valStyle");
+  levelRow(t34(TEXT29.poc), "showPoc", "pocColor", "pocStyle");
+  levelRow(t34(TEXT29.developingPOC), "showDevelopingPoc", "developingPocColor", "developingPocStyle");
+  levelRow(t34(TEXT29.developingVA), "showDevelopingVa", "developingVaColor", "developingVaStyle");
 }
-var TEXT29 = {
+var TEXT30 = {
   settings: msg("drawing.settings.settings", "Settings"),
   cancel: msg("drawing.settings.cancel", "Cancel"),
   ok: msg("drawing.settings.ok", "OK"),
@@ -34669,7 +35730,7 @@ var LEVEL_PATHS = /* @__PURE__ */ new Set(["showRatios"]);
 var INTRADAY = ["s", "1", "5", "15", "60", "240"];
 var HIGHER = ["60", "240", "D", "W", "M"];
 var openFolds = /* @__PURE__ */ new Map();
-var STYLE_ID24 = "vela-dsp-styles";
+var STYLE_ID25 = "vela-dsp-styles";
 var STYLE_REV = "1";
 var CHEVRON = '<svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m4.5 2.5 3.5 3.5-3.5 3.5"/></svg>';
 var CHEVRON_DOWN = '<svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m2.5 4.5 3.5 3.5 3.5-3.5"/></svg>';
@@ -34684,10 +35745,10 @@ var widthIcon = (w) => `<svg viewBox="0 0 18 14" width="18" height="14"><rect x=
 var dashIcon = (s) => `<svg viewBox="0 0 18 14" width="18" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="${s === "dashed" ? "4 3" : s === "dotted" ? "0.1 3.5" : "0"}"><path d="M2 7h14"/></svg>`;
 function ensureStyles5() {
   if (typeof document === "undefined") return;
-  const existing = document.getElementById(STYLE_ID24);
+  const existing = document.getElementById(STYLE_ID25);
   if (existing?.dataset.rev === STYLE_REV) return;
   const s = existing ?? document.createElement("style");
-  s.id = STYLE_ID24;
+  s.id = STYLE_ID25;
   s.dataset.rev = STYLE_REV;
   s.textContent = css.css`@layer vela.chrome {
 
@@ -34834,7 +35895,7 @@ var DrawingSettingsPanel = class {
     const i18n = this.env.i18n?.();
     const ui = new dialog.Dialog({
       host: this.host,
-      title: meta?.label ?? this.t(TEXT29.settings),
+      title: meta?.label ?? this.t(TEXT30.settings),
       ...i18n ? { i18n } : {},
       modal: false,
       contained: true,
@@ -34850,9 +35911,9 @@ var DrawingSettingsPanel = class {
           b.dataset.drawingAction = extra.id;
           foot.append(b);
         }
-        const cancelBtn = button(this.t(TEXT29.cancel), false, cancel);
+        const cancelBtn = button(this.t(TEXT30.cancel), false, cancel);
         if (extras.length > 0) cancelBtn.style.marginInlineStart = "auto";
-        foot.append(cancelBtn, button(this.t(TEXT29.ok), true, () => this.close()));
+        foot.append(cancelBtn, button(this.t(TEXT30.ok), true, () => this.close()));
       },
       onOpenChange: (open) => {
         if (!open) this.close();
@@ -34943,8 +36004,8 @@ var DrawingSettingsPanel = class {
     const style = this.styleBlock(b, fields, has);
     if (style) out.push(style);
     if (d.editableLevels()) out.push(this.levelsBlock(b));
-    if (d instanceof PositionTool) out.push(this.richBlock(this.t(TEXT29.position), (grid) => buildPositionSection(grid, d, b.actions, this.theme, (m, v) => this.t(m, v))));
-    if (d instanceof FixedRangeVolumeProfile) out.push(this.richBlock(this.t(TEXT29.profile), (grid) => buildProfileSection(grid, d, b.actions, this.theme, (m, v) => this.t(m, v))));
+    if (d instanceof PositionTool) out.push(this.richBlock(this.t(TEXT30.position), (grid) => buildPositionSection(grid, d, b.actions, this.theme, (m, v) => this.t(m, v))));
+    if (d instanceof FixedRangeVolumeProfile) out.push(this.richBlock(this.t(TEXT30.profile), (grid) => buildProfileSection(grid, d, b.actions, this.theme, (m, v) => this.t(m, v))));
     const own = this.optionsBlock(b, fields, d);
     if (own) out.push(own);
     if (!schema.textIsContent && fields.some((f) => f.path.startsWith("text."))) out.push(this.textFold(b, has));
@@ -34958,38 +36019,38 @@ var DrawingSettingsPanel = class {
     const rows = [];
     if (has("style.lineColor") || has("style.lineWidth")) {
       const ctrls = [];
-      if (has("style.lineColor")) ctrls.push(this.swatch(b, this.t(TEXT29.lineColor), () => b.live().style.lineColor || DEFAULT_DRAWING_COLOR, "style.lineColor"));
+      if (has("style.lineColor")) ctrls.push(this.swatch(b, this.t(TEXT30.lineColor), () => b.live().style.lineColor || DEFAULT_DRAWING_COLOR, "style.lineColor"));
       const wf = fields.find((f) => f.path === "style.lineWidth");
       if (wf) {
-        if ((wf.min ?? 1) > 1) ctrls.push(this.number(b, this.t(TEXT29.lineWidth), () => b.live().style.lineWidth, "style.lineWidth", wf));
-        else ctrls.push(this.seg(b, this.t(TEXT29.lineWidth), [1, 2, 3, 4].map((w) => ({ value: w, html: widthIcon(w), title: `${w}px` })), () => b.live().style.lineWidth, (v) => b.edit({ "style.lineWidth": v })));
+        if ((wf.min ?? 1) > 1) ctrls.push(this.number(b, this.t(TEXT30.lineWidth), () => b.live().style.lineWidth, "style.lineWidth", wf));
+        else ctrls.push(this.seg(b, this.t(TEXT30.lineWidth), [1, 2, 3, 4].map((w) => ({ value: w, html: widthIcon(w), title: `${w}px` })), () => b.live().style.lineWidth, (v) => b.edit({ "style.lineWidth": v })));
       }
-      rows.push(row(this.t(TEXT29.line), ...ctrls));
+      rows.push(row(this.t(TEXT30.line), ...ctrls));
     }
     if (has("style.lineStyle")) {
-      rows.push(row(this.t(TEXT29.style), this.seg(b, this.t(TEXT29.lineStyle), LINE_STYLE_OPTIONS.map((o) => ({ value: o.value, html: dashIcon(o.value), title: this.t(o.label) })), () => b.live().style.lineStyle, (v) => b.edit({ "style.lineStyle": v }))));
+      rows.push(row(this.t(TEXT30.style), this.seg(b, this.t(TEXT30.lineStyle), LINE_STYLE_OPTIONS.map((o) => ({ value: o.value, html: dashIcon(o.value), title: this.t(o.label) })), () => b.live().style.lineStyle, (v) => b.edit({ "style.lineStyle": v }))));
     }
     if (has("style.extendLeft") && has("style.extendRight")) {
       const opts = [
-        { value: "none", html: EXTEND_ICONS.none, title: this.t(TEXT29.dontExtend) },
-        { value: "left", html: EXTEND_ICONS.left, title: this.t(TEXT29.extendLeft) },
-        { value: "right", html: EXTEND_ICONS.right, title: this.t(TEXT29.extendRight) },
-        { value: "both", html: EXTEND_ICONS.both, title: this.t(TEXT29.extendBothWays) }
+        { value: "none", html: EXTEND_ICONS.none, title: this.t(TEXT30.dontExtend) },
+        { value: "left", html: EXTEND_ICONS.left, title: this.t(TEXT30.extendLeft) },
+        { value: "right", html: EXTEND_ICONS.right, title: this.t(TEXT30.extendRight) },
+        { value: "both", html: EXTEND_ICONS.both, title: this.t(TEXT30.extendBothWays) }
       ];
       const read = () => {
         const { extendLeft: l, extendRight: r } = b.live().style;
         return l && r ? "both" : l ? "left" : r ? "right" : "none";
       };
-      rows.push(row(this.t(TEXT29.extend), this.seg(b, this.t(TEXT29.extend), opts, read, (v) => b.edit({ "style.extendLeft": v === "left" || v === "both", "style.extendRight": v === "right" || v === "both" }))));
+      rows.push(row(this.t(TEXT30.extend), this.seg(b, this.t(TEXT30.extend), opts, read, (v) => b.edit({ "style.extendLeft": v === "left" || v === "both", "style.extendRight": v === "right" || v === "both" }))));
     }
     const arrows = [];
-    if (has("style.arrowLeft")) arrows.push(this.chip(b, this.t(TEXT29.startArrow), () => !!b.live().style.arrowLeft, (on) => b.edit({ "style.arrowLeft": on })));
-    if (has("style.arrowRight")) arrows.push(this.chip(b, has("style.arrowLeft") ? this.t(TEXT29.endArrow) : this.t(TEXT29.arrow), () => !!b.live().style.arrowRight, (on) => b.edit({ "style.arrowRight": on })));
-    if (arrows.length) rows.push(row(this.t(TEXT29.ends), chips(...arrows)));
+    if (has("style.arrowLeft")) arrows.push(this.chip(b, this.t(TEXT30.startArrow), () => !!b.live().style.arrowLeft, (on) => b.edit({ "style.arrowLeft": on })));
+    if (has("style.arrowRight")) arrows.push(this.chip(b, has("style.arrowLeft") ? this.t(TEXT30.endArrow) : this.t(TEXT30.arrow), () => !!b.live().style.arrowRight, (on) => b.edit({ "style.arrowRight": on })));
+    if (arrows.length) rows.push(row(this.t(TEXT30.ends), chips(...arrows)));
     if (has("style.fillColor")) {
-      rows.push(row(this.t(TEXT29.fill), this.swatch(b, this.t(TEXT29.fill), () => effectiveFillColor(b.live(), this.theme) ?? b.live().style.fillColor ?? DEFAULT_DRAWING_COLOR, "style.fillColor")));
+      rows.push(row(this.t(TEXT30.fill), this.swatch(b, this.t(TEXT30.fill), () => effectiveFillColor(b.live(), this.theme) ?? b.live().style.fillColor ?? DEFAULT_DRAWING_COLOR, "style.fillColor")));
     }
-    if (!has("text.value") && has("text.color")) rows.push(row(this.t(TEXT29.text), ...this.textStyling(b, has)));
+    if (!has("text.value") && has("text.color")) rows.push(row(this.t(TEXT30.text), ...this.textStyling(b, has)));
     return rows.length ? block(null, ...rows) : null;
   }
   /** The tool's own options — every schema field the shared look and the rich sections
@@ -35018,8 +36079,8 @@ var DrawingSettingsPanel = class {
     }
     const props = d.serialize().props ?? {};
     const sizes = TEXT_SIZE_OPTIONS.map((o) => ({ value: o.value, html: this.t(o.label) }));
-    if ("numbersSize" in props) rows.push(row(this.t(TEXT29.numbers), this.seg(b, this.t(TEXT29.numbersSize), sizes, () => b.live().serialize().props?.numbersSize ?? "small", (v) => b.edit({ numbersSize: v }), true)));
-    if ("labelsSize" in props) rows.push(row(this.t(TEXT29.labels), this.seg(b, this.t(TEXT29.labelsSize), sizes, () => b.live().serialize().props?.labelsSize ?? "normal", (v) => b.edit({ labelsSize: v }), true)));
+    if ("numbersSize" in props) rows.push(row(this.t(TEXT30.numbers), this.seg(b, this.t(TEXT30.numbersSize), sizes, () => b.live().serialize().props?.numbersSize ?? "small", (v) => b.edit({ numbersSize: v }), true)));
+    if ("labelsSize" in props) rows.push(row(this.t(TEXT30.labels), this.seg(b, this.t(TEXT30.labelsSize), sizes, () => b.live().serialize().props?.labelsSize ?? "normal", (v) => b.edit({ labelsSize: v }), true)));
     return rows.length ? block(null, ...rows) : null;
   }
   /** The label of the one row a field shares with the next: a color and its line style, or
@@ -35105,7 +36166,7 @@ var DrawingSettingsPanel = class {
           compact: true,
           fill: false,
           commit: "blur",
-          title: this.t(TEXT29.level, { n: i + 1 }),
+          title: this.t(TEXT30.level, { n: i + 1 }),
           onChange: (n) => {
             if (!Number.isFinite(n) || !free && n <= 0) {
               num4.setValue?.(ratio);
@@ -35119,7 +36180,7 @@ var DrawingSettingsPanel = class {
         const swatch = field.buildFieldControl({
           kind: "color",
           theme: this.theme,
-          title: this.t(TEXT29.levelColor, { n: i + 1 }),
+          title: this.t(TEXT30.levelColor, { n: i + 1 }),
           get: () => color,
           onChange: (v) => {
             color = v;
@@ -35137,7 +36198,7 @@ var DrawingSettingsPanel = class {
       rows.push(
         this.seg(
           b,
-          this.t(TEXT29.levelSet),
+          this.t(TEXT30.levelSet),
           FIB_PRESETS.map((p) => ({ value: p.key, html: this.t(p.label) })),
           () => {
             const f = b.live();
@@ -35151,28 +36212,28 @@ var DrawingSettingsPanel = class {
         )
       );
     }
-    if (d instanceof MachFigure) rows.push(row(this.t(TEXT29.ratios), this.switch(b, () => b.live().showRatios !== false, (v) => b.edit({ showRatios: v }))));
+    if (d instanceof MachFigure) rows.push(row(this.t(TEXT30.ratios), this.switch(b, () => b.live().showRatios !== false, (v) => b.edit({ showRatios: v }))));
     rows.push(grid);
     if (d instanceof FibLevels) {
       const fib = () => b.live();
       const flags = [
-        this.chip(b, this.t(TEXT29.ratios), () => fib().showRatios, (on) => b.edit({ showRatios: on })),
-        this.chip(b, this.t(TEXT29.prices), () => fib().showPrices, (on) => b.edit({ showPrices: on })),
-        this.chip(b, this.t(TEXT29.background), () => fib().background, (on) => b.edit({ background: on }))
+        this.chip(b, this.t(TEXT30.ratios), () => fib().showRatios, (on) => b.edit({ showRatios: on })),
+        this.chip(b, this.t(TEXT30.prices), () => fib().showPrices, (on) => b.edit({ showPrices: on })),
+        this.chip(b, this.t(TEXT30.background), () => fib().background, (on) => b.edit({ background: on }))
       ];
-      if (d instanceof FibRetracement) flags.push(this.chip(b, this.t(TEXT29.reverse), () => b.live().reverse, (on) => b.edit({ reverse: on })));
-      rows.push(row(this.t(TEXT29.show), chips(...flags)));
+      if (d instanceof FibRetracement) flags.push(this.chip(b, this.t(TEXT30.reverse), () => b.live().reverse, (on) => b.edit({ reverse: on })));
+      rows.push(row(this.t(TEXT30.show), chips(...flags)));
       rows.push(
         row(
-          this.t(TEXT29.labelSide),
-          this.seg(b, this.t(TEXT29.labelSide), [
-            { value: "left", html: this.t(TEXT29.left) },
-            { value: "right", html: this.t(TEXT29.right) }
+          this.t(TEXT30.labelSide),
+          this.seg(b, this.t(TEXT30.labelSide), [
+            { value: "left", html: this.t(TEXT30.left) },
+            { value: "right", html: this.t(TEXT30.right) }
           ], () => fib().labelSide, (v) => b.edit({ labelSide: v }))
         )
       );
     }
-    return block(this.t(TEXT29.levels), ...rows);
+    return block(this.t(TEXT30.levels), ...rows);
   }
   /** A rich per-type section on the shared field grid. */
   richBlock(title, fill2) {
@@ -35183,7 +36244,7 @@ var DrawingSettingsPanel = class {
   }
   /** A note, a callout, a text label: the words lead the panel. */
   textContentBlock(b, has) {
-    return block(null, this.textArea(b, this.t(TEXT29.text), 3), row(this.t(TEXT29.style), ...this.textStyling(b, has)));
+    return block(null, this.textArea(b, this.t(TEXT30.text), 3), row(this.t(TEXT30.style), ...this.textStyling(b, has)));
   }
   /** A shape's optional label: folded to one line saying what it reads. */
   textFold(b, has) {
@@ -35192,26 +36253,26 @@ var DrawingSettingsPanel = class {
     const summary = () => {
       if (!has("text.value")) return this.t(sizeLabel(b.live().text?.size));
       const w = words();
-      return w ? `“${w.split("\n")[0]}”` : this.t(TEXT29.none);
+      return w ? `“${w.split("\n")[0]}”` : this.t(TEXT30.none);
     };
-    return this.fold(b, "text", has("text.value") ? this.t(TEXT29.label) : this.t(TEXT29.text), summary, () => {
+    return this.fold(b, "text", has("text.value") ? this.t(TEXT30.label) : this.t(TEXT30.text), summary, () => {
       const rows = [];
-      if (has("text.value")) rows.push(this.textArea(b, this.t(TEXT29.addALabel), 1));
-      rows.push(row(this.t(TEXT29.style), ...this.textStyling(b, has)));
+      if (has("text.value")) rows.push(this.textArea(b, this.t(TEXT30.addALabel), 1));
+      rows.push(row(this.t(TEXT30.style), ...this.textStyling(b, has)));
       if (LINE_LABEL_TYPES.has(type) && has("text.value")) {
         const place = row(
-          this.t(TEXT29.place),
-          this.seg(b, this.t(TEXT29.positionAlongTheLine), [
-            { value: "start", html: this.t(TEXT29.start) },
-            { value: "middle", html: this.t(TEXT29.middle) },
-            { value: "end", html: this.t(TEXT29.end) }
+          this.t(TEXT30.place),
+          this.seg(b, this.t(TEXT30.positionAlongTheLine), [
+            { value: "start", html: this.t(TEXT30.start) },
+            { value: "middle", html: this.t(TEXT30.middle) },
+            { value: "end", html: this.t(TEXT30.end) }
           ], () => b.live().text?.place ?? "middle", (v) => b.edit({ "text.place": v }), true)
         );
         const side = row(
-          this.t(TEXT29.side),
-          this.seg(b, this.t(TEXT29.sideOfTheLine), [
-            { value: "above", html: this.t(TEXT29.above) },
-            { value: "below", html: this.t(TEXT29.below) }
+          this.t(TEXT30.side),
+          this.seg(b, this.t(TEXT30.sideOfTheLine), [
+            { value: "above", html: this.t(TEXT30.above) },
+            { value: "below", html: this.t(TEXT30.below) }
           ], () => b.live().text?.side ?? "above", (v) => b.edit({ "text.side": v }), true)
         );
         b.watch(() => place.hidden = side.hidden = words() === "");
@@ -35242,7 +36303,7 @@ var DrawingSettingsPanel = class {
   }
   textStyling(b, has) {
     const out = [];
-    if (has("text.color")) out.push(this.swatch(b, this.t(TEXT29.textColor), () => b.live().text?.color || this.theme.textColor, "text.color"));
+    if (has("text.color")) out.push(this.swatch(b, this.t(TEXT30.textColor), () => b.live().text?.color || this.theme.textColor, "text.color"));
     if (has("text.size")) {
       const sel = field.buildFieldControl({
         kind: "select",
@@ -35256,8 +36317,8 @@ var DrawingSettingsPanel = class {
       out.push(sel.el);
     }
     const flags = [];
-    if (has("text.bold")) flags.push(this.chip(b, "B", () => !!b.live().text?.bold, (on) => b.edit({ "text.bold": on }), this.t(TEXT29.bold)));
-    if (has("text.italic")) flags.push(this.chip(b, "I", () => !!b.live().text?.italic, (on) => b.edit({ "text.italic": on }), this.t(TEXT29.italic)));
+    if (has("text.bold")) flags.push(this.chip(b, "B", () => !!b.live().text?.bold, (on) => b.edit({ "text.bold": on }), this.t(TEXT30.bold)));
+    if (has("text.italic")) flags.push(this.chip(b, "I", () => !!b.live().text?.italic, (on) => b.edit({ "text.italic": on }), this.t(TEXT30.italic)));
     if (flags.length) out.push(chips(...flags));
     return out;
   }
@@ -35278,16 +36339,16 @@ var DrawingSettingsPanel = class {
     const summary = () => {
       const a = b.live().anchors;
       if (priced.length) return priced.map((i) => fmt(a[i]?.price ?? 0)).join(" → ");
-      const t33 = a[shown[0]]?.time;
-      return shown.length === 1 && t33 != null ? formatTimeStamp2(t33, this.env.timeZone(), this.env.chartBarMs()) : this.t(TEXT29.pointCount, { count: shown.length });
+      const t34 = a[shown[0]]?.time;
+      return shown.length === 1 && t34 != null ? formatTimeStamp2(t34, this.env.timeZone(), this.env.chartBarMs()) : this.t(TEXT30.pointCount, { count: shown.length });
     };
     return this.fold(
       b,
       "points",
-      this.t(TEXT29.points),
+      this.t(TEXT30.points),
       summary,
       () => shown.map((i, n) => {
-        const key = shown.length === 1 ? this.t(free(i) === "x" ? TEXT29.pointTime : TEXT29.pointPrice) : String.fromCharCode(65 + n);
+        const key = shown.length === 1 ? this.t(free(i) === "x" ? TEXT30.pointTime : TEXT30.pointPrice) : String.fromCharCode(65 + n);
         const line = document.createElement("div");
         line.className = "vela-dsp-pt";
         const k = document.createElement("span");
@@ -35300,7 +36361,7 @@ var DrawingSettingsPanel = class {
             value: shownPrice(d.anchors[i].price),
             fill: true,
             commit: "blur",
-            title: this.t(TEXT29.pointPriceTitle, { point: key }),
+            title: this.t(TEXT30.pointPriceTitle, { point: key }),
             onChange: (v) => b.edit({ [`anchors.${i}.price`]: v })
           });
           const input = ni.el.querySelector("input");
@@ -35311,13 +36372,13 @@ var DrawingSettingsPanel = class {
         } else {
           line.appendChild(document.createElement("span"));
         }
-        const t33 = document.createElement("span");
-        t33.className = "vela-dsp-pt-t";
+        const t34 = document.createElement("span");
+        t34.className = "vela-dsp-pt-t";
         b.watch(() => {
           const time = b.live().anchors[i]?.time;
-          t33.textContent = time != null ? formatTimeStamp2(time, this.env.timeZone(), this.env.chartBarMs()) : "";
+          t34.textContent = time != null ? formatTimeStamp2(time, this.env.timeZone(), this.env.chartBarMs()) : "";
         });
-        line.appendChild(t33);
+        line.appendChild(t34);
         return line;
       })
     );
@@ -35331,25 +36392,25 @@ var DrawingSettingsPanel = class {
     const here = timeframeBandOf(this.env.chartBarMs());
     const summary = () => {
       const s = bands();
-      if (!s) return this.t(TEXT29.allTimeframes);
-      if (mode() === "intraday") return this.t(TEXT29.intraday);
-      if (mode() === "higher") return this.t(TEXT29.n1HAndUp);
-      if (s.length === 0) return this.t(TEXT29.nowhere);
+      if (!s) return this.t(TEXT30.allTimeframes);
+      if (mode() === "intraday") return this.t(TEXT30.intraday);
+      if (mode() === "higher") return this.t(TEXT30.n1HAndUp);
+      if (s.length === 0) return this.t(TEXT30.nowhere);
       return s.map((k) => {
-        const band = TIMEFRAME_BANDS.find((t33) => t33.key === k);
+        const band = TIMEFRAME_BANDS.find((t34) => t34.key === k);
         return band ? this.t(band.label) : k;
       }).join(", ");
     };
-    return this.fold(b, "show", this.t(TEXT29.showOn), summary, () => {
+    return this.fold(b, "show", this.t(TEXT30.showOn), summary, () => {
       const set = (next) => b.edit({ showOn: next });
       const pick = this.seg(
         b,
-        this.t(TEXT29.showOn),
+        this.t(TEXT30.showOn),
         [
-          { value: "all", html: this.t(TEXT29.all) },
-          { value: "intraday", html: this.t(TEXT29.intraday) },
-          { value: "higher", html: this.t(TEXT29.n1HAndUp) },
-          { value: "custom", html: this.t(TEXT29.custom) }
+          { value: "all", html: this.t(TEXT30.all) },
+          { value: "intraday", html: this.t(TEXT30.intraday) },
+          { value: "higher", html: this.t(TEXT30.n1HAndUp) },
+          { value: "custom", html: this.t(TEXT30.custom) }
         ],
         mode,
         (v) => {
@@ -35357,7 +36418,7 @@ var DrawingSettingsPanel = class {
           if (v === "all") set(void 0);
           else if (v === "intraday") set([...INTRADAY]);
           else if (v === "higher") set([...HIGHER]);
-          else set([...bands() ?? TIMEFRAME_BANDS.map((t33) => t33.key)]);
+          else set([...bands() ?? TIMEFRAME_BANDS.map((t34) => t34.key)]);
         },
         true
       );
@@ -35369,13 +36430,13 @@ var DrawingSettingsPanel = class {
         btn.textContent = this.t(band.label);
         if (band.key === here) {
           btn.dataset.here = "";
-          btn.title = this.t(TEXT29.chartTimeframe);
+          btn.title = this.t(TEXT30.chartTimeframe);
         }
         btn.addEventListener("click", () => {
           const cur = new Set(bands() ?? []);
           if (cur.has(band.key)) cur.delete(band.key);
           else cur.add(band.key);
-          set(TIMEFRAME_BANDS.map((t33) => t33.key).filter((k) => cur.has(k)));
+          set(TIMEFRAME_BANDS.map((t34) => t34.key).filter((k) => cur.has(k)));
         });
         b.watch(() => btn.setAttribute("aria-pressed", String(bands()?.includes(band.key) ?? true)));
         grid.appendChild(btn);
@@ -35387,7 +36448,7 @@ var DrawingSettingsPanel = class {
         const s = bands();
         const hidden = s != null && here != null && !s.includes(here);
         note.hidden = !hidden;
-        note.textContent = s?.length === 0 ? this.t(TEXT29.hiddenOnEveryTimeframe) : this.t(TEXT29.hiddenOnThisTimeframe);
+        note.textContent = s?.length === 0 ? this.t(TEXT30.hiddenOnEveryTimeframe) : this.t(TEXT30.hiddenOnThisTimeframe);
       });
       return [pick, grid, note];
     });
@@ -35408,9 +36469,9 @@ var DrawingSettingsPanel = class {
     btn.append(label, chev);
     const all = () => [...builtinToolTemplates(b.live().type), ...b.actions.templates?.() ?? []];
     const refresh = () => {
-      const match = all().filter((t33) => matchesTemplate(b.live(), t33.settings)).pop();
-      label.textContent = match ? this.templateName(match) : this.t(TEXT29.style);
-      btn.title = match ? this.t(TEXT29.styleTitle, { name: this.templateName(match) }) : this.t(TEXT29.styles);
+      const match = all().filter((t34) => matchesTemplate(b.live(), t34.settings)).pop();
+      label.textContent = match ? this.templateName(match) : this.t(TEXT30.style);
+      btn.title = match ? this.t(TEXT30.styleTitle, { name: this.templateName(match) }) : this.t(TEXT30.styles);
     };
     btn.addEventListener("pointerdown", (e) => e.stopPropagation());
     btn.addEventListener("click", (e) => {
@@ -35426,11 +36487,11 @@ var DrawingSettingsPanel = class {
   }
   openStyleMenu(anchor, b, all, refresh) {
     popover.closeOpenPopovers();
-    const t33 = this.theme;
+    const t34 = this.theme;
     const pop = new popover.Popover({
       trigger: anchor,
       host: this.host,
-      theme: t33,
+      theme: t34,
       position: "absolute",
       collisionBoundary: this.host,
       boundaryInset: 4,
@@ -35447,8 +36508,8 @@ var DrawingSettingsPanel = class {
     const el = pop.el;
     el.classList.add("vela-dsp-menu");
     el.setAttribute("role", "menu");
-    el.style.cssText += `background:${t33.background};border:1px solid var(--vela-border);border-radius:var(--vela-radius-lg);box-shadow:var(--vela-shadow);color:${t33.textColor};font:13px ${t33.fontFamily};pointer-events:auto;`;
-    applyChromeTokens(el, t33);
+    el.style.cssText += `background:${t34.background};border:1px solid var(--vela-border);border-radius:var(--vela-radius-lg);box-shadow:var(--vela-shadow);color:${t34.textColor};font:13px ${t34.fontFamily};pointer-events:auto;`;
+    applyChromeTokens(el, t34);
     const fill2 = () => {
       el.replaceChildren();
       const builtins = builtinToolTemplates(b.live().type);
@@ -35470,7 +36531,7 @@ var DrawingSettingsPanel = class {
           const x = document.createElement("span");
           x.className = "vela-dsp-mi-x";
           x.setAttribute("role", "button");
-          x.setAttribute("aria-label", this.t(TEXT29.deleteStyle, { name: this.templateName(tpl) }));
+          x.setAttribute("aria-label", this.t(TEXT30.deleteStyle, { name: this.templateName(tpl) }));
           x.innerHTML = CROSS;
           x.addEventListener("click", (e) => {
             e.stopPropagation();
@@ -35492,11 +36553,11 @@ var DrawingSettingsPanel = class {
         return row2;
       };
       if (builtins.length) {
-        el.appendChild(menuHeading(this.t(TEXT29.presets)));
+        el.appendChild(menuHeading(this.t(TEXT30.presets)));
         for (const tpl of builtins) el.appendChild(item(tpl, false));
       }
       if (saved.length) {
-        el.appendChild(menuHeading(this.t(TEXT29.saved)));
+        el.appendChild(menuHeading(this.t(TEXT30.saved)));
         for (const tpl of saved) el.appendChild(item(tpl, true));
       }
       if (builtins.length || saved.length) el.appendChild(separator());
@@ -35505,7 +36566,7 @@ var DrawingSettingsPanel = class {
       reset.type = "button";
       reset.className = "vela-dsp-mi";
       reset.setAttribute("role", "menuitem");
-      reset.appendChild(menuText(this.t(TEXT29.resetToDefault)));
+      reset.appendChild(menuText(this.t(TEXT30.resetToDefault)));
       reset.addEventListener("click", () => {
         b.actions.resetSettings();
         pop.hide();
@@ -35529,17 +36590,17 @@ var DrawingSettingsPanel = class {
     start.type = "button";
     start.className = "vela-dsp-mi";
     start.setAttribute("role", "menuitem");
-    start.appendChild(menuText(this.t(TEXT29.saveAsStyle)));
+    start.appendChild(menuText(this.t(TEXT30.saveAsStyle)));
     start.addEventListener("click", (e) => {
       e.stopPropagation();
       const form = document.createElement("div");
       form.className = "vela-dsp-mname";
       const input = document.createElement("input");
       input.type = "text";
-      input.placeholder = this.t(TEXT29.styleName);
+      input.placeholder = this.t(TEXT30.styleName);
       input.maxLength = 60;
-      input.setAttribute("aria-label", this.t(TEXT29.styleName));
-      const save = button(this.t(TEXT29.save), true, () => commit());
+      input.setAttribute("aria-label", this.t(TEXT30.styleName));
+      const save = button(this.t(TEXT30.save), true, () => commit());
       save.style.height = "28px";
       const commit = () => {
         const name = input.value.trim();
@@ -35571,15 +36632,15 @@ var DrawingSettingsPanel = class {
     const head = document.createElement("button");
     head.type = "button";
     head.className = "vela-dsp-fold-h";
-    const t33 = document.createElement("span");
-    t33.className = "vela-dsp-fold-t";
-    t33.textContent = title;
+    const t34 = document.createElement("span");
+    t34.className = "vela-dsp-fold-t";
+    t34.textContent = title;
     const s = document.createElement("span");
     s.className = "vela-dsp-fold-s";
     const chev = document.createElement("span");
     chev.className = "vela-dsp-chev";
     chev.innerHTML = CHEVRON;
-    head.append(t33, s, chev);
+    head.append(t34, s, chev);
     const content = document.createElement("div");
     content.className = "vela-dsp-fold-b";
     let built = false;
@@ -35724,7 +36785,7 @@ function menuText(text) {
   return span;
 }
 function sizeLabel(size) {
-  return TEXT_SIZE_OPTIONS.find((o) => o.value === (size ?? "normal"))?.label ?? TEXT29.normal;
+  return TEXT_SIZE_OPTIONS.find((o) => o.value === (size ?? "normal"))?.label ?? TEXT30.normal;
 }
 function readPath(d, path) {
   let cur = d;
@@ -35767,7 +36828,7 @@ function matchesTemplate(d, s) {
 function templateColor(s) {
   return s.style?.lineColor ?? s.style?.fillColor ?? s.text?.color;
 }
-var TEXT30 = {
+var TEXT31 = {
   icon: msg("drawing.bar.icon", "Icon"),
   iconSize: msg("drawing.bar.iconSize", "Icon size"),
   lowerTimeframe: msg("drawing.bar.lowerTimeframe", "Lower timeframe"),
@@ -35837,14 +36898,14 @@ function distinctValues(drawings, read) {
 }
 var BTN = 30;
 var ICON = 21;
-var STYLE_ID25 = "vela-drawing-popup-styles";
+var STYLE_ID26 = "vela-drawing-popup-styles";
 var STYLE_REV2 = "4";
 function ensureStyles6() {
   if (typeof document === "undefined") return;
-  const existing = document.getElementById(STYLE_ID25);
+  const existing = document.getElementById(STYLE_ID26);
   if (existing?.dataset.rev === STYLE_REV2) return;
   const s = existing ?? document.createElement("style");
-  s.id = STYLE_ID25;
+  s.id = STYLE_ID26;
   s.dataset.rev = STYLE_REV2;
   s.textContent = css.css`@layer vela.chrome {
 
@@ -35962,7 +37023,7 @@ var DrawingSettingsPopup = class {
     this.current = drawings.length === 1 ? { drawing, actions, anchor } : null;
     ensureStyles6();
     this.onClose = onClose ?? null;
-    const t33 = this.theme;
+    const t34 = this.theme;
     const multi = drawings.length > 1;
     const schema = drawing.schema();
     const paths = sharedPaths(drawings);
@@ -35972,11 +37033,11 @@ var DrawingSettingsPopup = class {
     const textOnBar = multi || schema.textIsContent === true || !paths.has("text.value");
     const el = document.createElement("div");
     el.className = "vela-dpop";
-    el.style.cssText = `position:absolute;z-index:22;background:${t33.background};border:1px solid var(--vela-border);border-radius:var(--vela-radius-lg);box-shadow:var(--vela-shadow);color:${t33.textColor};font:var(--vela-font-size-md) ${t33.fontFamily};display:flex;flex-direction:column;pointer-events:auto;overflow:hidden;`;
-    applyChromeTokens(el, t33);
+    el.style.cssText = `position:absolute;z-index:22;background:${t34.background};border:1px solid var(--vela-border);border-radius:var(--vela-radius-lg);box-shadow:var(--vela-shadow);color:${t34.textColor};font:var(--vela-font-size-md) ${t34.fontFamily};display:flex;flex-direction:column;pointer-events:auto;overflow:hidden;`;
+    applyChromeTokens(el, t34);
     el.addEventListener("pointerdown", (e) => {
-      const t34 = e.target;
-      if (t34?.closest(".vela-select-trigger, .vela-color-field")) return;
+      const t35 = e.target;
+      if (t35?.closest(".vela-select-trigger, .vela-color-field")) return;
       popover.closeOpenPopovers();
     });
     const bar = document.createElement("div");
@@ -35984,27 +37045,27 @@ var DrawingSettingsPopup = class {
     bar.appendChild(this.dragHandle());
     if (paths.has("glyph")) {
       const cur = common((d) => d.glyph ?? GLYPH_OPTIONS[0]);
-      bar.appendChild(this.dropdown(this.t(TEXT30.icon), GLYPH_OPTIONS, cur, (g) => glyphIcon(g), (v) => actions.patch({ glyph: v })));
+      bar.appendChild(this.dropdown(this.t(TEXT31.icon), GLYPH_OPTIONS, cur, (g) => glyphIcon(g), (v) => actions.patch({ glyph: v })));
     }
     if (paths.has("size")) {
       const sz = common((d) => d.size ?? "normal");
-      bar.appendChild(this.dropdown(this.t(TEXT30.iconSize), STAMP_SIZE_OPTIONS, sz, (s) => stampSizeIcon(s), (v) => actions.patch({ size: v }), { label: (v) => this.sizeLabel(v) }));
+      bar.appendChild(this.dropdown(this.t(TEXT31.iconSize), STAMP_SIZE_OPTIONS, sz, (s) => stampSizeIcon(s), (v) => actions.patch({ size: v }), { label: (v) => this.sizeLabel(v) }));
     }
     if (paths.has("magnifier.timeframe") && every((d) => d instanceof Magnifier)) {
       const mag = (d) => d;
       const options = magnifierTimeframesBelow(this.chartBarMs());
       if (options.length > 0) {
         bar.appendChild(
-          this.dropdown(this.t(TEXT30.lowerTimeframe), options.map((o) => o.value), common((d) => mag(d).magnifier.timeframe), () => "", (v) => actions.patch({ "magnifier.timeframe": v }), {
+          this.dropdown(this.t(TEXT31.lowerTimeframe), options.map((o) => o.value), common((d) => mag(d).magnifier.timeframe), () => "", (v) => actions.patch({ "magnifier.timeframe": v }), {
             label: (v) => this.t(magnifierTimeframeLabel(String(v))),
             labelInTrigger: true
           })
         );
       }
-      bar.appendChild(swatch(this.t(TEXT30.upCandles), BUCKET_ICON, (d) => mag(d).magnifier.upColor || t33.upColor, "magnifier.upColor"));
-      bar.appendChild(swatch(this.t(TEXT30.downCandles), BUCKET_ICON, (d) => mag(d).magnifier.downColor || t33.downColor, "magnifier.downColor"));
+      bar.appendChild(swatch(this.t(TEXT31.upCandles), BUCKET_ICON, (d) => mag(d).magnifier.upColor || t34.upColor, "magnifier.upColor"));
+      bar.appendChild(swatch(this.t(TEXT31.downCandles), BUCKET_ICON, (d) => mag(d).magnifier.downColor || t34.downColor, "magnifier.downColor"));
     }
-    if (paths.has("style.lineColor")) bar.appendChild(swatch(this.t(TEXT30.lineColor), BRUSH_ICON, (d) => d.style.lineColor || (d instanceof Magnifier ? contrastColor(this.theme.background) : DEFAULT_DRAWING_COLOR), "style.lineColor"));
+    if (paths.has("style.lineColor")) bar.appendChild(swatch(this.t(TEXT31.lineColor), BRUSH_ICON, (d) => d.style.lineColor || (d instanceof Magnifier ? contrastColor(this.theme.background) : DEFAULT_DRAWING_COLOR), "style.lineColor"));
     if (paths.has("style.lineWidth")) {
       const widthField2 = (d) => d.schema().fields.find((f) => f.path === "style.lineWidth");
       const wf = widthField2(drawing);
@@ -36014,54 +37075,54 @@ var DrawingSettingsPopup = class {
         return f?.kind === "number" && (f.min ?? 1) > 1;
       });
       if (markers && wf?.kind === "number") {
-        bar.appendChild(this.widthInput(this.t(TEXT30.lineWidth), width, wf.min ?? 1, wf.max ?? 60, wf.step ?? 1, (v) => actions.patch({ "style.lineWidth": v })));
+        bar.appendChild(this.widthInput(this.t(TEXT31.lineWidth), width, wf.min ?? 1, wf.max ?? 60, wf.step ?? 1, (v) => actions.patch({ "style.lineWidth": v })));
       } else {
-        bar.appendChild(this.dropdown(this.t(TEXT30.lineWidth), [1, 2, 3, 4], width, (w) => lineIcon(w, "solid"), (v) => actions.patch({ "style.lineWidth": v }), { label: (v) => `${v}px`, labelInTrigger: true }));
+        bar.appendChild(this.dropdown(this.t(TEXT31.lineWidth), [1, 2, 3, 4], width, (w) => lineIcon(w, "solid"), (v) => actions.patch({ "style.lineWidth": v }), { label: (v) => `${v}px`, labelInTrigger: true }));
       }
     }
-    if (paths.has("style.lineStyle")) bar.appendChild(this.dropdown(this.t(TEXT30.lineStyle), LINE_STYLE_OPTIONS.map((o) => o.value), common((d) => d.style.lineStyle), (s) => lineIcon(2, s), (v) => actions.patch({ "style.lineStyle": v }), { label: (v) => this.styleLabel(v) }));
-    if (paths.has("style.fillColor")) bar.appendChild(swatch(this.t(TEXT30.fill), BUCKET_ICON, (d) => effectiveFillColor(d, this.theme) ?? d.style.fillColor ?? DEFAULT_DRAWING_COLOR, "style.fillColor"));
+    if (paths.has("style.lineStyle")) bar.appendChild(this.dropdown(this.t(TEXT31.lineStyle), LINE_STYLE_OPTIONS.map((o) => o.value), common((d) => d.style.lineStyle), (s) => lineIcon(2, s), (v) => actions.patch({ "style.lineStyle": v }), { label: (v) => this.styleLabel(v) }));
+    if (paths.has("style.fillColor")) bar.appendChild(swatch(this.t(TEXT31.fill), BUCKET_ICON, (d) => effectiveFillColor(d, this.theme) ?? d.style.fillColor ?? DEFAULT_DRAWING_COLOR, "style.fillColor"));
     const isPosition = paths.has("riskPercent") && every((d) => d instanceof PositionTool);
     if (isPosition) {
       const pos = (d) => d;
-      bar.appendChild(swatch(this.t(TEXT30.profitZone), BUCKET_ICON, (d) => pos(d).profitColor, "profitColor"));
-      bar.appendChild(swatch(this.t(TEXT30.lossZone), BUCKET_ICON, (d) => pos(d).lossColor, "lossColor"));
+      bar.appendChild(swatch(this.t(TEXT31.profitZone), BUCKET_ICON, (d) => pos(d).profitColor, "profitColor"));
+      bar.appendChild(swatch(this.t(TEXT31.lossZone), BUCKET_ICON, (d) => pos(d).lossColor, "lossColor"));
     }
     const regOf = (d) => d.reg;
     if (paths.has("reg.midColor") && every((d) => regOf(d) != null)) {
       const reg = (d) => regOf(d);
       const styles = LINE_STYLE_OPTIONS.map((o) => o.value);
-      bar.appendChild(swatch(this.t(TEXT30.midlineColor), BRUSH_ICON, (d) => reg(d).midColor, "reg.midColor"));
-      bar.appendChild(this.dropdown(this.t(TEXT30.midlineStyle), styles, common((d) => reg(d).midStyle), (s) => lineIcon(2, s), (v) => actions.patch({ "reg.midStyle": v }), { label: (v) => this.styleLabel(v) }));
-      bar.appendChild(swatch(this.t(TEXT30.upperLineColor), BRUSH_ICON, (d) => reg(d).upperColor, "reg.upperColor"));
-      bar.appendChild(this.dropdown(this.t(TEXT30.upperLineStyle), styles, common((d) => reg(d).upperStyle), (s) => lineIcon(2, s), (v) => actions.patch({ "reg.upperStyle": v }), { label: (v) => this.styleLabel(v) }));
-      bar.appendChild(swatch(this.t(TEXT30.lowerLineColor), BRUSH_ICON, (d) => reg(d).lowerColor, "reg.lowerColor"));
-      bar.appendChild(this.dropdown(this.t(TEXT30.lowerLineStyle), styles, common((d) => reg(d).lowerStyle), (s) => lineIcon(2, s), (v) => actions.patch({ "reg.lowerStyle": v }), { label: (v) => this.styleLabel(v) }));
-      bar.appendChild(swatch(this.t(TEXT30.upperFill), BUCKET_ICON, (d) => reg(d).upperFill, "reg.upperFill"));
-      bar.appendChild(swatch(this.t(TEXT30.lowerFill), BUCKET_ICON, (d) => reg(d).lowerFill, "reg.lowerFill"));
-      bar.appendChild(this.toggle(this.t(TEXT30.showRSquared), R2_ICON, common((d) => reg(d).showR2), (v) => actions.patch({ "reg.showR2": v })));
+      bar.appendChild(swatch(this.t(TEXT31.midlineColor), BRUSH_ICON, (d) => reg(d).midColor, "reg.midColor"));
+      bar.appendChild(this.dropdown(this.t(TEXT31.midlineStyle), styles, common((d) => reg(d).midStyle), (s) => lineIcon(2, s), (v) => actions.patch({ "reg.midStyle": v }), { label: (v) => this.styleLabel(v) }));
+      bar.appendChild(swatch(this.t(TEXT31.upperLineColor), BRUSH_ICON, (d) => reg(d).upperColor, "reg.upperColor"));
+      bar.appendChild(this.dropdown(this.t(TEXT31.upperLineStyle), styles, common((d) => reg(d).upperStyle), (s) => lineIcon(2, s), (v) => actions.patch({ "reg.upperStyle": v }), { label: (v) => this.styleLabel(v) }));
+      bar.appendChild(swatch(this.t(TEXT31.lowerLineColor), BRUSH_ICON, (d) => reg(d).lowerColor, "reg.lowerColor"));
+      bar.appendChild(this.dropdown(this.t(TEXT31.lowerLineStyle), styles, common((d) => reg(d).lowerStyle), (s) => lineIcon(2, s), (v) => actions.patch({ "reg.lowerStyle": v }), { label: (v) => this.styleLabel(v) }));
+      bar.appendChild(swatch(this.t(TEXT31.upperFill), BUCKET_ICON, (d) => reg(d).upperFill, "reg.upperFill"));
+      bar.appendChild(swatch(this.t(TEXT31.lowerFill), BUCKET_ICON, (d) => reg(d).lowerFill, "reg.lowerFill"));
+      bar.appendChild(this.toggle(this.t(TEXT31.showRSquared), R2_ICON, common((d) => reg(d).showR2), (v) => actions.patch({ "reg.showR2": v })));
     }
     const vwapOf = (d) => d.vwap;
     if (paths.has("vwap.midColor") && every((d) => vwapOf(d) != null)) {
       const vwap2 = (d) => vwapOf(d);
       const styles = LINE_STYLE_OPTIONS.map((o) => o.value);
       const MULTS = [0.5, 1, 1.5, 2, 2.5, 3, 4, 5];
-      bar.appendChild(swatch(this.t(TEXT30.vwapColor), BRUSH_ICON, (d) => vwap2(d).midColor, "vwap.midColor"));
-      bar.appendChild(this.dropdown(this.t(TEXT30.vwapStyle), styles, common((d) => vwap2(d).midStyle), (s) => lineIcon(2, s), (v) => actions.patch({ "vwap.midStyle": v }), { label: (v) => this.styleLabel(v) }));
+      bar.appendChild(swatch(this.t(TEXT31.vwapColor), BRUSH_ICON, (d) => vwap2(d).midColor, "vwap.midColor"));
+      bar.appendChild(this.dropdown(this.t(TEXT31.vwapStyle), styles, common((d) => vwap2(d).midStyle), (s) => lineIcon(2, s), (v) => actions.patch({ "vwap.midStyle": v }), { label: (v) => this.styleLabel(v) }));
       bar.appendChild(
-        this.dropdown(this.t(TEXT30.bandMultiplier), MULTS, common((d) => vwap2(d).multiplier), () => BANDS_ICON, (v) => actions.patch({ "vwap.multiplier": v }), {
+        this.dropdown(this.t(TEXT31.bandMultiplier), MULTS, common((d) => vwap2(d).multiplier), () => BANDS_ICON, (v) => actions.patch({ "vwap.multiplier": v }), {
           label: (v) => `${v}σ`,
           labelInTrigger: true
         })
       );
-      bar.appendChild(swatch(this.t(TEXT30.upperBandColor), BRUSH_ICON, (d) => vwap2(d).upperColor, "vwap.upperColor"));
-      bar.appendChild(swatch(this.t(TEXT30.lowerBandColor), BRUSH_ICON, (d) => vwap2(d).lowerColor, "vwap.lowerColor"));
-      bar.appendChild(swatch(this.t(TEXT30.bandFill), BUCKET_ICON, (d) => vwap2(d).bandFill, "vwap.bandFill"));
+      bar.appendChild(swatch(this.t(TEXT31.upperBandColor), BRUSH_ICON, (d) => vwap2(d).upperColor, "vwap.upperColor"));
+      bar.appendChild(swatch(this.t(TEXT31.lowerBandColor), BRUSH_ICON, (d) => vwap2(d).lowerColor, "vwap.lowerColor"));
+      bar.appendChild(swatch(this.t(TEXT31.bandFill), BUCKET_ICON, (d) => vwap2(d).bandFill, "vwap.bandFill"));
     }
     if (paths.has("maxCurvature")) {
       const cur = common((d) => d.maxCurvature ?? 24);
       bar.appendChild(
-        this.dropdown(this.t(TEXT30.maxCurvature), DEDEKIND_CURVATURE_OPTIONS, cur, () => DEDEKIND_ICON2, (v) => actions.patch({ maxCurvature: v }), {
+        this.dropdown(this.t(TEXT31.maxCurvature), DEDEKIND_CURVATURE_OPTIONS, cur, () => DEDEKIND_ICON2, (v) => actions.patch({ maxCurvature: v }), {
           label: (v) => `n=${v}`,
           labelInTrigger: true
         })
@@ -36070,7 +37131,7 @@ var DrawingSettingsPopup = class {
     if (paths.has("mach")) {
       const cur = common((d) => d.mach ?? 2);
       bar.appendChild(
-        this.dropdown(this.t(TEXT30.machNumber), MACH_NUMBER_OPTIONS, cur, () => SUPERSONIC_ICON2, (v) => actions.patch({ mach: v }), {
+        this.dropdown(this.t(TEXT31.machNumber), MACH_NUMBER_OPTIONS, cur, () => SUPERSONIC_ICON2, (v) => actions.patch({ mach: v }), {
           label: (v) => `M=${v}`,
           labelInTrigger: true
         })
@@ -36079,27 +37140,27 @@ var DrawingSettingsPopup = class {
     if (paths.has("waveCount")) {
       const cur = common((d) => d.waveCount ?? 6);
       bar.appendChild(
-        this.dropdown(this.t(TEXT30.waves), MACH_WAVE_COUNT_OPTIONS, cur, () => SONIC_ICON2, (v) => actions.patch({ waveCount: v }), {
+        this.dropdown(this.t(TEXT31.waves), MACH_WAVE_COUNT_OPTIONS, cur, () => SONIC_ICON2, (v) => actions.patch({ waveCount: v }), {
           label: (v) => `${v}`,
           labelInTrigger: true
         })
       );
     }
     const flags = (d) => d;
-    if (paths.has("showPrice")) bar.appendChild(this.toggle(this.t(TEXT30.showPrice), PRICE_DELTA_ICON, common((d) => flags(d).showPrice !== false), (v) => actions.patch({ showPrice: v })));
-    if (paths.has("showDate")) bar.appendChild(this.toggle(this.t(TEXT30.showDate), DATE_DELTA_ICON, common((d) => flags(d).showDate !== false), (v) => actions.patch({ showDate: v })));
-    if (paths.has("text.color") && textOnBar) bar.appendChild(swatch(this.t(TEXT30.textColor), TYPE_ICON, (d) => d.text?.color || t33.textColor, "text.color"));
-    if (paths.has("text.size") && textOnBar) bar.appendChild(this.dropdown(this.t(TEXT30.textSize), TEXT_SIZE_OPTIONS.map((o) => o.value), common((d) => d.text?.size ?? "normal"), (s) => labelSizeIcon(s), (v) => actions.patch({ "text.size": v }), { label: (v) => this.sizeLabel(v) }));
+    if (paths.has("showPrice")) bar.appendChild(this.toggle(this.t(TEXT31.showPrice), PRICE_DELTA_ICON, common((d) => flags(d).showPrice !== false), (v) => actions.patch({ showPrice: v })));
+    if (paths.has("showDate")) bar.appendChild(this.toggle(this.t(TEXT31.showDate), DATE_DELTA_ICON, common((d) => flags(d).showDate !== false), (v) => actions.patch({ showDate: v })));
+    if (paths.has("text.color") && textOnBar) bar.appendChild(swatch(this.t(TEXT31.textColor), TYPE_ICON, (d) => d.text?.color || t34.textColor, "text.color"));
+    if (paths.has("text.size") && textOnBar) bar.appendChild(this.dropdown(this.t(TEXT31.textSize), TEXT_SIZE_OPTIONS.map((o) => o.value), common((d) => d.text?.size ?? "normal"), (s) => labelSizeIcon(s), (v) => actions.patch({ "text.size": v }), { label: (v) => this.sizeLabel(v) }));
     const textField = !multi && paths.has("text.value");
-    if (paths.has("text.bold") && !textField) bar.appendChild(this.toggle(this.t(TEXT30.bold), BOLD_ICON, common((d) => !!d.text?.bold), (v) => actions.patch({ "text.bold": v })));
-    if (paths.has("text.italic") && !textField) bar.appendChild(this.toggle(this.t(TEXT30.italic), ITALIC_ICON, common((d) => !!d.text?.italic), (v) => actions.patch({ "text.italic": v })));
-    if (textField) bar.appendChild(this.iconBtn(this.t(TEXT30.text), TYPE_ICON, () => this.toggleTextPanel(drawing, actions, !textOnBar)));
+    if (paths.has("text.bold") && !textField) bar.appendChild(this.toggle(this.t(TEXT31.bold), BOLD_ICON, common((d) => !!d.text?.bold), (v) => actions.patch({ "text.bold": v })));
+    if (paths.has("text.italic") && !textField) bar.appendChild(this.toggle(this.t(TEXT31.italic), ITALIC_ICON, common((d) => !!d.text?.italic), (v) => actions.patch({ "text.italic": v })));
+    if (textField) bar.appendChild(this.iconBtn(this.t(TEXT31.text), TYPE_ICON, () => this.toggleTextPanel(drawing, actions, !textOnBar)));
     const editableLevels = drawing.editableLevels();
     if (editableLevels && every((d) => d.editableLevels() != null && !(d instanceof MachFigure))) {
       const fib = (d) => d;
       const sizes = TEXT_SIZE_OPTIONS.map((o) => o.value);
-      bar.appendChild(this.dropdown(this.t(TEXT30.numbersSize), sizes, common((d) => fib(d).numbersSize ?? "small"), (s) => numbersSizeIcon(s), (v) => actions.patch({ numbersSize: v }), { label: (v) => this.sizeLabel(v) }));
-      bar.appendChild(this.dropdown(this.t(TEXT30.labelSize), sizes, common((d) => fib(d).labelsSize ?? "normal"), (s) => labelSizeIcon(s), (v) => actions.patch({ labelsSize: v }), { label: (v) => this.sizeLabel(v) }));
+      bar.appendChild(this.dropdown(this.t(TEXT31.numbersSize), sizes, common((d) => fib(d).numbersSize ?? "small"), (s) => numbersSizeIcon(s), (v) => actions.patch({ numbersSize: v }), { label: (v) => this.sizeLabel(v) }));
+      bar.appendChild(this.dropdown(this.t(TEXT31.labelSize), sizes, common((d) => fib(d).labelsSize ?? "normal"), (s) => labelSizeIcon(s), (v) => actions.patch({ labelsSize: v }), { label: (v) => this.sizeLabel(v) }));
     }
     bar.appendChild(this.divider());
     if (!multi) {
@@ -36111,9 +37172,9 @@ var DrawingSettingsPopup = class {
         bar.appendChild(b);
       }
     }
-    if (!multi) bar.appendChild(this.iconBtn(this.t(TEXT30.settings), GEAR_ICON, () => this.openPanel()));
-    bar.appendChild(this.toggle(this.t(TEXT30.lock), LOCK_ICON, common((d) => d.locked), (v) => actions.setLocked(v), UNLOCK_ICON));
-    const del = this.iconBtn(this.t(TEXT30.delete), TRASH_ICON, () => actions.remove());
+    if (!multi) bar.appendChild(this.iconBtn(this.t(TEXT31.settings), GEAR_ICON, () => this.openPanel()));
+    bar.appendChild(this.toggle(this.t(TEXT31.lock), LOCK_ICON, common((d) => d.locked), (v) => actions.setLocked(v), UNLOCK_ICON));
+    const del = this.iconBtn(this.t(TEXT31.delete), TRASH_ICON, () => actions.remove());
     del.style.color = "var(--vela-danger)";
     bar.appendChild(del);
     bar.appendChild(this.kebabButton(actions));
@@ -36172,7 +37233,7 @@ var DrawingSettingsPopup = class {
       size: "sm",
       autoGrow: true,
       maxLines: 4,
-      placeholder: this.t(TEXT30.label),
+      placeholder: this.t(TEXT31.label),
       onChange: (v) => {
         actions.patch({ "text.value": v });
         this.reposition();
@@ -36196,13 +37257,13 @@ var DrawingSettingsPopup = class {
     tools.style.cssText = `display:flex;align-items:center;justify-content:flex-start;gap:0;transform:scale(0.8);transform-origin:left center;`;
     if (withColorAndSize) {
       tools.append(
-        this.colorButton(this.t(TEXT30.textColor), TYPE_ICON, text?.color || this.theme.textColor, (v) => actions.patch({ "text.color": v }), 14),
-        this.dropdown(this.t(TEXT30.textSize), TEXT_SIZE_OPTIONS.map((o) => o.value), text?.size ?? "normal", (s) => sizeIcon(s), (v) => actions.patch({ "text.size": v }), { label: (v) => this.sizeLabel(v) })
+        this.colorButton(this.t(TEXT31.textColor), TYPE_ICON, text?.color || this.theme.textColor, (v) => actions.patch({ "text.color": v }), 14),
+        this.dropdown(this.t(TEXT31.textSize), TEXT_SIZE_OPTIONS.map((o) => o.value), text?.size ?? "normal", (s) => sizeIcon(s), (v) => actions.patch({ "text.size": v }), { label: (v) => this.sizeLabel(v) })
       );
     }
     tools.append(
-      this.toggle(this.t(TEXT30.bold), BOLD_ICON, !!text?.bold, (v) => actions.patch({ "text.bold": v })),
-      this.toggle(this.t(TEXT30.italic), ITALIC_ICON, !!text?.italic, (v) => actions.patch({ "text.italic": v }))
+      this.toggle(this.t(TEXT31.bold), BOLD_ICON, !!text?.bold, (v) => actions.patch({ "text.bold": v })),
+      this.toggle(this.t(TEXT31.italic), ITALIC_ICON, !!text?.italic, (v) => actions.patch({ "text.italic": v }))
     );
     panel.append(ta.el, tools);
     this.el?.appendChild(panel);
@@ -36303,7 +37364,7 @@ var DrawingSettingsPopup = class {
   }
   /** The trailing kebab overflow — duplicate, z-order actions, reset settings. */
   kebabButton(actions) {
-    const b = this.base(this.t(TEXT30.more));
+    const b = this.base(this.t(TEXT31.more));
     b.innerHTML = sized(KEBAB_ICON);
     b.addEventListener("pointerdown", (e) => e.stopPropagation());
     b.addEventListener("click", (e) => {
@@ -36313,10 +37374,10 @@ var DrawingSettingsPopup = class {
         return;
       }
       this.openActionMenu(b, [
-        { icon: CLONE_ICON, label: this.t(TEXT30.duplicate), onClick: () => actions.duplicate() },
-        { icon: FRONT_ICON, label: this.t(TEXT30.bringToFront), onClick: () => actions.reorder("front") },
-        { icon: BACK_ICON, label: this.t(TEXT30.sendToBack), onClick: () => actions.reorder("back") },
-        { icon: RESET_ICON, label: this.t(TEXT30.resetSettings), onClick: () => actions.resetSettings() }
+        { icon: CLONE_ICON, label: this.t(TEXT31.duplicate), onClick: () => actions.duplicate() },
+        { icon: FRONT_ICON, label: this.t(TEXT31.bringToFront), onClick: () => actions.reorder("front") },
+        { icon: BACK_ICON, label: this.t(TEXT31.sendToBack), onClick: () => actions.reorder("back") },
+        { icon: RESET_ICON, label: this.t(TEXT31.resetSettings), onClick: () => actions.resetSettings() }
       ]);
     });
     return b;
@@ -36324,11 +37385,11 @@ var DrawingSettingsPopup = class {
   /** Host-anchored floating shell (stays inside the chart). Content is filled after
    *  construction so `fill` can close over the live `Popover` without hitting TDZ. */
   hostFloat(anchor, opts) {
-    const t33 = this.theme;
+    const t34 = this.theme;
     const pop = new popover.Popover({
       trigger: anchor,
       host: this.host,
-      theme: t33,
+      theme: t34,
       position: "absolute",
       collisionBoundary: this.host,
       boundaryInset: 4,
@@ -36350,7 +37411,7 @@ var DrawingSettingsPopup = class {
       }
     });
     const el = pop.el;
-    el.style.background = t33.background;
+    el.style.background = t34.background;
     el.style.border = "1px solid var(--vela-border)";
     el.style.borderRadius = "var(--vela-radius-lg)";
     el.style.boxShadow = "var(--vela-shadow)";
@@ -36358,8 +37419,8 @@ var DrawingSettingsPopup = class {
     el.style.display = "flex";
     el.style.flexDirection = "column";
     el.style.gap = "1px";
-    el.style.color = t33.textColor;
-    el.style.font = `var(--vela-font-size-md) ${t33.fontFamily}`;
+    el.style.color = t34.textColor;
+    el.style.font = `var(--vela-font-size-md) ${t34.fontFamily}`;
     el.style.pointerEvents = "auto";
     opts.fill(el, pop);
     pop.show();
@@ -36386,7 +37447,7 @@ var DrawingSettingsPopup = class {
         if (options.length === 0) {
           const note = document.createElement("div");
           note.style.cssText = "padding:6px 10px;opacity:0.65;white-space:nowrap;";
-          note.textContent = this.t(TEXT30.noLowerTimeframeAvailable);
+          note.textContent = this.t(TEXT31.noLowerTimeframeAvailable);
           menu.appendChild(note);
           return;
         }
@@ -36446,10 +37507,10 @@ var DrawingSettingsPopup = class {
       this.hideTip();
       return;
     }
-    const t33 = this.theme;
+    const t34 = this.theme;
     if (!this.tipEl) {
       const tp = document.createElement("div");
-      tp.style.cssText = `position:absolute;z-index:27;pointer-events:none;white-space:nowrap;background:${t33.textColor};color:${t33.background};padding:3px 7px;border-radius:5px;font:var(--vela-font-size-sm) ${t33.fontFamily};box-shadow:var(--vela-shadow);`;
+      tp.style.cssText = `position:absolute;z-index:27;pointer-events:none;white-space:nowrap;background:${t34.textColor};color:${t34.background};padding:3px 7px;border-radius:5px;font:var(--vela-font-size-sm) ${t34.fontFamily};box-shadow:var(--vela-shadow);`;
       this.host.appendChild(tp);
       this.tipEl = tp;
     }
@@ -36650,7 +37711,7 @@ var DrawingSettingsPopup = class {
   /** A floating RGB picker + opacity slider anchored to a color swatch — emits `#RRGGBB(AA)`.
    *  `used` (a mixed swatch's colors) leads the picker as one-click unify shortcuts. */
   openColorPopover(anchor, color, used, onChange) {
-    const t33 = this.theme;
+    const t34 = this.theme;
     this.colorPop = this.hostFloat(anchor, {
       zIndex: 25,
       padding: "10px",
@@ -36659,7 +37720,7 @@ var DrawingSettingsPopup = class {
           const row2 = document.createElement("div");
           row2.style.cssText = "display:flex;align-items:center;gap:6px;padding-bottom:9px;border-bottom:1px solid var(--vela-border);";
           const lbl = document.createElement("span");
-          lbl.textContent = this.t(TEXT30.inUse);
+          lbl.textContent = this.t(TEXT31.inUse);
           lbl.style.cssText = "font:var(--vela-font-size-sm) inherit;opacity:0.7;margin-right:2px;";
           row2.appendChild(lbl);
           for (const c of used) {
@@ -36676,7 +37737,7 @@ var DrawingSettingsPopup = class {
           }
           el.appendChild(row2);
         }
-        el.appendChild(colorPicker.buildColorPicker(color, t33, onChange, { i18n: this.i18n?.() ?? null }));
+        el.appendChild(colorPicker.buildColorPicker(color, t34, onChange, { i18n: this.i18n?.() ?? null }));
       }
     });
     this.colorOwner = anchor;
@@ -36753,7 +37814,7 @@ function sized(svg, size = ICON) {
 }
 
 // src/renderers/native/drawings/MeasureOverlay.ts
-var TEXT31 = {
+var TEXT32 = {
   priceChange: msg("drawing.ruler.priceChange", "{change} ({percent}%)"),
   barsAndDuration: msg("drawing.ruler.barsAndDuration", "{count, plural, one {{bars} bar} other {{bars} bars}}, {duration}")
 };
@@ -36883,8 +37944,8 @@ var MeasureOverlay = class {
     ctx.restore();
     const duration = i18n.format.duration(p2.time - p1.time, { style: "span", surface: "drawing" });
     this.paintLabel(ctx, proj, theme, midX, top, bot, color, [
-      i18n.t(TEXT31.priceChange, { change: localizeNumberText(signed2(priceDiff), i18n), percent: localizeNumberText(signed2(pct), i18n) }),
-      bars != null ? i18n.t(TEXT31.barsAndDuration, { count: bars, bars: localizeNumberText(String(bars), i18n), duration }) : duration
+      i18n.t(TEXT32.priceChange, { change: localizeNumberText(signed2(priceDiff), i18n), percent: localizeNumberText(signed2(pct), i18n) }),
+      bars != null ? i18n.t(TEXT32.barsAndDuration, { count: bars, bars: localizeNumberText(String(bars), i18n), duration }) : duration
     ]);
   }
   /** A bordered, two-line label centered under the box (flipped above if it would overflow). */
@@ -37183,7 +38244,7 @@ var UserDrawingController = class {
     }
     return lo <= hi ? { min: lo, max: hi } : null;
   }
-  setActiveTool(type, lastStyle, defaults7) {
+  setActiveTool(type, lastStyle, defaults8) {
     if (type != null) {
       this.finishTextEditor(true);
       this.withModeIntent(() => {
@@ -37192,7 +38253,7 @@ var UserDrawingController = class {
       });
     }
     this.activeTool = type;
-    this.activeToolDefaults = defaults7 ?? (lastStyle ? { style: lastStyle } : void 0);
+    this.activeToolDefaults = defaults8 ?? (lastStyle ? { style: lastStyle } : void 0);
     this.toolbar.setActiveTool(type);
     if (type == null) this.interaction.onToolCleared();
     else this.clearSelection();
@@ -37475,13 +38536,13 @@ var UserDrawingController = class {
     if (!d) return;
     this.closeTextEditor();
     const initial = d.text?.value ?? "";
-    const css35 = this.inlineEditorCss(d, initial);
-    if (!css35) return;
+    const css36 = this.inlineEditorCss(d, initial);
+    if (!css36) return;
     const ta = document.createElement("textarea");
     ta.value = initial;
     ta.placeholder = this.t(TEXT_PLACEHOLDER);
     ta.spellcheck = false;
-    ta.style.cssText = css35;
+    ta.style.cssText = css36;
     const sync = () => {
       this.editedDrawing(id)?.applySettings({ "text.value": ta.value });
       this.render();
@@ -37582,8 +38643,8 @@ var UserDrawingController = class {
     const ed = this.textEditor;
     if (!ed) return;
     const d = this.editedDrawing(ed.id);
-    const css35 = d && this.inlineEditorCss(d, ed.el.value);
-    if (css35) ed.el.style.cssText = css35;
+    const css36 = d && this.inlineEditorCss(d, ed.el.value);
+    if (css36) ed.el.style.cssText = css36;
   }
   closeTextEditor() {
     const ed = this.textEditor;
@@ -38086,13 +39147,13 @@ function fontPxOf(size) {
   if (typeof size === "number") return size > 0 ? size : SIZE_PX4.auto;
   return SIZE_PX4[size] ?? SIZE_PX4.auto;
 }
-function tableHasContent(t33) {
-  return t33.cells.some((row2) => row2?.some((c) => c != null && !c.merged));
+function tableHasContent(t34) {
+  return t34.cells.some((row2) => row2?.some((c) => c != null && !c.merged));
 }
-function mergeRenderPlan(t33) {
+function mergeRenderPlan(t34) {
   const span = /* @__PURE__ */ new Map();
   const omit = /* @__PURE__ */ new Set();
-  for (const m of t33.merges) {
+  for (const m of t34.merges) {
     span.set(`${m.startRow}:${m.startCol}`, { cs: m.endCol - m.startCol + 1, rs: m.endRow - m.startRow + 1 });
     for (let r = m.startRow; r <= m.endRow; r += 1) {
       for (let c = m.startCol; c <= m.endCol; c += 1) {
@@ -38100,9 +39161,9 @@ function mergeRenderPlan(t33) {
       }
     }
   }
-  for (let r = 0; r < t33.rows; r += 1) {
-    for (let c = 0; c < t33.columns; c += 1) {
-      if (t33.cells[r]?.[c]?.merged && !span.has(`${r}:${c}`)) omit.add(`${r}:${c}`);
+  for (let r = 0; r < t34.rows; r += 1) {
+    for (let c = 0; c < t34.columns; c += 1) {
+      if (t34.cells[r]?.[c]?.merged && !span.has(`${r}:${c}`)) omit.add(`${r}:${c}`);
     }
   }
   for (const key of span.keys()) omit.delete(key);
@@ -38114,20 +39175,20 @@ var PAD_X = 6;
 var PAD_Y = 2;
 var MARGIN = 6;
 var LINE_HEIGHT = 1.2;
-function paintTable(ctx, t33, args, tips) {
-  if (!tableHasContent(t33)) return;
-  const layout = layoutTable(ctx, t33, args);
+function paintTable(ctx, t34, args, tips) {
+  if (!tableHasContent(t34)) return;
+  const layout = layoutTable(ctx, t34, args);
   if (!layout || layout.w <= 0 || layout.h <= 0) return;
-  const fw = t33.frameColor && t33.frameWidth > 0 ? t33.frameWidth : 0;
-  const { x, y } = anchorOrigin(t33.position, layout.w + 2 * fw, layout.h + 2 * fw, args);
+  const fw = t34.frameColor && t34.frameWidth > 0 ? t34.frameWidth : 0;
+  const { x, y } = anchorOrigin(t34.position, layout.w + 2 * fw, layout.h + 2 * fw, args);
   const x0 = x + fw;
   const y0 = y + fw;
-  if (t33.bgColor) {
-    ctx.fillStyle = t33.bgColor;
+  if (t34.bgColor) {
+    ctx.fillStyle = t34.bgColor;
     ctx.fillRect(x0, y0, layout.w, layout.h);
   }
-  if (fw > 0 && t33.frameColor) {
-    ctx.strokeStyle = t33.frameColor;
+  if (fw > 0 && t34.frameColor) {
+    ctx.strokeStyle = t34.frameColor;
     ctx.lineWidth = fw;
     ctx.strokeRect(x + fw / 2, y + fw / 2, layout.w + fw, layout.h + fw);
   }
@@ -38164,9 +39225,9 @@ function paintTable(ctx, t33, args, tips) {
   }
   ctx.textBaseline = prevBaseline;
   ctx.textAlign = prevAlign;
-  if (t33.borderColor && t33.borderWidth > 0) {
-    ctx.strokeStyle = t33.borderColor;
-    ctx.lineWidth = t33.borderWidth;
+  if (t34.borderColor && t34.borderWidth > 0) {
+    ctx.strokeStyle = t34.borderColor;
+    ctx.lineWidth = t34.borderWidth;
     const seen = /* @__PURE__ */ new Set();
     ctx.beginPath();
     const edge = (ax, ay, bx, by) => {
@@ -38189,18 +39250,18 @@ function paintTable(ctx, t33, args, tips) {
     ctx.stroke();
   }
 }
-function layoutTable(ctx, t33, args) {
-  const { span, omit } = mergeRenderPlan(t33);
-  const colW = new Array(t33.columns).fill(0);
-  const rowH = new Array(t33.rows).fill(0);
+function layoutTable(ctx, t34, args) {
+  const { span, omit } = mergeRenderPlan(t34);
+  const colW = new Array(t34.columns).fill(0);
+  const rowH = new Array(t34.rows).fill(0);
   const boxes = [];
-  for (let r = 0; r < t33.rows; r += 1) {
-    for (let c = 0; c < t33.columns; c += 1) {
+  for (let r = 0; r < t34.rows; r += 1) {
+    for (let c = 0; c < t34.columns; c += 1) {
       if (omit.has(`${r}:${c}`)) continue;
-      const cell = t33.cells[r]?.[c];
+      const cell = t34.cells[r]?.[c];
       if (cell == null) continue;
       const sp = span.get(`${r}:${c}`);
-      boxes.push({ cell, r, c, cs: Math.min(sp?.cs ?? 1, t33.columns - c), rs: Math.min(sp?.rs ?? 1, t33.rows - r) });
+      boxes.push({ cell, r, c, cs: Math.min(sp?.cs ?? 1, t34.columns - c), rs: Math.min(sp?.rs ?? 1, t34.rows - r) });
     }
   }
   if (boxes.length === 0) return null;
@@ -38303,7 +39364,7 @@ var IndicatorDrawingSlices = class {
       const boundaries = scene.seriesBoundaries(pane.id);
       for (const m of scene.orderedIndicatorsForPane(pane.id)) {
         const set = modelDrawingSet(m, false);
-        const tables = (m.tables ?? []).filter((t33) => !t33.overlay);
+        const tables = (m.tables ?? []).filter((t34) => !t34.overlay);
         if (drawingSetEmpty(set) && tables.length === 0) continue;
         const sc = scene.scaleFor(m, pane);
         const mp = sc === pane.scale ? pane : { ...pane, scale: sc };
@@ -38313,7 +39374,7 @@ var IndicatorDrawingSlices = class {
       if (pane.kind === "price") {
         for (const m of scene.indicators.values()) {
           const set = modelDrawingSet(m, true);
-          const tables = (m.tables ?? []).filter((t33) => t33.overlay === true);
+          const tables = (m.tables ?? []).filter((t34) => t34.overlay === true);
           if (drawingSetEmpty(set) && tables.length === 0) continue;
           add(pane.id, Infinity, { set, tables, pane, indexOffset: scene.offsetOf(m.id) });
         }
@@ -38359,7 +39420,7 @@ var IndicatorDrawingSlices = class {
       (price) => coords.priceToY(price, pane.scale, pane.bounds) - pane.bounds.top
     );
     paneTips.push(...this.drawScene.labelTipRegions());
-    for (const t33 of e.tables) paintTable(ctx, t33, { paneHeight: pane.bounds.height, plotWidth: dataW, theme }, paneTips);
+    for (const t34 of e.tables) paintTable(ctx, t34, { paneHeight: pane.bounds.height, plotWidth: dataW, theme }, paneTips);
     ctx.restore();
     for (const r of paneTips) {
       this.tips.push({ ...r, top: r.top + pane.bounds.top, bottom: r.bottom + pane.bounds.top });
@@ -38412,7 +39473,7 @@ function createProjector(coords, paneOf, paneIdAtY, barsInRange, seriesInRange, 
 }
 
 // src/renderers/native/core/autoscale.ts
-function computePaneScale(models, bars, includeCandles, i0, i1, drawings, log = false, offsetOf = () => 0, margins = DEFAULT_MARGINS) {
+function computePaneScale(models, bars, includeCandles, i0, i1, drawings, log = false, offsetOf = () => 0, margins = DEFAULT_MARGINS, valueScaleOf = () => 1) {
   let min = Infinity;
   let max = -Infinity;
   const consider = (v) => {
@@ -38432,11 +39493,14 @@ function computePaneScale(models, bars, includeCandles, i0, i1, drawings, log = 
   }
   for (const model of models) {
     const off = offsetOf(model.id);
+    const mult = valueScaleOf(model.id);
+    if (mult === 0) continue;
+    const considerModel = mult === 1 ? consider : (v) => consider(v != null ? v * mult : v);
     for (const s of model.series) {
       if (s.overlay === true) continue;
-      considerSeries(s, i0, i1, off, consider);
+      considerSeries(s, i0, i1, off, considerModel);
     }
-    for (const pl of model.priceLines) consider(pl.price);
+    for (const pl of model.priceLines) considerModel(pl.price);
   }
   if (drawings) {
     consider(drawings.min);
@@ -38525,7 +39589,7 @@ var MARKS_CSS = css.css`@layer vela.chrome {
 .vela-marks-loading, .vela-marks-error { color: ${t.t.fg.muted}; font-style: italic; }
 
 }`;
-var TEXT32 = {
+var TEXT33 = {
   loading: msg("chart.marks.loading", "Loading…"),
   failed: msg("chart.marks.failed", "Couldn’t load this entry.")
 };
@@ -38644,7 +39708,7 @@ var MarkPopover = class {
       if (typeof content === "function") {
         const slot = doc.createElement("div");
         slot.className = "vela-marks-loading";
-        slot.textContent = textOf(this.deps.i18n?.() ?? null, TEXT32.loading);
+        slot.textContent = textOf(this.deps.i18n?.() ?? null, TEXT33.loading);
         section.appendChild(slot);
         pending.push({ el: section, resolve: () => this.resolveLazy(content, slot, gen) });
       } else if (content !== void 0) {
@@ -38674,7 +39738,7 @@ var MarkPopover = class {
       () => {
         if (gen !== this.generation) return;
         slot.className = "vela-marks-error";
-        slot.textContent = textOf(this.deps.i18n?.() ?? null, TEXT32.failed);
+        slot.textContent = textOf(this.deps.i18n?.() ?? null, TEXT33.failed);
       }
     );
   }
@@ -38889,8 +39953,8 @@ var BackdropRenderer = class {
         ctx.globalAlpha = gridAlpha;
         ctx.strokeStyle = horzColor;
         ctx.beginPath();
-        for (const t33 of this.axisTicks.ticksFor(scene, pane, coords)) {
-          const y = Math.round(coords.priceToY(t33.price, pane.scale, pane.bounds)) + 0.5;
+        for (const t34 of this.axisTicks.ticksFor(scene, pane, coords)) {
+          const y = Math.round(coords.priceToY(t34.price, pane.scale, pane.bounds)) + 0.5;
           if (y < pane.bounds.top || y > pane.bounds.top + pane.bounds.height) continue;
           ctx.moveTo(0, y);
           ctx.lineTo(dataW, y);
@@ -39268,10 +40332,10 @@ function buildVpvrProfile(bars, i0, i1, rowCount, valueAreaFrac) {
   let maxTotal = 0;
   let poc = 0;
   for (let k = 0; k < n; k += 1) {
-    const t33 = rows[k].up + rows[k].down;
-    total += t33;
-    if (t33 > maxTotal) {
-      maxTotal = t33;
+    const t34 = rows[k].up + rows[k].down;
+    total += t34;
+    if (t34 > maxTotal) {
+      maxTotal = t34;
       poc = k;
     }
   }
@@ -39414,7 +40478,7 @@ function frameNow() {
 var PRICE_SCALE_K = 4e-3;
 var KEY_ZOOM_STEP = 0.2;
 var SEPARATOR_HIT_PX = 4;
-var TEXT33 = {
+var TEXT34 = {
   chartSettings: msg("chart.settingsButton", "Chart settings"),
   scrollToLatest: msg("chart.scrollToLatest.label", "Scroll to most recent bar"),
   scrollToLatestTitle: msg("chart.scrollToLatest.title", "Scroll to most recent bar (Alt+Shift+→)"),
@@ -39679,7 +40743,7 @@ var NativeRenderer = class {
     /** The active symbol's style-deciding facts; null while unknown (every style applies). */
     this.symbolFacts = null;
     this.name = "native";
-    this.features = ["logScale", "currentPriceLine", "priceLabel", "countdown", "upColor", "downColor", "glow", "animZoom", "animPan", "animScroll", "animAutoscale", "animLiveBar", "intro", "zoomAnchor", "axisDrag", "paneResize", "freePan", "candleZOrder", "candleVisible", "seriesOrder", "highlights", "sessionZones", "gridlines", "axisLabels", "scaleMode", "invertScale", "scalePriceOnly", "paneScales", "autoScale", "timezone", "keyboard", "historyChords", "priceStyle", "shownPriceStyle", "priceBaseline", "baselinePrice", "previousClose", "settings", "attribution", "dialogHost", "tradeMarkers", "marks", "indicatorTitles", "indicatorValues", "crosshairOverride", "drawingsInteractive", "priceAxisTicks"];
+    this.features = ["logScale", "currentPriceLine", "priceLabel", "countdown", "indicatorValueLabels", "indicatorNameLabels", "upColor", "downColor", "glow", "animZoom", "animPan", "animScroll", "animAutoscale", "animLiveBar", "intro", "zoomAnchor", "axisDrag", "paneResize", "freePan", "candleZOrder", "candleVisible", "seriesOrder", "highlights", "sessionZones", "gridlines", "axisLabels", "scaleMode", "invertScale", "scalePriceOnly", "paneScales", "autoScale", "timezone", "keyboard", "historyChords", "priceStyle", "shownPriceStyle", "priceBaseline", "baselinePrice", "previousClose", "settings", "attribution", "dialogHost", "tradeMarkers", "marks", "indicatorTitles", "indicatorValues", "crosshairOverride", "drawingsInteractive", "priceAxisTicks"];
     /** Track cursor proximity to the scroll button on the plot (bubbles from the button too,
      *  so moving onto the button doesn't count as leaving). */
     this.onScrollProximityMove = (e) => {
@@ -39749,6 +40813,12 @@ var NativeRenderer = class {
       case "countdown":
         this.scene.showCountdown = Boolean(value);
         this.syncCountdownTimer();
+        break;
+      case "indicatorValueLabels":
+        this.scene.showIndicatorValueLabels = Boolean(value);
+        break;
+      case "indicatorNameLabels":
+        this.scene.showIndicatorNameLabels = Boolean(value);
         break;
       case "upColor":
         this.candleUp = String(value);
@@ -39931,6 +41001,10 @@ var NativeRenderer = class {
         return this.scene.showPriceLabel;
       case "countdown":
         return this.scene.showCountdown;
+      case "indicatorValueLabels":
+        return this.scene.showIndicatorValueLabels;
+      case "indicatorNameLabels":
+        return this.scene.showIndicatorNameLabels;
       case "upColor":
         return this.candleUp;
       case "downColor":
@@ -40107,6 +41181,12 @@ var NativeRenderer = class {
     if (this.scene.priceStyle !== before) this.scheduler?.invalidate(4 /* Full */);
     if (this.settingsDialog?.isOpen()) this.settingsDialog.refresh(this.getConfig());
   }
+  /** Port surface: the active symbol's short display name (bare ticker) for axis badges. */
+  setSymbolName(name) {
+    if (this.scene.symbolName === name) return;
+    this.scene.symbolName = name;
+    this.scheduler?.invalidate(2 /* Chrome */);
+  }
   /** The registered style ids the active symbol's facts rule out (none while unknown). */
   unavailablePriceStyles() {
     return priceStyleIds().filter((id) => !priceStyleApplies(id, this.symbolFacts));
@@ -40120,26 +41200,26 @@ var NativeRenderer = class {
   getConfig() {
     const s = this.scene.style;
     const chartTypesBag = Object.fromEntries(Object.entries(s.chartTypes).map(([k, v]) => [k, { ...v }]));
-    const t33 = this.theme;
+    const t34 = this.theme;
     return {
       version: CHART_CONFIG_VERSION,
       chartTypes: chartTypesBag,
       layout: {
-        background: t33.background,
-        textColor: t33.textColor,
-        fontFamily: t33.fontFamily,
+        background: t34.background,
+        textColor: t34.textColor,
+        fontFamily: t34.fontFamily,
         fontSize: s.fontSize
       },
       grid: {
-        vertLines: { visible: s.gridVert.visible, color: s.gridVert.color ?? t33.gridColor },
-        horzLines: { visible: s.gridHorz.visible, color: s.gridHorz.color ?? t33.gridColor }
+        vertLines: { visible: s.gridVert.visible, color: s.gridVert.color ?? t34.gridColor },
+        horzLines: { visible: s.gridHorz.visible, color: s.gridHorz.color ?? t34.gridColor }
       },
       crosshair: {
-        color: s.crosshair.color ?? t33.textColor,
+        color: s.crosshair.color ?? t34.textColor,
         width: s.crosshair.width,
         style: s.crosshair.style,
         opacity: s.crosshair.opacity,
-        labelBackground: s.crosshair.labelBackground ?? t33.textColor
+        labelBackground: s.crosshair.labelBackground ?? t34.textColor
       },
       priceScale: {
         mode: this.scene.scaleMode,
@@ -40147,11 +41227,13 @@ var NativeRenderer = class {
         invert: this.scene.invertScale,
         priceOnly: this.scene.scalePriceOnly,
         freePan: this.freePanOn,
-        borderColor: s.borderColor ?? t33.borderColor,
+        borderColor: s.borderColor ?? t34.borderColor,
         labelsVisible: this.scene.showAxisLabels,
         currentPriceLine: this.scene.showPriceLine,
         priceLabel: this.scene.showPriceLabel,
         countdown: this.scene.showCountdown,
+        indicatorValueLabels: this.scene.showIndicatorValueLabels,
+        indicatorNameLabels: this.scene.showIndicatorNameLabels,
         animateLastPrice: this.animLiveBar.on
       },
       animations: {
@@ -40160,7 +41242,7 @@ var NativeRenderer = class {
         autoscale: this.animAutoscale.on,
         intro: this.intro.style !== false
       },
-      panes: { separatorColor: s.separatorColor ?? t33.borderColor },
+      panes: { separatorColor: s.separatorColor ?? t34.borderColor },
       margins: { ...s.margins },
       trades: {
         visible: this.scene.tradeMarkers.visible,
@@ -40273,6 +41355,8 @@ var NativeRenderer = class {
     this.scene.showPriceLine = next.priceScale.currentPriceLine;
     this.scene.showPriceLabel = next.priceScale.priceLabel;
     this.scene.showCountdown = next.priceScale.countdown;
+    this.scene.showIndicatorValueLabels = next.priceScale.indicatorValueLabels;
+    this.scene.showIndicatorNameLabels = next.priceScale.indicatorNameLabels;
     this.syncCountdownTimer();
     this.animLiveBar.toggle(next.priceScale.animateLastPrice);
     this.animZoom.toggle(next.animations.zoom);
@@ -40374,7 +41458,7 @@ var NativeRenderer = class {
   makeSettingsButton() {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.title = this.t(TEXT33.chartSettings);
+    btn.title = this.t(TEXT34.chartSettings);
     btn.innerHTML = icons.iconAt("gear", 14);
     Object.assign(btn.style, {
       position: "absolute",
@@ -40469,8 +41553,8 @@ var NativeRenderer = class {
   makeScrollToRealtimeButton() {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.title = this.t(TEXT33.scrollToLatestTitle);
-    btn.setAttribute("aria-label", this.t(TEXT33.scrollToLatest));
+    btn.title = this.t(TEXT34.scrollToLatestTitle);
+    btn.setAttribute("aria-label", this.t(TEXT34.scrollToLatest));
     btn.innerHTML = this.scrollButtonIcon();
     Object.assign(btn.style, {
       position: "absolute",
@@ -40653,17 +41737,17 @@ var NativeRenderer = class {
   revealCandle(b, i, p, n, style) {
     const SPAN = 0.55;
     const local = Math.max(0, Math.min(1, (p - i / Math.max(1, n - 1) * SPAN) / (1 - SPAN)));
-    let t33;
+    let t34;
     if (style === "settle") {
       const c1 = 1.70158;
       const u = local - 1;
-      t33 = 1 + (c1 + 1) * u * u * u + c1 * u * u;
+      t34 = 1 + (c1 + 1) * u * u * u + c1 * u * u;
     } else {
       const u = 1 - local;
-      t33 = 1 - u * u * u;
+      t34 = 1 - u * u * u;
     }
     const o = b.open;
-    return { ...b, high: o + (b.high - o) * t33, low: o + (b.low - o) * t33, close: o + (b.close - o) * t33 };
+    return { ...b, high: o + (b.high - o) * t34, low: o + (b.low - o) * t34, close: o + (b.close - o) * t34 };
   }
   /** A theme's up and down colors are the series' defaults: on a theme switch, every series
    *  color still on the previous theme's moves to the next theme's, and a color a host or
@@ -40912,7 +41996,7 @@ var NativeRenderer = class {
         kind: p.kind,
         // A study pane is named after its master indicator ("Move to RSI"), not a
         // positional "Pane N" (which shifts as panes reorder and means little).
-        label: p.kind === "price" ? this.t(TEXT33.mainChart) : this.paneMasterTitle(p.id) ?? this.t(TEXT33.pane, { n: i }),
+        label: p.kind === "price" ? this.t(TEXT34.mainChart) : this.paneMasterTitle(p.id) ?? this.t(TEXT34.pane, { n: i }),
         top: p.bounds.top,
         height: p.bounds.height
       })),
@@ -40954,7 +42038,17 @@ var NativeRenderer = class {
       onToggleAuto: (paneId) => this.togglePaneAuto(paneId),
       onToggleLog: (paneId) => {
         const pane = this.scene.panes.get(paneId);
-        if (pane) this.setPaneLog(paneId, !paneLogScale(this.scene, pane));
+        if (!pane) return;
+        const nextLog = !paneLogScale(this.scene, pane);
+        if (nextLog && paneScaleMode(this.scene, pane) !== "price") this.setPaneScaleMode(paneId, "price");
+        this.setPaneLog(paneId, nextLog);
+      },
+      onTogglePercent: (paneId) => {
+        const pane = this.scene.panes.get(paneId);
+        if (!pane) return;
+        const nextPct = paneScaleMode(this.scene, pane) !== "percent";
+        if (nextPct && paneLogScale(this.scene, pane)) this.setPaneLog(paneId, false);
+        this.setPaneScaleMode(paneId, nextPct ? "percent" : "price");
       }
     });
     this.resizeObserver = new ResizeObserver((entries2) => {
@@ -41063,6 +42157,7 @@ var NativeRenderer = class {
    *  repaints. */
   setLocalization(i18n, root) {
     this.i18n = i18n;
+    this.chrome.i18n = i18n;
     this.rootAttrs = { lang: root.lang, dir: root.dir };
     this.scene.format = i18n.format;
     this.inputsUI?.setI18n(i18n);
@@ -41092,12 +42187,12 @@ var NativeRenderer = class {
   }
   /** Re-read the chrome text the renderer owns in the current language. */
   relabel() {
-    if (this.settingsButton) this.settingsButton.title = this.t(TEXT33.chartSettings);
+    if (this.settingsButton) this.settingsButton.title = this.t(TEXT34.chartSettings);
     if (this.scrollButton) {
-      this.scrollButton.title = this.t(TEXT33.scrollToLatestTitle);
-      this.scrollButton.setAttribute("aria-label", this.t(TEXT33.scrollToLatest));
+      this.scrollButton.title = this.t(TEXT34.scrollToLatestTitle);
+      this.scrollButton.setAttribute("aria-label", this.t(TEXT34.scrollToLatest));
     }
-    if (this.keyboardEnabled && this.dataCanvas?.hasAttribute("aria-label")) this.dataCanvas.setAttribute("aria-label", this.t(TEXT33.keyboardHelp));
+    if (this.keyboardEnabled && this.dataCanvas?.hasAttribute("aria-label")) this.dataCanvas.setAttribute("aria-label", this.t(TEXT34.keyboardHelp));
     this.paneControls?.refresh();
     this.axisScaleButtons?.relabel();
     if (this.attributionEl && this.attributionHtml === null) this.rebuildAttribution();
@@ -41214,11 +42309,12 @@ var NativeRenderer = class {
     this.liveEaseTime = 0;
     const prevBars = this.bars;
     const prevHeadTime = prevBars[0]?.time;
-    this.bars = normalizeBars(bars);
+    this.scene.variableDuration = opts?.variableDuration === true;
+    this.bars = normalizeBars(bars, this.scene.variableDuration);
     this.scene.bars = this.bars;
     this.coords.setBars(this.bars.map((b) => b.time));
     const newest = this.bars[this.bars.length - 1];
-    if (newest) clockCorrection.observeCandle(newest.time, this.coords.barInterval);
+    if (newest && !this.scene.variableDuration) clockCorrection.observeCandle(newest.time, this.coords.barInterval);
     for (const model of this.scene.indicators.values()) this.refreshAnchorOffset(model);
     if (opts?.preserveView === true && prevHeadTime != null && this.bars.length > 0) {
       const newHeadTime = this.bars[0].time;
@@ -41254,14 +42350,14 @@ var NativeRenderer = class {
   updateBar(bar) {
     const n = this.bars.length;
     const last = this.bars[n - 1];
-    if (last && bar.time === last.time) {
+    if (last && isSameBar(last, bar)) {
       this.bars[n - 1] = bar;
       if (!this.animLiveBar.on || this.liveEaseTime !== bar.time) {
         this.syncLiveEase(bar);
       } else {
         this.animator.start();
       }
-    } else if (!last || bar.time > last.time) {
+    } else if (!last || isNewerBar(bar, last)) {
       const vp = this.coords.getViewport();
       const holdView = n > 0 && vp.rightOffset < 0 && this.scrollTargetRO === null;
       this.bars.push(bar);
@@ -41269,7 +42365,7 @@ var NativeRenderer = class {
       if (this.coords.barInterval > 0) this.coords.appendBar(bar.time);
       else this.coords.setBars(this.bars.map((b) => b.time));
       if (holdView) this.coords.setViewport({ ...vp, rightOffset: vp.rightOffset - 1 });
-      clockCorrection.observeCandle(bar.time, this.coords.barInterval);
+      if (!this.scene.variableDuration) clockCorrection.observeCandle(bar.time, this.coords.barInterval);
     } else {
       return;
     }
@@ -41458,7 +42554,9 @@ var NativeRenderer = class {
       this.vpvrActive = true;
       this.vpvrHidden = false;
     }
-    if (model.ownScale) this.refreshAxisWidth();
+    const hadOwnScale = this.scene.indicatorScales.has(model.id);
+    if (!model.ownScale && hadOwnScale) this.scene.dropIndicatorScale(model.id);
+    if (model.ownScale || hadOwnScale) this.refreshAxisWidth();
     this.syncLegendOrder();
     this.paneControls?.refresh();
     this.scheduler.invalidate(4 /* Full */);
@@ -41825,42 +42923,42 @@ var NativeRenderer = class {
     let moving = false;
     const tau = this.animAutoscale.tau;
     for (const pane of this.scene.panes.values()) {
-      const t33 = pane.scaleTarget;
+      const t34 = pane.scaleTarget;
       const s = pane.scale;
-      if (t33.log && s.min > 0 && t33.min > 0) {
-        const lt0 = Math.log(t33.min);
-        const lt1 = Math.log(t33.max);
+      if (t34.log && s.min > 0 && t34.min > 0) {
+        const lt0 = Math.log(t34.min);
+        const lt1 = Math.log(t34.max);
         const lspan = Math.max(1e-9, Math.abs(lt1 - lt0));
         const n0 = easeToward(Math.log(s.min), lt0, dtMs, tau);
         const n1 = easeToward(Math.log(s.max), lt1, dtMs, tau);
         if (Math.abs(n0 - lt0) <= lspan * 1e-3 && Math.abs(n1 - lt1) <= lspan * 1e-3) {
-          pane.scale = { min: t33.min, max: t33.max, log: true };
+          pane.scale = { min: t34.min, max: t34.max, log: true };
         } else {
           moving = true;
           pane.scale = { min: Math.exp(n0), max: Math.exp(n1), log: true };
         }
         continue;
       }
-      const span = Math.max(1e-9, Math.abs(t33.max - t33.min));
-      let nmin = easeToward(s.min, t33.min, dtMs, tau);
-      let nmax = easeToward(s.max, t33.max, dtMs, tau);
-      if (Math.abs(nmin - t33.min) <= span * 1e-3 && Math.abs(nmax - t33.max) <= span * 1e-3) {
-        nmin = t33.min;
-        nmax = t33.max;
+      const span = Math.max(1e-9, Math.abs(t34.max - t34.min));
+      let nmin = easeToward(s.min, t34.min, dtMs, tau);
+      let nmax = easeToward(s.max, t34.max, dtMs, tau);
+      if (Math.abs(nmin - t34.min) <= span * 1e-3 && Math.abs(nmax - t34.max) <= span * 1e-3) {
+        nmin = t34.min;
+        nmax = t34.max;
       } else {
         moving = true;
       }
-      pane.scale = { min: nmin, max: nmax, log: t33.log };
+      pane.scale = { min: nmin, max: nmax, log: t34.log };
     }
     for (const sl of this.scene.indicatorScales.values()) {
-      const t33 = sl.scaleTarget;
+      const t34 = sl.scaleTarget;
       const s = sl.scale;
-      const span = Math.max(1e-9, Math.abs(t33.max - t33.min));
-      let nmin = easeToward(s.min, t33.min, dtMs, tau);
-      let nmax = easeToward(s.max, t33.max, dtMs, tau);
-      if (Math.abs(nmin - t33.min) <= span * 1e-3 && Math.abs(nmax - t33.max) <= span * 1e-3) {
-        nmin = t33.min;
-        nmax = t33.max;
+      const span = Math.max(1e-9, Math.abs(t34.max - t34.min));
+      let nmin = easeToward(s.min, t34.min, dtMs, tau);
+      let nmax = easeToward(s.max, t34.max, dtMs, tau);
+      if (Math.abs(nmin - t34.min) <= span * 1e-3 && Math.abs(nmax - t34.max) <= span * 1e-3) {
+        nmin = t34.min;
+        nmax = t34.max;
       } else {
         moving = true;
       }
@@ -42246,7 +43344,7 @@ var NativeRenderer = class {
     if (enabled) {
       this.dataCanvas.tabIndex = 0;
       this.dataCanvas.setAttribute("role", "application");
-      this.dataCanvas.setAttribute("aria-label", this.t(TEXT33.keyboardHelp));
+      this.dataCanvas.setAttribute("aria-label", this.t(TEXT34.keyboardHelp));
       if (!this.liveRegion && this.wrapper) {
         this.liveRegion = document.createElement("div");
         this.liveRegion.setAttribute("aria-live", "polite");
@@ -42317,9 +43415,9 @@ var NativeRenderer = class {
     const ohlc = this.dataWindowOHLC(bar, pricePane);
     const parts = [];
     if (bar) parts.push(formatStamp(bar.time, displayZone(this.scene.timezone, this.coords.barInterval)));
-    if (ohlc) parts.push(this.t(TEXT33.barSummary, { open: ohlc.o, high: ohlc.h, low: ohlc.l, close: ohlc.c }));
+    if (ohlc) parts.push(this.t(TEXT34.barSummary, { open: ohlc.o, high: ohlc.h, low: ohlc.l, close: ohlc.c }));
     for (const group of this.dataWindowGroups(idx, pricePane)) {
-      for (const row2 of group.rows) parts.push(this.t(TEXT33.valueSummary, { name: row2.label, value: row2.value }));
+      for (const row2 of group.rows) parts.push(this.t(TEXT34.valueSummary, { name: row2.label, value: row2.value }));
     }
     this.liveRegion.textContent = parts.join(". ");
   }
@@ -42388,7 +43486,16 @@ var NativeRenderer = class {
         continue;
       }
       if (value == null || !Number.isFinite(value)) continue;
-      rows.push({ label: this.seriesTitle(s, model), value: this.dataWindowFmt(value, pane, surface === "legend" ? "legend" : "dataWindow"), color });
+      const fmtSurface = surface === "legend" ? "legend" : "dataWindow";
+      let formatted;
+      if (pane && model.percentBaseline === "own") {
+        const sc = this.scene.scaleFor(model, pane);
+        const pct = percentScaleForModel(this.scene, pane, model);
+        formatted = pct ? formatAxisValue(sc, pane.bounds.height, value, pct, void 0, pane.axisFormat, this.scene.format, fmtSurface) : formatPriceLabel(sc, pane.bounds.height, value, void 0, this.scene.format, fmtSurface);
+      } else {
+        formatted = this.dataWindowFmt(value, pane, fmtSurface);
+      }
+      rows.push({ label: this.seriesTitle(s, model), value: formatted, color });
     }
     return rows;
   }
@@ -42538,9 +43645,9 @@ var NativeRenderer = class {
         if (this.animZoom.on && l.instance.animating?.()) this.animator.start();
       }
       if (folded) {
-        if (folded.candleBodyScale != null) this.backend.candleBodyScale = clamp012(folded.candleBodyScale) || 0.01;
-        if (folded.candleBodyAlpha != null) this.backend.candleBodyAlpha = clamp012(folded.candleBodyAlpha) * this.candleBodyAlpha;
-        if (folded.gridAlpha != null) gridAlpha = clamp012(folded.gridAlpha);
+        if (folded.candleBodyScale != null) this.backend.candleBodyScale = clamp013(folded.candleBodyScale) || 0.01;
+        if (folded.candleBodyAlpha != null) this.backend.candleBodyAlpha = clamp013(folded.candleBodyAlpha) * this.candleBodyAlpha;
+        if (folded.gridAlpha != null) gridAlpha = clamp013(folded.gridAlpha);
       }
     }
     const li = this.bars.length - 1;
@@ -42681,20 +43788,27 @@ var NativeRenderer = class {
     if (i1 < i0) return;
     const s1 = Math.max(i1, Math.ceil(vr.to));
     this.scene.percentBaseline = this.bars[i0]?.close ?? 0;
+    this.scene.modelPercentBaselines.clear();
     const panes = this.scene.orderedPanes();
     const pricePane = panes.find((p) => p.kind === "price") ?? null;
     this.chrome.prepare(this.scene, this.coords, this.theme);
     const animating = this.animator.active;
     const margins = this.scene.style.margins;
     for (const pane of panes) {
+      const models = this.scene.indicatorsForPane(pane.id);
+      const masterModels = models.filter((m) => m.ownScale !== true);
+      pane.percentBaseline = pane.kind === "price" ? this.bars[i0]?.close ?? 0 : this.firstVisibleValue(masterModels, i0, i1);
+      for (const m of masterModels) {
+        if (m.percentBaseline !== "own") continue;
+        const ownBase = this.firstVisibleValue([m], i0, i1);
+        if (ownBase !== 0 && Number.isFinite(ownBase)) this.scene.modelPercentBaselines.set(m.id, ownBase);
+      }
       if (pane.manualScale) {
         pane.scaleTarget = pane.manualScale;
         pane.scale = { ...pane.manualScale };
         pane.initialized = true;
         continue;
       }
-      const models = this.scene.indicatorsForPane(pane.id);
-      const masterModels = models.filter((m) => m.ownScale !== true);
       let dr = this.chrome.paneDrawingsRange(masterModels, this.scene, pane === pricePane, vr);
       if (pane === pricePane) {
         const or = overlaySeriesRange(this.scene.indicators.values(), i0, s1, (id) => this.scene.offsetOf(id));
@@ -42702,8 +43816,14 @@ var NativeRenderer = class {
       }
       const includeCandles = pane.kind === "price" && (!this.scene.candlesHidden || this.priceLayersAnchoredToBars(masterModels) || !this.paneHasMeasurableContent(masterModels, dr));
       const priceOnly = pane === pricePane && this.scene.scalePriceOnly && includeCandles;
-      pane.scaleTarget = priceOnly ? computePaneScale([], this.bars, true, i0, s1, null, paneLogScale(this.scene, pane), (id) => this.scene.offsetOf(id), margins) : computePaneScale(masterModels, this.bars, includeCandles, i0, s1, dr, paneLogScale(this.scene, pane), (id) => this.scene.offsetOf(id), margins);
-      pane.percentBaseline = pane.kind === "price" ? this.bars[i0]?.close ?? 0 : this.firstVisibleValue(masterModels, i0);
+      const panePct = percentScaleFor(this.scene, pane);
+      const ownBaselineIds = new Set(masterModels.filter((m) => m.percentBaseline === "own").map((m) => m.id));
+      const valueScaleOf = (id) => {
+        if (!panePct || !ownBaselineIds.has(id)) return 1;
+        const ownBase = this.scene.modelPercentBaselines.get(id);
+        return ownBase != null && ownBase !== 0 ? panePct.baseline / ownBase : 0;
+      };
+      pane.scaleTarget = priceOnly ? computePaneScale([], this.bars, true, i0, s1, null, paneLogScale(this.scene, pane), (id) => this.scene.offsetOf(id), margins) : computePaneScale(masterModels, this.bars, includeCandles, i0, s1, dr, paneLogScale(this.scene, pane), (id) => this.scene.offsetOf(id), margins, valueScaleOf);
       pane.axisFormat = void 0;
       pane.axisBands = void 0;
       if (this.volumeOwnsPane(pane, masterModels)) {
@@ -43002,7 +44122,7 @@ var NativeRenderer = class {
       invert: paneInvert(this.scene, p)
     }));
   }
-  /** Thin projection of the panes for the axis A/L hover buttons (top-to-bottom order). */
+  /** Thin projection of the panes for the axis %/L/A hover buttons (top-to-bottom order). */
   axisScaleViews() {
     return this.scene.orderedPanes().map((p) => ({
       id: p.id,
@@ -43010,7 +44130,8 @@ var NativeRenderer = class {
       height: p.bounds.height,
       collapsed: p.collapsed,
       auto: p.manualScale == null,
-      log: paneLogScale(this.scene, p)
+      log: paneLogScale(this.scene, p),
+      percent: paneScaleMode(this.scene, p) === "percent"
     }));
   }
   /** Toggle one pane's autoscale (the A axis button): off freezes the current window into
@@ -43077,20 +44198,24 @@ var NativeRenderer = class {
       }
     }
   }
-  /** The first visible value a study pane measures percent-change from: the earliest finite
-   *  value at bar `i0` across its master series (line-like value, else a candle/bar close).
-   *  0 when none is available yet — the axis then falls back to absolute. */
-  firstVisibleValue(models, i0) {
+  /** The first visible value a study pane (or an `own`-baseline model) measures percent-change
+   *  from: scans from `i0` forward up to `i1` so a secondary series whose history starts
+   *  partway through the viewport still anchors at its first visible bar. 0 when none. */
+  firstVisibleValue(models, i0, i1 = i0) {
     for (const m of models) {
       const off = this.scene.offsetOf(m.id);
       for (const s of m.series) {
         if (s.overlay === true) continue;
         if (isLineLikeSeries(s)) {
-          const v = s.points[i0 - off]?.value;
-          if (v != null && Number.isFinite(v)) return v;
+          for (let i = i0; i <= i1; i += 1) {
+            const v = s.points[i - off]?.value;
+            if (v != null && Number.isFinite(v) && v !== 0) return v;
+          }
         } else if (s.kind === "candle" || s.kind === "bar") {
-          const b = s.bars[i0 - off];
-          if (b && Number.isFinite(b.close)) return b.close;
+          for (let i = i0; i <= i1; i += 1) {
+            const b = s.bars[i - off];
+            if (b && Number.isFinite(b.close) && b.close !== 0) return b.close;
+          }
         }
       }
     }
@@ -43306,9 +44431,9 @@ function slotsBefore(times, headTime) {
   let hi = times.length;
   while (lo < hi) {
     const mid = lo + hi >> 1;
-    const t33 = times[mid]?.time;
-    if (t33 === void 0) return slotsBeforeScan(times, headTime);
-    if (t33 < headTime) lo = mid + 1;
+    const t34 = times[mid]?.time;
+    if (t34 === void 0) return slotsBeforeScan(times, headTime);
+    if (t34 < headTime) lo = mid + 1;
     else hi = mid;
   }
   return lo;
@@ -43317,10 +44442,10 @@ function slotsBeforeScan(times, headTime) {
   let lastBefore = -1;
   let any = false;
   for (let i = 0; i < times.length; i += 1) {
-    const t33 = times[i]?.time;
-    if (t33 === void 0) continue;
+    const t34 = times[i]?.time;
+    if (t34 === void 0) continue;
     any = true;
-    if (t33 >= headTime) return t33 === headTime ? i : lastBefore + 1;
+    if (t34 >= headTime) return t34 === headTime ? i : lastBefore + 1;
     lastBefore = i;
   }
   return any ? times.length : null;
@@ -43396,7 +44521,7 @@ function sanitizeSessionZones(value) {
   };
   return { pre: windows(v.pre), post: windows(v.post), extended: windows(v.extended) };
 }
-function clamp012(v) {
+function clamp013(v) {
   return Math.max(0, Math.min(1, v));
 }
 function isPriceStyle2(v) {
@@ -43405,13 +44530,22 @@ function isPriceStyle2(v) {
 function asScaleMode(v) {
   return v === "percent" || v === "indexed" ? v : "price";
 }
-function normalizeBars(bars) {
-  const sorted = [...bars].sort((a, b) => a.time - b.time);
+function normalizeBars(bars, preserveDuplicateTimes = false) {
+  const sorted = [...bars].sort((a, b) => a.time - b.time || (a.seq ?? 0) - (b.seq ?? 0));
   const out = [];
   for (const bar of sorted) {
     const last = out[out.length - 1];
-    if (last && last.time === bar.time) out[out.length - 1] = bar;
-    else out.push(bar);
+    if (last && last.time === bar.time) {
+      if (!preserveDuplicateTimes) {
+        out[out.length - 1] = bar;
+        continue;
+      }
+      if (last.seq !== void 0 && bar.seq !== void 0 && last.seq === bar.seq) {
+        out[out.length - 1] = bar;
+        continue;
+      }
+    }
+    out.push(bar);
   }
   return out;
 }
@@ -43649,16 +44783,74 @@ function bool(inputs, key, fallback) {
   const v = inputs[key];
   return typeof v === "boolean" ? v : fallback;
 }
-function toPoints(bars, values, colors) {
-  const pts = new Array(bars.length);
-  for (let i = 0; i < bars.length; i++) {
-    const v = values[i];
-    const p = { time: bars[i].time, value: v != null && Number.isFinite(v) ? v : null };
-    const c = colors?.[i];
+function barStepMs(bars, timeframe) {
+  if (bars.length >= 2) {
+    const gaps = [];
+    for (let i = 1; i < bars.length; i++) {
+      const g = bars[i].time - bars[i - 1].time;
+      if (g > 0) gaps.push(g);
+    }
+    if (gaps.length > 0) {
+      gaps.sort((a, b) => a - b);
+      return gaps[Math.floor(gaps.length / 2)];
+    }
+  }
+  return timeframeToMs(timeframe) || 6e4;
+}
+function toPoints(bars, values, colors, offset = 0, stepMs = 6e4) {
+  const shift2 = Math.trunc(offset);
+  if (shift2 === 0) {
+    const pts2 = new Array(bars.length);
+    for (let i = 0; i < bars.length; i++) {
+      const v = values[i];
+      const p = { time: bars[i].time, value: v != null && Number.isFinite(v) ? v : null };
+      const c = colors?.[i];
+      if (c != null) p.color = c;
+      pts2[i] = p;
+    }
+    return pts2;
+  }
+  if (bars.length === 0) return [];
+  if (shift2 < 0) {
+    const back = -shift2;
+    const pts2 = new Array(bars.length);
+    for (let i = 0; i < bars.length; i++) {
+      const src = i + back;
+      const v = src < values.length ? values[src] : void 0;
+      const p = { time: bars[i].time, value: v != null && Number.isFinite(v) ? v : null };
+      const c = src < values.length ? colors?.[src] : void 0;
+      if (c != null) p.color = c;
+      pts2[i] = p;
+    }
+    return pts2;
+  }
+  const total = bars.length + shift2;
+  const lastTime = bars[bars.length - 1].time;
+  const pts = new Array(total);
+  for (let i = 0; i < total; i++) {
+    const time = i < bars.length ? bars[i].time : lastTime + (i - (bars.length - 1)) * stepMs;
+    const src = i - shift2;
+    const v = src >= 0 && src < values.length ? values[src] : void 0;
+    const p = { time, value: v != null && Number.isFinite(v) ? v : null };
+    const c = src >= 0 && src < values.length ? colors?.[src] : void 0;
     if (c != null) p.color = c;
     pts[i] = p;
   }
   return pts;
+}
+function shiftBandArray(arr, offset) {
+  const shift2 = Math.trunc(offset);
+  if (shift2 === 0) return [...arr];
+  if (shift2 > 0) return [...new Array(shift2).fill(null), ...arr];
+  const back = -shift2;
+  const out = new Array(arr.length).fill(null);
+  for (let i = 0; i + back < arr.length; i++) out[i] = arr[i + back];
+  return out;
+}
+function mergeLiveBar(bars, incoming) {
+  const last = bars[bars.length - 1];
+  if (last && last.time === incoming.time) bars[bars.length - 1] = incoming;
+  else if (!last || incoming.time > last.time) bars.push(incoming);
 }
 var ClassicIndicator = class {
   constructor(spec) {
@@ -43666,42 +44858,172 @@ var ClassicIndicator = class {
     /** Null until start() — a pre-start setInputs must record without computing. */
     this.ctx = null;
     this.inputs = {};
+    this.extBars = /* @__PURE__ */ new Map();
+    this.extFetchedFrom = /* @__PURE__ */ new Map();
+    this.extSubs = /* @__PURE__ */ new Map();
+    this.fetchSeq = 0;
+    this.suspended = false;
   }
   start(ctx, inputs) {
     this.ctx = ctx;
     this.inputs = inputs;
-    this.recompute();
+    this.suspended = false;
+    this.syncAndCompute();
   }
   onBars() {
-    this.recompute();
+    if (!this.ctx || this.suspended) return;
+    this.syncAndCompute();
   }
   onViewport() {
   }
   setInputs(inputs) {
     this.inputs = inputs;
-    if (!this.ctx) return;
-    this.recompute();
+    if (!this.ctx || this.suspended) return;
+    this.syncAndCompute();
   }
-  /** Nothing to free — the compute reads the live bar accessor on demand. */
   suspend() {
+    this.suspended = true;
+    this.fetchSeq++;
+    this.clearSubs();
   }
   resume() {
-    this.recompute();
+    this.suspended = false;
+    if (!this.ctx) return;
+    this.syncAndCompute();
   }
   stop() {
+    this.suspended = true;
+    this.fetchSeq++;
+    this.clearSubs();
+    this.extBars.clear();
+    this.extFetchedFrom.clear();
+    this.ctx = null;
   }
-  recompute() {
+  clearSubs() {
+    for (const off of this.extSubs.values()) off();
+    this.extSubs.clear();
+  }
+  wantedExternalSymbols() {
+    const raw = this.spec.externalSymbols?.(this.inputs);
+    if (!raw || raw.length === 0) return [];
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const s of raw) {
+      const trimmed = s.trim();
+      if (!trimmed || seen.has(trimmed)) continue;
+      seen.add(trimmed);
+      out.push(trimmed);
+    }
+    return out;
+  }
+  isOwnSymbol(sym) {
+    if (!this.ctx) return false;
+    const canon = (s) => (this.ctx.data.canonicalSymbol?.(s) ?? s).trim().toUpperCase();
+    return canon(sym) === canon(this.ctx.symbol);
+  }
+  buildExternalMap(bars, wanted) {
+    if (wanted.length === 0) return void 0;
+    const map2 = /* @__PURE__ */ new Map();
+    for (const sym of wanted) {
+      map2.set(sym, this.isOwnSymbol(sym) ? bars : this.extBars.get(sym) ?? []);
+    }
+    return map2;
+  }
+  ensureSubscriptions(remote) {
+    const ctx = this.ctx;
+    if (!ctx || !ctx.live || !ctx.subscribeSeries || this.suspended) return;
+    for (const sym of remote) {
+      if (this.extSubs.has(sym)) continue;
+      const off = ctx.subscribeSeries(sym, ctx.timeframe, (bar) => {
+        if (!this.ctx || this.suspended) return;
+        let arr = this.extBars.get(sym);
+        if (!arr) {
+          arr = [];
+          this.extBars.set(sym, arr);
+        }
+        mergeLiveBar(arr, bar);
+        this.emitCompute(this.ctx.bars(), this.wantedExternalSymbols());
+      });
+      this.extSubs.set(sym, off);
+    }
+  }
+  syncAndCompute() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const bars = ctx.bars();
+    const wanted = this.wantedExternalSymbols();
+    const wantedSet = new Set(wanted);
+    for (const sym of [...this.extSubs.keys()]) {
+      if (!wantedSet.has(sym) || this.isOwnSymbol(sym)) {
+        this.extSubs.get(sym)?.();
+        this.extSubs.delete(sym);
+      }
+    }
+    for (const sym of [...this.extBars.keys()]) {
+      if (!wantedSet.has(sym) || this.isOwnSymbol(sym)) {
+        this.extBars.delete(sym);
+        this.extFetchedFrom.delete(sym);
+      }
+    }
+    const remote = wanted.filter((s) => !this.isOwnSymbol(s));
+    if (remote.length === 0) {
+      this.fetchSeq++;
+      this.emitCompute(bars, wanted);
+      ctx.setStatus("idle");
+      return;
+    }
+    this.emitCompute(bars, wanted);
+    if (!ctx.fetchSeries || bars.length === 0) {
+      ctx.setStatus("idle");
+      return;
+    }
+    const earliest = bars[0].time;
+    const needFetch = remote.filter((sym) => !this.extBars.has(sym) || earliest < (this.extFetchedFrom.get(sym) ?? Infinity));
+    if (needFetch.length === 0) {
+      this.ensureSubscriptions(remote);
+      ctx.setStatus("idle");
+      return;
+    }
+    const seq = ++this.fetchSeq;
+    ctx.setStatus("loading");
+    const step = barStepMs(bars, ctx.timeframe);
+    const range = { from: earliest, to: bars[bars.length - 1].time + step, limit: bars.length + 64 };
+    void Promise.all(
+      needFetch.map(async (sym) => {
+        try {
+          const fetched = await ctx.fetchSeries(sym, ctx.timeframe, range);
+          return [sym, fetched];
+        } catch {
+          return [sym, []];
+        }
+      })
+    ).then((results) => {
+      if (seq !== this.fetchSeq || !this.ctx || this.suspended) return;
+      for (const [sym, fetched] of results) {
+        this.extBars.set(sym, [...fetched]);
+        this.extFetchedFrom.set(sym, earliest);
+      }
+      this.ensureSubscriptions(remote);
+      this.emitCompute(this.ctx.bars(), this.wantedExternalSymbols());
+      this.ctx.setStatus("idle");
+    });
+  }
+  emitCompute(bars, wanted) {
     if (!this.ctx) return;
-    const bars = this.ctx.bars();
-    const out = this.spec.compute(bars, this.inputs);
+    const external = this.buildExternalMap(bars, wanted);
+    const out = this.spec.compute(bars, this.inputs, external);
+    const step = barStepMs(bars, this.ctx.timeframe);
     const instanceId = this.spec.type;
     const series = [];
     const idsByKey = /* @__PURE__ */ new Map();
+    const offsetsByKey = /* @__PURE__ */ new Map();
     out.plots.forEach((plot, ordinal) => {
       const kind = plot.kind ?? "line";
       const title = sourceText(plot.title);
       const id = stableSeriesId({ instanceId, kind, title, ordinal });
+      const offset = Math.trunc(plot.offset ?? 0);
       idsByKey.set(plot.key, id);
+      offsetsByKey.set(plot.key, offset);
       const displayTitle = plot.displayTitle ?? messageOnly(plot.title);
       series.push({
         id,
@@ -43710,7 +45032,7 @@ var ClassicIndicator = class {
         paneId: "",
         // stamped by the orchestrator
         kind,
-        points: toPoints(bars, plot.values, plot.colors),
+        points: toPoints(bars, plot.values, plot.colors, offset, step),
         style: {
           color: plot.color,
           width: plot.width ?? 1,
@@ -43737,6 +45059,9 @@ var ClassicIndicator = class {
       const from = idsByKey.get(band.from);
       const to = idsByKey.get(band.to);
       if (!from || !to) return [];
+      const fromOff = offsetsByKey.get(band.from) ?? 0;
+      const toOff = offsetsByKey.get(band.to) ?? 0;
+      const bandOff = fromOff === toOff ? fromOff : 0;
       return [
         {
           id: stableSeriesId({ instanceId, kind: "fill", title: band.key, ordinal }),
@@ -43744,8 +45069,8 @@ var ClassicIndicator = class {
           fromSeriesId: from,
           toSeriesId: to,
           color: band.color,
-          ...band.colors ? { colors: [...band.colors] } : {},
-          ...band.gradient ? { gradient: [...band.gradient] } : {}
+          ...band.colors ? { colors: shiftBandArray(band.colors, bandOff) } : {},
+          ...band.gradient ? { gradient: shiftBandArray(band.gradient, bandOff) } : {}
         }
       ];
     });
@@ -43768,7 +45093,6 @@ var ClassicIndicator = class {
       };
     });
     this.ctx.emit({ series, fills, priceLines, polylines });
-    this.ctx.setStatus("idle");
   }
 };
 function classicDescriptor(spec) {
@@ -44302,6 +45626,43 @@ function cumSum(v) {
 function fill(len, value) {
   return new Array(len).fill(value);
 }
+function logReturns(v) {
+  const out = new Array(v.length).fill(Number.NaN);
+  for (let i = 1; i < v.length; i++) {
+    const cur = v[i];
+    const prev2 = v[i - 1];
+    if (Number.isFinite(cur) && Number.isFinite(prev2) && cur > 0 && prev2 > 0) {
+      out[i] = Math.log(cur / prev2);
+    }
+  }
+  return out;
+}
+function sampleVariance(v, len) {
+  if (len < 2) return fill(v.length, Number.NaN);
+  return windowed(v, len, (w, from, to) => {
+    let s = 0;
+    for (let k = from; k <= to; k++) s += w[k];
+    const mean = s / len;
+    let sq = 0;
+    for (let k = from; k <= to; k++) {
+      const d = w[k] - mean;
+      sq += d * d;
+    }
+    return sq / (len - 1);
+  });
+}
+function alignBars(chartBars, extBars) {
+  const n = chartBars.length;
+  const out = new Array(n).fill(null);
+  if (extBars.length === 0) return out;
+  let j = -1;
+  for (let i = 0; i < n; i++) {
+    const t34 = chartBars[i].time;
+    while (j + 1 < extBars.length && extBars[j + 1].time <= t34) j++;
+    if (j >= 0) out[i] = extBars[j];
+  }
+  return out;
+}
 
 // src/core/native-indicators/classics/shared.ts
 var SETTINGS = "Settings";
@@ -44323,6 +45684,17 @@ function optionInput(key, title, defval, options, tooltip) {
 }
 function sourceInput(defval = "Close", key = "source", title = msg("indicator.common.source", "Source"), tooltip) {
   return { key, title, type: "string", defval, options: SOURCES2, group: SETTINGS, ...tooltip != null ? { tooltip } : {} };
+}
+function symbolInput(key, title, defval = "", opts) {
+  return {
+    key,
+    title,
+    type: "symbol",
+    defval,
+    group: SETTINGS,
+    ...opts?.confirm ? { confirm: true } : {},
+    ...opts?.tooltip != null ? { tooltip: opts.tooltip } : {}
+  };
 }
 function colorInput(defval = palette.INFO, title = msg("indicator.common.color", "Color"), key = "color", tooltip) {
   return { key, title, type: "color", defval, group: STYLE, ...tooltip != null ? { tooltip } : {} };
@@ -44469,8 +45841,8 @@ function gradient(value, low, high, from, to) {
   const b = channels(to);
   if (!a || !b || !Number.isFinite(value) || !Number.isFinite(low) || !Number.isFinite(high)) return from;
   const span = high - low;
-  const t33 = span === 0 ? 0 : Math.max(0, Math.min(1, (value - low) / span));
-  const mix2 = (i) => Math.round(a[i] + (b[i] - a[i]) * t33).toString(16).padStart(2, "0");
+  const t34 = span === 0 ? 0 : Math.max(0, Math.min(1, (value - low) / span));
+  const mix2 = (i) => Math.round(a[i] + (b[i] - a[i]) * t34).toString(16).padStart(2, "0");
   return `#${mix2(0)}${mix2(1)}${mix2(2)}`;
 }
 
@@ -45870,9 +47242,9 @@ var fisher = {
     const bear = str3(inputs, "bearColor", palette.BEARISH);
     const inkOf = (i) => {
       const f = out[i];
-      const t33 = trigger[i];
-      if (!Number.isFinite(t33)) return neutral;
-      return f > t33 ? bull : f < t33 ? bear : neutral;
+      const t34 = trigger[i];
+      if (!Number.isFinite(t34)) return neutral;
+      return f > t34 ? bull : f < t34 ? bear : neutral;
     };
     return {
       plots: [
@@ -46696,8 +48068,8 @@ var vortex = {
     const trSum = sum(trueRange(bars), len);
     return {
       plots: [
-        { key: "viPlus", title: msg("indicator.vortexIndicator.plot.viPlus", "VI+"), values: zip(sum(vmPlus, len), trSum, (v, t33) => t33 === 0 ? Number.NaN : v / t33), color: str3(inputs, "plusColor", palette.BULLISH) },
-        { key: "viMinus", title: "VI-", displayTitle: msg("indicator.vortexIndicator.plot.viMinus", "VI−"), values: zip(sum(vmMinus, len), trSum, (v, t33) => t33 === 0 ? Number.NaN : v / t33), color: str3(inputs, "minusColor", palette.BEARISH) }
+        { key: "viPlus", title: msg("indicator.vortexIndicator.plot.viPlus", "VI+"), values: zip(sum(vmPlus, len), trSum, (v, t34) => t34 === 0 ? Number.NaN : v / t34), color: str3(inputs, "plusColor", palette.BULLISH) },
+        { key: "viMinus", title: "VI-", displayTitle: msg("indicator.vortexIndicator.plot.viMinus", "VI−"), values: zip(sum(vmMinus, len), trSum, (v, t34) => t34 === 0 ? Number.NaN : v / t34), color: str3(inputs, "minusColor", palette.BEARISH) }
       ],
       levels: [{ key: "baseline", price: 1, color: str3(inputs, "baselineColor", palette.NEUTRAL), lineStyle: "dotted", title: msg("indicator.vortexIndicator.level.baseline", "Baseline") }]
     };
@@ -46829,9 +48201,9 @@ var historicalVolatility = {
   ],
   compute: (bars, inputs) => {
     const len = num3(inputs, "length", 10);
-    const logReturns = sub(map(closes(bars), Math.log), shift(map(closes(bars), Math.log), 1));
-    const meanReturn = map(sum(logReturns, len), (s) => s / len);
-    const squaredSum = sum(map(logReturns, (r) => r * r), len);
+    const logReturns2 = sub(map(closes(bars), Math.log), shift(map(closes(bars), Math.log), 1));
+    const meanReturn = map(sum(logReturns2, len), (s) => s / len);
+    const squaredSum = sum(map(logReturns2, (r) => r * r), len);
     const factor = bool(inputs, "annualize", true) ? Math.sqrt(num3(inputs, "periodsPerYear", 252)) : 1;
     const values = zip(squaredSum, meanReturn, (sq, m) => Math.sqrt(Math.max(sq - len * m * m, 0) / (len - 1)) * factor * 100);
     return rangeInkedVolatility("hv", msg("indicator.historicalVolatility.plot.hv", "Historical Volatility"), values, str3(inputs, "color", palette.WARNING));
@@ -46866,6 +48238,23 @@ var volatilityOhlc = {
     const annual = num3(inputs, "daysPerYear", 252);
     const values = map(sma(perDay, num3(inputs, "length", 10)), (v) => 100 * Math.sqrt(v * annual));
     return rangeInkedVolatility("vol", msg("indicator.volatilityOhlc.plot.vol", "Volatility"), values, str3(inputs, "color", palette.WARNING));
+  }
+};
+var volatilityCloseToClose = {
+  type: "volatility-close-to-close",
+  title: msg("indicator.volatilityCloseToClose.title", "Volatility Close-to-Close"),
+  shortTitle: msg("indicator.volatilityCloseToClose.shortTitle", "Vol Close-to-Close"),
+  overlay: false,
+  inputs: [
+    { ...lengthInput(10, "length", msg("indicator.volatilityCloseToClose.length", "Length"), 5e3, msg("indicator.volatilityCloseToClose.length.tooltip", "Number of bar-to-bar close log returns used for the sample variance.")), min: 2 },
+    intInput("daysPerYear", msg("indicator.volatilityCloseToClose.daysPerYear", "Days Per Year"), 252, 1, 366, msg("indicator.volatilityCloseToClose.daysPerYear.tooltip", "Trading days in a year, used to annualize the variance.")),
+    colorInput(palette.WARNING, msg("indicator.volatilityCloseToClose.color", "Volatility Line"), "color", msg("indicator.volatilityCloseToClose.color.tooltip", "Color of the line at its recent highs; it fades toward grey as volatility contracts."))
+  ],
+  compute: (bars, inputs) => {
+    const variance = sampleVariance(logReturns(closes(bars)), num3(inputs, "length", 10));
+    const annual = num3(inputs, "daysPerYear", 252);
+    const values = map(variance, (v) => 100 * Math.sqrt(Math.max(v, 0) * annual));
+    return rangeInkedVolatility("vol", msg("indicator.volatilityCloseToClose.plot.vol", "Volatility"), values, str3(inputs, "color", palette.WARNING));
   }
 };
 var volatilityZeroTrend = {
@@ -47076,7 +48465,7 @@ var choppiness = {
     const len = num3(inputs, "length", 14);
     const trSum = sum(trueRange(bars), len);
     const span = zip(highest(highs(bars), len), lowest(lows(bars), len), (h, l) => h - l);
-    const values = zip(trSum, span, (t33, s) => s > 0 && t33 > 0 ? 100 * Math.log10(t33 / s) / Math.log10(len) : Number.NaN);
+    const values = zip(trSum, span, (t34, s) => s > 0 && t34 > 0 ? 100 * Math.log10(t34 / s) / Math.log10(len) : Number.NaN);
     return boundedOscillator({
       key: "chop",
       title: msg("indicator.choppinessIndex.plot.chop", "CHOP"),
@@ -47092,7 +48481,7 @@ var choppiness = {
     });
   }
 };
-var volatilitySpecs = [atrSpec, historicalVolatility, volatilityOhlc, volatilityZeroTrend, chaikinVolatility, massIndex, standardDeviation, standardError, ulcerIndex, choppiness];
+var volatilitySpecs = [atrSpec, historicalVolatility, volatilityCloseToClose, volatilityOhlc, volatilityZeroTrend, chaikinVolatility, massIndex, standardDeviation, standardError, ulcerIndex, choppiness];
 
 // src/core/native-indicators/classics/volume.ts
 function moneyFlowVolume(bars) {
@@ -48120,7 +49509,186 @@ var averagePrice = priceStudy("average-price", "OHLC4", {
   plot: msg("indicator.averagePrice.plot.price", "Average Price"),
   colorTooltip: msg("indicator.averagePrice.color.tooltip", "Color of the line through the average of each bar’s open, high, low and close.")
 });
-var overlaySpecs = [parabolicSar, vwap, pivotPoints, fiftyTwoWeek, zigzag, williamsFractal, medianPrice, typicalPrice, averagePrice];
+var ichimokuCloud = {
+  type: "ichimoku-cloud",
+  title: msg("indicator.ichimokuCloud.title", "Ichimoku Cloud"),
+  shortTitle: msg("indicator.ichimokuCloud.shortTitle", "Ichimoku"),
+  overlay: true,
+  inputs: [
+    symbolInput("symbol", msg("indicator.ichimokuCloud.symbol", "Another Symbol"), "", {
+      tooltip: msg("indicator.ichimokuCloud.symbol.tooltip", "Optional secondary symbol to compute the cloud on. Leave empty to use the chart symbol.")
+    }),
+    lengthInput(9, "conversionLength", msg("indicator.ichimokuCloud.conversionLength", "Conversion Line Length"), 5e3, msg("indicator.ichimokuCloud.conversionLength.tooltip", "Lookback period for the Conversion Line (Tenkan-sen) high-low midpoint.")),
+    lengthInput(26, "baseLength", msg("indicator.ichimokuCloud.baseLength", "Base Line Length"), 5e3, msg("indicator.ichimokuCloud.baseLength.tooltip", "Lookback period for the Base Line (Kijun-sen) high-low midpoint.")),
+    lengthInput(52, "spanBLength", msg("indicator.ichimokuCloud.spanBLength", "Leading Span B Length"), 5e3, msg("indicator.ichimokuCloud.spanBLength.tooltip", "Lookback period for Leading Span B (Senkou Span B) high-low midpoint.")),
+    lengthInput(26, "laggingLength", msg("indicator.ichimokuCloud.laggingLength", "Lagging Span"), 5e3, msg("indicator.ichimokuCloud.laggingLength.tooltip", "Backward shift period for the Lagging Span (Chikou Span); plots close shifted back by period − 1 bars.")),
+    lengthInput(26, "displacement", msg("indicator.ichimokuCloud.displacement", "Displacement"), 5e3, msg("indicator.ichimokuCloud.displacement.tooltip", "Forward shift period for Leading Span A and B; projects the cloud ahead by displacement − 1 bars.")),
+    colorInput(palette.INFO, msg("indicator.ichimokuCloud.conversionColor", "Conversion Line"), "conversionColor", msg("indicator.ichimokuCloud.conversionColor.tooltip", "Color of the Conversion Line.")),
+    colorInput(palette.BEARISH, msg("indicator.ichimokuCloud.baseColor", "Base Line"), "baseColor", msg("indicator.ichimokuCloud.baseColor.tooltip", "Color of the Base Line.")),
+    colorInput(palette.BULLISH, msg("indicator.ichimokuCloud.laggingColor", "Lagging Span"), "laggingColor", msg("indicator.ichimokuCloud.laggingColor.tooltip", "Color of the Lagging Span.")),
+    colorInput(palette.BULLISH, msg("indicator.ichimokuCloud.spanAColor", "Leading Span A"), "spanAColor", msg("indicator.ichimokuCloud.spanAColor.tooltip", "Color of Leading Span A.")),
+    colorInput(palette.BEARISH, msg("indicator.ichimokuCloud.spanBColor", "Leading Span B"), "spanBColor", msg("indicator.ichimokuCloud.spanBColor.tooltip", "Color of Leading Span B.")),
+    colorInput(transp(palette.BULLISH, 90), msg("indicator.ichimokuCloud.bullCloudColor", "Bullish Cloud"), "bullCloudColor", msg("indicator.ichimokuCloud.bullCloudColor.tooltip", "Cloud fill color while Leading Span A sits at or above Leading Span B.")),
+    colorInput(transp(palette.BEARISH, 90), msg("indicator.ichimokuCloud.bearCloudColor", "Bearish Cloud"), "bearCloudColor", msg("indicator.ichimokuCloud.bearCloudColor.tooltip", "Cloud fill color while Leading Span A sits below Leading Span B."))
+  ],
+  externalSymbols: (inputs) => {
+    const sym = str3(inputs, "symbol", "").trim();
+    return sym ? [sym] : [];
+  },
+  compute: (bars, inputs, external) => {
+    const sym = str3(inputs, "symbol", "").trim();
+    let h;
+    let l;
+    let c;
+    if (sym) {
+      const aligned = alignBars(bars, external?.get(sym) ?? []);
+      h = aligned.map((b) => b ? b.high : Number.NaN);
+      l = aligned.map((b) => b ? b.low : Number.NaN);
+      c = aligned.map((b) => b ? b.close : Number.NaN);
+    } else {
+      h = highs(bars);
+      l = lows(bars);
+      c = closes(bars);
+    }
+    const donchian2 = (len) => zip(highest(h, len), lowest(l, len), (hi, lo) => (hi + lo) / 2);
+    const conversion = donchian2(num3(inputs, "conversionLength", 9));
+    const base = donchian2(num3(inputs, "baseLength", 26));
+    const spanA = zip(conversion, base, (a, b) => (a + b) / 2);
+    const spanB = donchian2(num3(inputs, "spanBLength", 52));
+    const lagShift = -(Math.max(1, Math.trunc(num3(inputs, "laggingLength", 26))) - 1);
+    const leadShift = Math.max(1, Math.trunc(num3(inputs, "displacement", 26))) - 1;
+    const bullCloud = str3(inputs, "bullCloudColor", transp(palette.BULLISH, 90));
+    const bearCloud = str3(inputs, "bearCloudColor", transp(palette.BEARISH, 90));
+    const cloudColors = spanA.map((a, i) => {
+      const b = spanB[i];
+      if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+      return a >= b ? bullCloud : bearCloud;
+    });
+    return {
+      plots: [
+        { key: "conversion", title: msg("indicator.ichimokuCloud.plot.conversion", "Conversion Line"), values: conversion, color: str3(inputs, "conversionColor", palette.INFO) },
+        { key: "base", title: msg("indicator.ichimokuCloud.plot.base", "Base Line"), values: base, color: str3(inputs, "baseColor", palette.BEARISH) },
+        { key: "lagging", title: msg("indicator.ichimokuCloud.plot.lagging", "Lagging Span"), values: c, color: str3(inputs, "laggingColor", palette.BULLISH), offset: lagShift },
+        { key: "spanA", title: msg("indicator.ichimokuCloud.plot.spanA", "Leading Span A"), values: spanA, color: str3(inputs, "spanAColor", palette.BULLISH), offset: leadShift },
+        { key: "spanB", title: msg("indicator.ichimokuCloud.plot.spanB", "Leading Span B"), values: spanB, color: str3(inputs, "spanBColor", palette.BEARISH), offset: leadShift }
+      ],
+      bands: [{ key: "cloud", from: "spanA", to: "spanB", color: bullCloud, colors: cloudColors }]
+    };
+  }
+};
+var overlaySpecs = [ichimokuCloud, parabolicSar, vwap, pivotPoints, fiftyTwoWeek, zigzag, williamsFractal, medianPrice, typicalPrice, averagePrice];
+
+// src/core/native-indicators/classics/correlation.ts
+var correlationCoefficient = {
+  type: "correlation-coefficient",
+  title: msg("indicator.correlationCoefficient.title", "Correlation Coefficient"),
+  shortTitle: msg("indicator.correlationCoefficient.shortTitle", "CC"),
+  overlay: false,
+  inputs: [
+    symbolInput("symbol", msg("indicator.correlationCoefficient.symbol", "Symbol"), "", {
+      confirm: true,
+      tooltip: msg("indicator.correlationCoefficient.symbol.tooltip", "Secondary symbol whose closing prices are correlated with the chart symbol.")
+    }),
+    lengthInput(20, "length", msg("indicator.correlationCoefficient.length", "Length"), 2e3, msg("indicator.correlationCoefficient.length.tooltip", "Number of bars over which the Pearson correlation coefficient is computed.")),
+    colorInput(palette.BULLISH, msg("indicator.correlationCoefficient.bullColor", "Positive"), "bullColor", msg("indicator.correlationCoefficient.bullColor.tooltip", "Line and area color while correlation is above zero.")),
+    colorInput(palette.BEARISH, msg("indicator.correlationCoefficient.bearColor", "Negative"), "bearColor", msg("indicator.correlationCoefficient.bearColor.tooltip", "Line and area color while correlation is below zero.")),
+    colorInput(palette.NEUTRAL, msg("indicator.correlationCoefficient.zeroColor", "Zero Line"), "zeroColor", msg("indicator.correlationCoefficient.zeroColor.tooltip", "Color of the zero reference line."))
+  ],
+  externalSymbols: (inputs) => {
+    const sym = str3(inputs, "symbol", "").trim();
+    return sym ? [sym] : [];
+  },
+  compute: (bars, inputs, external) => {
+    const sym = str3(inputs, "symbol", "").trim();
+    let values;
+    if (!sym) {
+      values = fill(bars.length, Number.NaN);
+    } else {
+      const other = alignBars(bars, external?.get(sym) ?? []).map((b) => b ? b.close : Number.NaN);
+      values = correlation(closes(bars), other, num3(inputs, "length", 20));
+    }
+    const bull = str3(inputs, "bullColor", palette.BULLISH);
+    const bear = str3(inputs, "bearColor", palette.BEARISH);
+    const zeroInk = str3(inputs, "zeroColor", palette.NEUTRAL);
+    const inkOf = (x) => x > 0 ? bull : x < 0 ? bear : palette.NEUTRAL;
+    return {
+      plots: [
+        {
+          key: "cc",
+          title: msg("indicator.correlationCoefficient.plot.cc", "Correlation"),
+          values,
+          color: palette.NEUTRAL,
+          width: 1,
+          colors: values.map((x) => Number.isFinite(x) ? inkOf(x) : null)
+        },
+        anchorPlot("baseline", "Baseline Anchor", values.length, 0)
+      ],
+      bands: [
+        {
+          key: "area",
+          from: "cc",
+          to: "baseline",
+          color: transp(palette.NEUTRAL, 100),
+          colors: values.map((x) => Number.isFinite(x) ? transp(inkOf(x), 80) : null)
+        }
+      ],
+      levels: [
+        {
+          key: "zero",
+          price: 0,
+          color: zeroInk,
+          lineStyle: "dashed",
+          title: msg("indicator.common.level.zero", "Zero Line")
+        }
+      ]
+    };
+  }
+};
+var correlationLog = {
+  type: "correlation-log",
+  title: msg("indicator.correlationLog.title", "Correlation - Log"),
+  shortTitle: msg("indicator.correlationLog.shortTitle", "Correlation - Log"),
+  overlay: false,
+  inputs: [
+    symbolInput("instrument", msg("indicator.correlationLog.instrument", "Instrument 1"), "", {
+      confirm: true,
+      tooltip: msg("indicator.correlationLog.instrument.tooltip", "First symbol whose log returns enter the correlation.")
+    }),
+    symbolInput("instrument2", msg("indicator.correlationLog.instrument2", "Instrument 2"), "", {
+      confirm: true,
+      tooltip: msg("indicator.correlationLog.instrument2.tooltip", "Second symbol whose log returns enter the correlation.")
+    }),
+    { ...lengthInput(25, "length", msg("indicator.correlationLog.length", "Length"), 5e3, msg("indicator.correlationLog.length.tooltip", "Number of bar-to-bar log returns used to compute the Pearson correlation.")), min: 2 },
+    colorInput(palette.BULLISH, msg("indicator.correlationLog.bullColor", "Positive"), "bullColor", msg("indicator.correlationLog.bullColor.tooltip", "Line and wash color while correlation is above zero.")),
+    colorInput(palette.BEARISH, msg("indicator.correlationLog.bearColor", "Negative"), "bearColor", msg("indicator.correlationLog.bearColor.tooltip", "Line and wash color while correlation is below zero.")),
+    colorInput(palette.NEUTRAL, msg("indicator.correlationLog.zeroColor", "Zero Line"), "zeroColor", msg("indicator.correlationLog.zeroColor.tooltip", "Color of the zero reference line."))
+  ],
+  externalSymbols: (inputs) => {
+    const a = str3(inputs, "instrument", "").trim();
+    const b = str3(inputs, "instrument2", "").trim();
+    return [a, b].filter(Boolean);
+  },
+  compute: (bars, inputs, external) => {
+    const sym1 = str3(inputs, "instrument", "").trim();
+    const sym2 = str3(inputs, "instrument2", "").trim();
+    let values;
+    if (!sym1 || !sym2) {
+      values = fill(bars.length, Number.NaN);
+    } else {
+      const c1 = alignBars(bars, external?.get(sym1) ?? []).map((b) => b ? b.close : Number.NaN);
+      const c2 = alignBars(bars, external?.get(sym2) ?? []).map((b) => b ? b.close : Number.NaN);
+      values = correlation(logReturns(c1), logReturns(c2), num3(inputs, "length", 25));
+    }
+    return centeredOscillator({
+      key: "corr",
+      title: msg("indicator.correlationLog.plot.corr", "Correlation"),
+      values,
+      ink: { bull: str3(inputs, "bullColor", palette.BULLISH), bear: str3(inputs, "bearColor", palette.BEARISH), neutral: palette.NEUTRAL },
+      zeroInk: str3(inputs, "zeroColor", palette.NEUTRAL)
+    });
+  }
+};
+var correlationSpecs = [correlationCoefficient, correlationLog];
 
 // src/core/native-indicators/classics/index.ts
 var classicSpecs = [
@@ -48130,10 +49698,366 @@ var classicSpecs = [
   ...trendSpecs,
   ...volatilitySpecs,
   ...volumeSpecs,
-  ...overlaySpecs
+  ...overlaySpecs,
+  ...correlationSpecs
 ];
 function registerClassicIndicators() {
   for (const spec of classicSpecs) registerNativeIndicator(classicDescriptor(spec));
+}
+
+// src/core/native-indicators/compare/CompareIndicator.ts
+var SETTINGS2 = "Settings";
+var STYLE2 = "Style";
+var PLACEMENTS2 = ["same", "new-scale", "new-pane"];
+var LINE_STYLES3 = ["solid", "dashed", "dotted"];
+var LABELS = {
+  groups: CLASSIC_INPUT_LABELS.groups,
+  options: {
+    ...CLASSIC_INPUT_LABELS.options,
+    same: msg("indicator.compare.scale.same", "Same % scale"),
+    "new-scale": msg("indicator.compare.scale.newScale", "New price scale"),
+    "new-pane": msg("indicator.compare.scale.newPane", "New pane"),
+    solid: msg("indicator.compare.lineStyle.solid", "Solid"),
+    dashed: msg("indicator.compare.lineStyle.dashed", "Dashed"),
+    dotted: msg("indicator.compare.lineStyle.dotted", "Dotted")
+  }
+};
+var SCHEMA = [
+  localizeInput(
+    {
+      key: "symbol",
+      title: msg("indicator.compare.symbol", "Symbol"),
+      type: "symbol",
+      defval: "",
+      group: SETTINGS2,
+      tooltip: msg("indicator.compare.symbol.tooltip", "Secondary symbol overlaid for comparison.")
+    },
+    LABELS
+  ),
+  localizeInput(
+    {
+      key: "scale",
+      title: msg("indicator.compare.scale", "Scale"),
+      type: "string",
+      defval: "same",
+      options: PLACEMENTS2,
+      group: SETTINGS2,
+      tooltip: msg("indicator.compare.scale.tooltip", "Share the main percentage scale, use an independent price scale, or plot in a new pane.")
+    },
+    LABELS
+  ),
+  localizeInput(
+    {
+      key: "source",
+      title: msg("indicator.common.source", "Source"),
+      type: "string",
+      defval: "Close",
+      options: SOURCES2,
+      group: SETTINGS2,
+      tooltip: msg("indicator.compare.source.tooltip", "Price value taken from each bar.")
+    },
+    LABELS
+  ),
+  localizeInput(
+    {
+      key: "color",
+      title: msg("indicator.common.color", "Color"),
+      type: "color",
+      defval: palette.CATEGORICAL[0],
+      group: STYLE2,
+      tooltip: msg("indicator.compare.color.tooltip", "Color of the compared symbol line and price-axis badge.")
+    },
+    LABELS
+  ),
+  localizeInput(
+    {
+      key: "lineWidth",
+      title: msg("indicator.common.lineWidth", "Line Width"),
+      type: "int",
+      defval: 2,
+      min: 1,
+      max: 5,
+      step: 1,
+      group: STYLE2,
+      tooltip: msg("indicator.common.lineWidth.tooltip", "Width of the plotted line, in pixels.")
+    },
+    LABELS
+  ),
+  localizeInput(
+    {
+      key: "lineStyle",
+      title: msg("indicator.compare.lineStyle", "Style"),
+      type: "string",
+      defval: "solid",
+      options: LINE_STYLES3,
+      group: STYLE2,
+      tooltip: msg("indicator.compare.lineStyle.tooltip", "Stroke pattern of the compared symbol line.")
+    },
+    LABELS
+  )
+];
+function defaults7() {
+  const out = {};
+  for (const s of SCHEMA) out[s.key] = s.defval;
+  return out;
+}
+function asPlacement(v) {
+  return v === "new-scale" || v === "new-pane" ? v : "same";
+}
+function asLineStyle(v) {
+  return v === "dashed" || v === "dotted" ? v : "solid";
+}
+function asWidth(v) {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? Math.max(1, Math.min(5, Math.round(n))) : 2;
+}
+function barStepMs2(bars, timeframe) {
+  if (bars.length >= 2) {
+    const dt = bars[bars.length - 1].time - bars[bars.length - 2].time;
+    if (dt > 0) return dt;
+  }
+  return timeframeToMs(timeframe) ?? 6e4;
+}
+function mergeLiveBar2(bars, bar) {
+  const last = bars[bars.length - 1];
+  if (!last || bar.time > last.time) bars.push(bar);
+  else if (bar.time === last.time) bars[bars.length - 1] = bar;
+}
+function mergeFetchedBars(fetched, existing) {
+  if (existing.length === 0) return [...fetched];
+  if (fetched.length === 0) return [...existing];
+  const out = [...fetched];
+  const tailTime = out[out.length - 1].time;
+  for (const b of existing) {
+    if (b.time > tailTime) out.push(b);
+    else if (b.time === tailTime) out[out.length - 1] = b;
+  }
+  return out;
+}
+var CompareIndicator = class {
+  constructor() {
+    this.ctx = null;
+    this.inputs = defaults7();
+    this.suspended = false;
+    this.extBars = [];
+    this.fetchedSymbol = "";
+    this.fetchedFrom = Infinity;
+    this.inFlightFrom = null;
+    this.needsCatchup = false;
+    this.fetchSeq = 0;
+    this.unsub = null;
+    this.subSymbol = "";
+  }
+  start(ctx, inputs) {
+    this.ctx = ctx;
+    this.inputs = { ...defaults7(), ...inputs };
+    this.suspended = false;
+    this.needsCatchup = false;
+    this.syncAndCompute();
+  }
+  onBars() {
+    if (!this.ctx || this.suspended) return;
+    this.syncAndCompute();
+  }
+  onViewport() {
+  }
+  setInputs(inputs) {
+    this.inputs = { ...defaults7(), ...inputs };
+    if (!this.ctx || this.suspended) return;
+    this.syncAndCompute();
+  }
+  suspend() {
+    this.suspended = true;
+    this.fetchSeq += 1;
+    this.inFlightFrom = null;
+    this.needsCatchup = true;
+    this.clearSub();
+  }
+  resume() {
+    this.suspended = false;
+    if (!this.ctx) return;
+    this.syncAndCompute();
+  }
+  stop() {
+    this.suspended = true;
+    this.fetchSeq += 1;
+    this.clearSub();
+    this.extBars = [];
+    this.fetchedSymbol = "";
+    this.fetchedFrom = Infinity;
+    this.inFlightFrom = null;
+    this.needsCatchup = false;
+    this.ctx = null;
+  }
+  clearSub() {
+    this.unsub?.();
+    this.unsub = null;
+    this.subSymbol = "";
+  }
+  targetSymbol() {
+    return typeof this.inputs.symbol === "string" ? this.inputs.symbol.trim() : "";
+  }
+  isOwnSymbol(sym) {
+    if (!this.ctx) return false;
+    const canon = (s) => (this.ctx.data.canonicalSymbol?.(s) ?? s).trim().toUpperCase();
+    return canon(sym) === canon(this.ctx.symbol);
+  }
+  ensureSubscription(sym) {
+    const ctx = this.ctx;
+    if (!ctx || !ctx.live || !ctx.subscribeSeries || this.suspended) return;
+    if (this.subSymbol === sym && this.unsub) return;
+    this.clearSub();
+    this.subSymbol = sym;
+    this.unsub = ctx.subscribeSeries(sym, ctx.timeframe, (bar) => {
+      if (!this.ctx || this.suspended || this.targetSymbol() !== sym) return;
+      mergeLiveBar2(this.extBars, bar);
+      this.emit(this.ctx.bars(), sym, this.extBars);
+    });
+  }
+  syncAndCompute() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const bars = ctx.bars();
+    const sym = this.targetSymbol();
+    if (!sym) {
+      this.fetchSeq += 1;
+      this.clearSub();
+      this.extBars = [];
+      this.fetchedSymbol = "";
+      this.fetchedFrom = Infinity;
+      this.inFlightFrom = null;
+      this.needsCatchup = false;
+      this.emit(bars, "", []);
+      ctx.setStatus("idle");
+      return;
+    }
+    if (this.isOwnSymbol(sym)) {
+      this.fetchSeq += 1;
+      this.clearSub();
+      this.extBars = [];
+      this.fetchedSymbol = "";
+      this.fetchedFrom = Infinity;
+      this.inFlightFrom = null;
+      this.needsCatchup = false;
+      this.emit(bars, sym, bars);
+      ctx.setStatus("idle");
+      return;
+    }
+    if (this.fetchedSymbol !== sym) {
+      this.clearSub();
+      this.extBars = [];
+      this.fetchedSymbol = sym;
+      this.fetchedFrom = Infinity;
+      this.inFlightFrom = null;
+      this.needsCatchup = false;
+    }
+    this.emit(bars, sym, this.extBars);
+    if (!ctx.fetchSeries || bars.length === 0) {
+      ctx.setStatus("idle");
+      return;
+    }
+    const earliest = bars[0].time;
+    if (!this.needsCatchup && earliest >= this.fetchedFrom && this.fetchedFrom < Infinity) {
+      this.ensureSubscription(sym);
+      ctx.setStatus("idle");
+      return;
+    }
+    if (!this.needsCatchup && this.inFlightFrom !== null && earliest >= this.inFlightFrom) {
+      return;
+    }
+    const seq = ++this.fetchSeq;
+    this.inFlightFrom = earliest;
+    this.needsCatchup = false;
+    ctx.setStatus("loading");
+    const step = barStepMs2(bars, ctx.timeframe);
+    const range = { from: earliest, to: bars[bars.length - 1].time + step, limit: bars.length + 64 };
+    void ctx.fetchSeries(sym, ctx.timeframe, range).then(
+      (fetched) => ({ ok: true, fetched }),
+      () => ({ ok: false, fetched: [] })
+    ).then(({ ok, fetched }) => {
+      if (seq !== this.fetchSeq || !this.ctx || this.suspended || this.targetSymbol() !== sym) return;
+      this.inFlightFrom = null;
+      if (ok) {
+        this.extBars = mergeFetchedBars(fetched, this.extBars);
+        this.fetchedFrom = Math.min(this.fetchedFrom, earliest);
+        this.ensureSubscription(sym);
+        this.emit(this.ctx.bars(), sym, this.extBars);
+      }
+      this.ctx.setStatus("idle");
+    });
+  }
+  emit(chartBars, sym, secondary) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const placement = asPlacement(this.inputs.scale);
+    const source = typeof this.inputs.source === "string" ? this.inputs.source : "Close";
+    const color = typeof this.inputs.color === "string" && this.inputs.color ? this.inputs.color : palette.CATEGORICAL[0];
+    const width = asWidth(this.inputs.lineWidth);
+    const lineStyle = asLineStyle(this.inputs.lineStyle);
+    const parsed2 = sym ? parseSymbol(sym) : null;
+    const ticker = parsed2?.ticker || sym;
+    const rawVenue = sym ? ctx.data.displayPrefix(sym) ?? parsed2?.provider ?? void 0 : void 0;
+    const venue = rawVenue ? rawVenue.toUpperCase() : void 0;
+    const displayTitle = ticker ? venue ? `${ticker} · ${venue}` : ticker : void 0;
+    const aligned = sym ? alignBars(chartBars, secondary) : [];
+    const points = new Array(chartBars.length);
+    if (sym && aligned.length === chartBars.length) {
+      const nonNull = [];
+      const indices = [];
+      for (let i = 0; i < aligned.length; i += 1) {
+        const b = aligned[i];
+        if (b) {
+          nonNull.push(b);
+          indices.push(i);
+        }
+      }
+      const vals = sourceValues(nonNull, source);
+      for (let i = 0; i < chartBars.length; i += 1) {
+        points[i] = { time: chartBars[i].time, value: null };
+      }
+      for (let k = 0; k < indices.length; k += 1) {
+        const v = vals[k];
+        const i = indices[k];
+        points[i] = { time: chartBars[i].time, value: Number.isFinite(v) ? v : null };
+      }
+    } else {
+      for (let i = 0; i < chartBars.length; i += 1) {
+        points[i] = { time: chartBars[i].time, value: null };
+      }
+    }
+    const seriesId = stableSeriesId({ instanceId: "compare", kind: "line", title: "compare", ordinal: 0 });
+    ctx.emit({
+      ...displayTitle ? { title: displayTitle } : {},
+      paneHint: placement === "new-pane" ? "new" : "price",
+      ownScale: placement === "new-scale",
+      percentBaseline: "own",
+      priceAxisLabel: true,
+      series: [
+        {
+          id: seriesId,
+          title: ticker || "Compare",
+          paneId: "",
+          kind: "line",
+          points,
+          style: { color, width, lineStyle }
+        }
+      ]
+    });
+  }
+};
+var compareDescriptor = {
+  type: "compare",
+  title: msg("indicator.compare.title", "Compare symbol"),
+  paneHint: "price",
+  overlay: true,
+  multiInstance: true,
+  catalog: false,
+  inputsSchema: () => SCHEMA.map((s) => ({ ...s })),
+  defaultInputs: () => defaults7(),
+  create: () => new CompareIndicator()
+};
+function registerCompare() {
+  registerNativeIndicator(compareDescriptor);
 }
 
 // src/Vela.ts
@@ -48144,6 +50068,7 @@ var Vela = class {
     registerVolume();
     registerVpvr();
     registerClassicIndicators();
+    registerCompare();
     const element = resolveElement(container);
     const theme = resolveTheme(options.theme);
     const display = {
@@ -48189,8 +50114,8 @@ var Vela = class {
     if (options.settings) this.rendererControl.setSettingsVisibility(options.settings);
     this.dataControl = new DataControl(feed);
     this.orchestrator = new EngineOrchestrator(element, renderer, feed, engines, config, this.dataControl);
-    const defaults7 = rendererDefaults();
-    if (Object.keys(defaults7).length > 0) this.rendererControl.set(defaults7);
+    const defaults8 = rendererDefaults();
+    if (Object.keys(defaults8).length > 0) this.rendererControl.set(defaults8);
     this.panesControl = new PanesControl(this.orchestrator);
     this.drawingsControl = new DrawingsControl(this.orchestrator.drawings);
     this.marksControl = new MarksControl(this.orchestrator.marks);
@@ -48566,7 +50491,7 @@ var STATUSLINE_PART_LABELS = {
   ohlc: msg("widget.statusline.part.ohlc", "OHLC values"),
   change: msg("widget.statusline.part.change", "Bar change values")
 };
-var TEXT34 = {
+var TEXT35 = {
   hideChart: msg("widget.statusline.hideChart", "Hide chart"),
   showChart: msg("widget.statusline.showChart", "Show chart")
 };
@@ -48593,25 +50518,25 @@ function readoutCells(level, readout, i18n) {
   return [{ key: "close", label: level === "compact" ? label("close") : "" }];
 }
 function statuslineMenuItems(parts, chartVisible, i18n) {
-  const t33 = (m) => textOf(i18n, m);
+  const t34 = (m) => textOf(i18n, m);
   return [
-    { id: "part:logo", label: t33(STATUSLINE_PART_LABELS.logo), checked: parts.logo },
-    { id: "part:name", label: t33(STATUSLINE_PART_LABELS.name), checked: parts.name },
-    { id: "part:market", label: t33(STATUSLINE_PART_LABELS.market), checked: parts.market },
-    { id: "part:ohlc", label: t33(STATUSLINE_PART_LABELS.ohlc), checked: parts.ohlc },
-    { id: "part:change", label: t33(STATUSLINE_PART_LABELS.change), checked: parts.change },
-    { id: "chart", label: t33(chartVisible ? TEXT34.hideChart : TEXT34.showChart), separatorBefore: true }
+    { id: "part:logo", label: t34(STATUSLINE_PART_LABELS.logo), checked: parts.logo },
+    { id: "part:name", label: t34(STATUSLINE_PART_LABELS.name), checked: parts.name },
+    { id: "part:market", label: t34(STATUSLINE_PART_LABELS.market), checked: parts.market },
+    { id: "part:ohlc", label: t34(STATUSLINE_PART_LABELS.ohlc), checked: parts.ohlc },
+    { id: "part:change", label: t34(STATUSLINE_PART_LABELS.change), checked: parts.change },
+    { id: "chart", label: t34(chartVisible ? TEXT35.hideChart : TEXT35.showChart), separatorBefore: true }
   ];
 }
-var SHOW_CHART_LABEL = TEXT34.showChart;
+var SHOW_CHART_LABEL = TEXT35.showChart;
 
 // src/widget/format.ts
 function decimalsFor(ref) {
   const a = Math.abs(ref);
   return a >= 1 ? 2 : a >= 0.01 ? 4 : 6;
 }
-var STYLE_ID26 = "vela-widget-statusline";
-var CSS21 = css.css`@layer vela.chrome {
+var STYLE_ID27 = "vela-widget-statusline";
+var CSS22 = css.css`@layer vela.chrome {
 
 .vela-statusline {
     position: absolute;
@@ -48851,7 +50776,7 @@ var Statusline = class {
       return statuslineMenuItems(this.parts, chartVisible, this.i18n);
     };
     const doc = host.ownerDocument;
-    injectChromeStyles(STYLE_ID26, CSS21, doc);
+    injectChromeStyles(STYLE_ID27, CSS22, doc);
     host.classList.add("vela-has-statusline");
     this.el = doc.createElement("div");
     this.el.className = "vela-statusline";
@@ -49264,7 +51189,7 @@ function civilFormatter(tz2) {
 }
 function civilParts(dtf, ms) {
   const parts = dtf.formatToParts(ms);
-  const get = (t33) => parts.find((p) => p.type === t33)?.value ?? "";
+  const get = (t34) => parts.find((p) => p.type === t34)?.value ?? "";
   return {
     weekday: get("weekday"),
     year: Number(get("year")),
@@ -49341,7 +51266,7 @@ var SessionShadingTracker = class {
     this.covered = null;
     this.session = opts.session;
     const tfMs = timeframeMs(opts.timeframe);
-    this.intraday = Number.isFinite(tfMs) && tfMs < DAY_MS6;
+    this.intraday = isVariableDurationTimeframe(opts.timeframe) || Number.isFinite(tfMs) && tfMs < DAY_MS6;
     this.lastRange = opts.range;
     void data.symbolInfo(symbol).catch(() => void 0).then((si) => {
       if (my !== this.epoch) return;
@@ -49418,8 +51343,8 @@ function nextStatusBoundary(now2, w) {
   let next = null;
   for (const ws of [w.regular, w.extended]) {
     for (const [s, e] of ws) {
-      for (const t33 of [s, e]) {
-        if (t33 > now2 && (next == null || t33 < next)) next = t33;
+      for (const t34 of [s, e]) {
+        if (t34 > now2 && (next == null || t34 < next)) next = t34;
       }
     }
   }
@@ -49492,8 +51417,8 @@ var MarketStatusTracker = class {
 var MAX_FONT_PX = 36;
 var MIN_FONT_PX = 12;
 var FILL = 0.9;
-var STYLE_ID27 = "vela-widget-watermark";
-var CSS22 = css.css`@layer vela.chrome {
+var STYLE_ID28 = "vela-widget-watermark";
+var CSS23 = css.css`@layer vela.chrome {
 
 .vela-watermark {
     position: absolute;
@@ -49533,7 +51458,7 @@ function watermarkFontPx(availPx, textPxAtMax) {
   if (textPxAtMax <= 0) return MAX_FONT_PX;
   return Math.max(MIN_FONT_PX, Math.min(MAX_FONT_PX, Math.floor(MAX_FONT_PX * availPx * FILL / textPxAtMax)));
 }
-var TEXT35 = {
+var TEXT36 = {
   replay: msg("widget.watermark.replay", "Replay"),
   mark: msg("widget.watermark.mark", "{symbol} · {timeframe}")
 };
@@ -49554,14 +51479,14 @@ var Watermark = class {
     this.loading = true;
     this.symbol = "";
     this.timeframe = "";
-    injectChromeStyles(STYLE_ID27, CSS22, host.ownerDocument);
+    injectChromeStyles(STYLE_ID28, CSS23, host.ownerDocument);
     this.el = host.ownerDocument.createElement("div");
     this.el.className = "vela-watermark";
     this.el.dataset.velaScreenshot = "under";
     this.text = host.ownerDocument.createElement("span");
     this.replayLine = host.ownerDocument.createElement("span");
     this.replayLine.className = "vela-watermark-replay";
-    this.replayText = host.ownerDocument.createTextNode(textOf(this.i18n(), TEXT35.replay));
+    this.replayText = host.ownerDocument.createTextNode(textOf(this.i18n(), TEXT36.replay));
     this.replayLine.append(icons.iconEl("replay", host.ownerDocument), this.replayText);
     this.el.append(this.text, this.replayLine);
     host.appendChild(this.el);
@@ -49601,12 +51526,12 @@ var Watermark = class {
     this.symbol = symbol;
     this.timeframe = timeframe;
     const i18n = this.i18n();
-    this.text.textContent = symbol ? textOf(i18n, TEXT35.mark, { symbol: parseSymbol(symbol).ticker, timeframe: timeframeLabel(timeframe, i18n) }) : "";
+    this.text.textContent = symbol ? textOf(i18n, TEXT36.mark, { symbol: parseSymbol(symbol).ticker, timeframe: timeframeLabel(timeframe, i18n) }) : "";
     this.fit();
   }
   /** Re-read the mark and the replay line in the chart's language. */
   relocalize() {
-    this.replayText.data = textOf(this.i18n(), TEXT35.replay);
+    this.replayText.data = textOf(this.i18n(), TEXT36.replay);
     this.update(this.symbol, this.timeframe);
   }
   /** Measure the text at the cap and shrink it to the price pane's width. */
@@ -49627,7 +51552,7 @@ var CONTROLS_BOTTOM_PX = TIME_AXIS_H2 + 12;
 var CLUSTER_H2 = 24;
 var CLUSTER_PILL2 = "rgba(0,0,0,0.65)";
 var CLUSTER_LEFT_CSS = "calc((100% + var(--vela-toolbar-gutter, 0px) - var(--vela-scale-gutter, 0px)) / 2)";
-var TEXT36 = {
+var TEXT37 = {
   zoomOut: msg("widget.cellControls.zoomOut", "Zoom out"),
   zoomIn: msg("widget.cellControls.zoomIn", "Zoom in"),
   restoreLayout: msg("widget.cellControls.restoreLayout", "Restore layout"),
@@ -49635,8 +51560,8 @@ var TEXT36 = {
   resetChart: msg("widget.cellControls.resetChart", "Reset chart"),
   dragToMove: msg("widget.cellControls.dragToMove", "Drag to move chart")
 };
-var STYLE_ID28 = "vela-cell-controls";
-var CSS23 = css.css`@layer vela.chrome {
+var STYLE_ID29 = "vela-cell-controls";
+var CSS24 = css.css`@layer vela.chrome {
 
 .vela-cc-btn{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;padding:0;border:none;border-radius:${t.t.radius.sm};background:transparent;line-height:0;font-size:12px;color:${t.t.fg.muted};cursor:pointer;}
 .vela-cc-btn svg{display:block;}
@@ -49675,7 +51600,7 @@ var CellControls = class {
       if (this.dragging) return;
       this.setNear(false);
     };
-    injectChromeStyles(STYLE_ID28, CSS23, host.ownerDocument);
+    injectChromeStyles(STYLE_ID29, CSS24, host.ownerDocument);
     this.glider = new Glider(deps.chart);
     this.root = host.ownerDocument.createElement("div");
     Object.assign(this.root.style, {
@@ -49703,11 +51628,11 @@ var CellControls = class {
     const multi = this.deps.multiCell();
     const maximized = multi && this.deps.isMaximized();
     if (multi && !maximized) this.root.appendChild(this.makeGrip());
-    this.root.appendChild(this.button("minus", TEXT36.zoomOut, () => this.glider.zoom(ZOOM_OUT)));
-    this.root.appendChild(this.button("plus", TEXT36.zoomIn, () => this.glider.zoom(ZOOM_IN)));
+    this.root.appendChild(this.button("minus", TEXT37.zoomOut, () => this.glider.zoom(ZOOM_OUT)));
+    this.root.appendChild(this.button("plus", TEXT37.zoomIn, () => this.glider.zoom(ZOOM_IN)));
     if (multi) {
       this.root.appendChild(
-        this.button(maximized ? "restore" : "maximize", maximized ? TEXT36.restoreLayout : TEXT36.maximizeChart, () => this.deps.toggleMaximize(), {
+        this.button(maximized ? "restore" : "maximize", maximized ? TEXT37.restoreLayout : TEXT37.maximizeChart, () => this.deps.toggleMaximize(), {
           // The maximized state reads as an inverse chip (white-on-dark, dark-on-light),
           // the same active-state affordance as a collapsed pane's expand button.
           selected: maximized
@@ -49715,7 +51640,7 @@ var CellControls = class {
       );
     }
     this.root.appendChild(
-      this.button("reset", TEXT36.resetChart, () => {
+      this.button("reset", TEXT37.resetChart, () => {
         this.glider.stop();
         this.deps.reset();
       })
@@ -49745,7 +51670,7 @@ var CellControls = class {
   makeGrip() {
     const b = this.host.ownerDocument.createElement("button");
     b.type = "button";
-    b.title = this.t(TEXT36.dragToMove);
+    b.title = this.t(TEXT37.dragToMove);
     b.setAttribute("aria-label", b.title);
     b.className = "vela-cc-btn vela-cc-grip";
     b.innerHTML = icons.icon("grip");
@@ -49904,6 +51829,8 @@ var ChartContextMenu = class {
         axisLabels: this.flag("axisLabels"),
         priceLabel: this.flag("priceLabel"),
         countdown: this.flag("countdown"),
+        indicatorValueLabels: this.flag("indicatorValueLabels"),
+        indicatorNameLabels: this.flag("indicatorNameLabels"),
         priceLine: this.flag("currentPriceLine")
       }, this.chart?.i18n);
     }
@@ -50054,7 +51981,7 @@ var WidgetHistory = class {
 };
 
 // src/workspace/ChartCell.ts
-var TEXT37 = {
+var TEXT38 = {
   regularHours: msg("workspace.settings.regularHours", "Regular hours (RTH)"),
   extendedHours: msg("workspace.settings.extendedHours", "Extended hours (ETH)"),
   extendedColor: msg("workspace.settings.extendedColor", "Extended hours"),
@@ -50142,10 +52069,14 @@ var ChartCell = class {
     this.sessionAvailableFlag = false;
     /** The symbol of the most recent metadata probe — an older one landing late is dropped. */
     this.metadataProbeSymbol = null;
-    this.timeframeProbe = null;
     /** Latched: the symbol's extended tape wraps midnight (an overnight roll market) —
      *  one extended-hours shading phase instead of the pre/post split. */
     this.sessionOvernightFlag = false;
+    /** The current symbol's metadata, shared by the pickers and quick entry. */
+    this.timeframeMetadata = null;
+    this.timeframeChoicesRevision = 0;
+    /** Timeframe choices the active symbol's source cannot serve. */
+    this.unavailableTfs = null;
     /** Keeps the session shading on the symbol's real calendar (see {@link SessionShadingTracker}). */
     this.sessionShading = new SessionShadingTracker((zones) => this.inner?.renderer.set("sessionZones", zones));
     this.manifest = [];
@@ -50156,9 +52087,14 @@ var ChartCell = class {
      *  registry can't show it and the dehydrated ledger reports the INTENT instead. After
      *  them the chart itself reports an add still waiting for the symbol's facts. */
     this.volumeMayBePending = true;
-    /** Sync mirror of the chart's native instances (id + type) — the removal handler
-     *  looks the removed id up here to learn which type an undo must re-add. */
+    /** Sync mirror of the chart's native instances (id + type + input deltas) — the removal
+     *  handler looks the removed id up here to learn which type and inputs an undo must re-add. */
     this.presentNatives = [];
+    /** Scale state before adding a `'same'` comparison auto-switched the price pane to `'percent'`.
+     *  Restored when the last `'same'` comparison leaves and the pane is still on `'percent'`.
+     *  Rides the state document as `scaleBeforeCompare`: the document's `rendererConfig`
+     *  already says `'percent'`, so nothing else could tell it from the user's own choice. */
+    this.autoPercentPrev = null;
     this.rangeBars = 0;
     this.pendingRange = null;
     /** Last symbol we toasted "no provider serves this" for — once per symbol (the
@@ -50229,6 +52165,7 @@ var ChartCell = class {
     for (const [language, make] of Object.entries(resolveEngines(deps.engines))) this.inner.registerEngine(language, make());
     this.inner.renderer.set("attribution", false);
     this.inner.renderer.set("dialogHost", deps.dialogHost);
+    if (deps.symbolPicker) this.inner.renderer.setSymbolPicker(deps.symbolPicker);
     this.inner.renderer.setLegendActions(legendActionsProviderFor(this.inner, () => deps.context()));
     this.inner.renderer.setLegendCallouts(legendCalloutsProviderFor(this.inner, () => deps.context()));
     this.inner.renderer.setDrawingActions(drawingActionsProviderFor(this.inner, () => deps.context()));
@@ -50247,8 +52184,8 @@ var ChartCell = class {
       this.syncStatuslineColors();
       this.syncPlotOverlayTokens();
     });
-    this.inner.on("theme:changed", (t33) => {
-      this.appTheme = t33;
+    this.inner.on("theme:changed", (t34) => {
+      this.appTheme = t34;
       this.syncPlotOverlayTokens();
     });
     this.syncPlotOverlayTokens();
@@ -50261,6 +52198,7 @@ var ChartCell = class {
       }
       this.pendingManifestNames = [...seed.indicators.manifest];
     }
+    this.adoptScaleBeforeCompare(seed.scaleBeforeCompare);
     this.volumeIntent = seed.indicators ? seed.indicators.natives.some((e) => ledgerNativeType(e) === "volume") : deps.volume;
     this.extState = { ...seed.ext ?? {} };
     this.inner.on("load:end", () => {
@@ -50284,7 +52222,6 @@ var ChartCell = class {
     this.inner.on("load:end", () => {
       this.watermark?.setLoading(false);
       this.refreshSessionShading();
-      this.refreshTimeframeMetadata();
     });
     this.inner.on("viewport:changed", (range) => this.sessionShading.updateRange(range));
     this.applyTimezone();
@@ -50315,7 +52252,6 @@ var ChartCell = class {
         this.statusline?.setMeta(this.timeframe, this.inner.data.displayPrefix(this.state.symbol) ?? this.state.provider ?? "");
       }
       this.refreshSymbolMetadata();
-      this.refreshTimeframeMetadata();
       if (this.inner && this.state.symbol) this.marketStatus?.track(this.inner.data, this.state.symbol);
     });
     this.syncStatuslineColors();
@@ -50346,7 +52282,15 @@ var ChartCell = class {
       this.syncPresentNatives();
       this.refreshNativeCatalog();
     });
-    this.inner.on("indicator:inputs", () => this.deps.onStateDirty());
+    this.inner.on("indicator:inputs", ({ id: id2 }) => {
+      this.syncPresentNatives();
+      const h = this.nativeHandles().find((n) => n.id === id2);
+      if (h?.nativeType === "compare") {
+        if ((h.inputValues().scale ?? "same") === "same") this.ensurePercentForCompare();
+        else this.maybeRestoreScaleAfterCompare();
+      }
+      this.deps.onStateDirty();
+    });
     this.inner.on("indicator:visibility", () => this.deps.onStateDirty());
     this.inner.on("indicator:removed", ({ id: id2 }) => {
       if (this.destroyed) return;
@@ -50365,11 +52309,13 @@ var ChartCell = class {
       } else {
         const gone = this.presentNatives.find((n) => n.id === id2);
         if (gone) {
-          const { type } = gone;
+          const { type, inputs } = gone;
           let revived = null;
           this.history.push({
             undo: () => {
-              revived = this.inner?.addNativeIndicator(type) ?? null;
+              revived = this.inner?.addNativeIndicator(type, inputs ? { inputs } : void 0) ?? null;
+              if (type === "compare" && (inputs?.scale ?? "same") === "same") this.ensurePercentForCompare();
+              this.syncPresentNatives();
               this.refreshNativeCatalog();
             },
             redo: () => {
@@ -50378,6 +52324,7 @@ var ChartCell = class {
               this.refreshNativeCatalog();
             }
           });
+          if (type === "compare") this.maybeRestoreScaleAfterCompare();
         }
       }
       this.syncPresentNatives();
@@ -50407,7 +52354,6 @@ var ChartCell = class {
     this.state.provider = parseSymbol(symbol).provider ?? void 0;
     if (!this.fallback) this.state.timeframe = timeframe;
     this.state.session = normalizeSession(this.inner?.market.session);
-    this.refreshTimeframeMetadata();
     this.watermark?.update(symbol, timeframe);
     this.statusline?.setSymbol(symbol);
     this.statusline?.setMeta(timeframe, this.inner?.data.displayPrefix(symbol) ?? this.state.provider ?? "");
@@ -50464,12 +52410,18 @@ var ChartCell = class {
     const chart = this.inner;
     if (!chart || !symbol) return;
     this.metadataProbeSymbol = symbol;
-    void chart.data.symbolInfo(symbol).then((si) => {
+    const market = this.timeframeInfoSymbol(symbol);
+    const infoSymbol = market ?? symbol;
+    void chart.data.symbolInfo(infoSymbol).then((si) => {
       if (this.inner !== chart || this.metadataProbeSymbol !== symbol) return;
       if (si === void 0 && retry) {
         void chart.data.ready().then(() => {
           if (this.inner === chart && this.metadataProbeSymbol === symbol) this.refreshSymbolMetadata(symbol, false);
         });
+        return;
+      }
+      if (this.timeframeInfoSymbol(symbol) !== market) {
+        this.refreshSymbolMetadata(symbol, false);
         return;
       }
       if (this.state.symbol !== symbol) return;
@@ -50488,7 +52440,104 @@ var ChartCell = class {
         this.pushSettingsSections();
       }
       this.refreshSessionShading();
+      this.timeframeMetadata = { symbol, market, info: market === null ? void 0 : si };
+      void this.refreshTimeframeChoices();
     });
+  }
+  /** Re-probe provider metadata after the shared provider registry changes. */
+  refreshTimeframeMetadata() {
+    this.refreshSymbolMetadata();
+  }
+  /** Resolve a provider-qualified metadata key when the current listing is unambiguous. */
+  timeframeInfoSymbol(symbol) {
+    const feed = this.deps.feed;
+    if (!this.inner || this.inner.market.offline || !(feed instanceof MultiProviderFeed)) return null;
+    const resolved3 = feed.resolveUnambiguousSymbol(symbol);
+    return resolved3 ? `${resolved3.provider}:${resolved3.ticker}` : null;
+  }
+  /** Registered series adapters take precedence over the provider's symbol metadata. */
+  timeframeAvailabilityFor(chart, market, si, session) {
+    const resolved3 = market ? chart.data.resolve(market) : null;
+    const provider = resolved3 ? chart.data.providerInstance(resolved3.provider) : void 0;
+    const providerInfo = provider?.info?.();
+    const providerHasTicks = providerInfo?.supportedTimeframes?.some((t34) => isTickTimeframe(t34)) === true;
+    const siList = si?.timeframes?.list?.map((t34) => chartTimeframeOf(t34)).filter((t34) => t34 !== null);
+    const siFinestMs = si?.timeframes?.finest !== void 0 ? timeframeMs(si.timeframes.finest) : NaN;
+    const siHasTicks = si?.timeframes?.ticks === true || si?.["has_ticks"] === true;
+    return async (tf) => {
+      const adapter = resolved3 && provider ? matchSeriesAdapter(tf, provider, resolved3.provider) : void 0;
+      if (adapter?.supports && resolved3 && provider) {
+        try {
+          return await adapter.supports(
+            {
+              providerName: resolved3.provider,
+              provider,
+              ticker: resolved3.ticker,
+              session,
+              symbolInfo: async () => si
+            },
+            tf
+          );
+        } catch {
+          return false;
+        }
+      }
+      if (isTickTimeframe(tf)) {
+        const inList = siList?.includes(chartTimeframeOf(tf) ?? tf) === true;
+        return si === void 0 || siHasTicks || inList || providerHasTicks;
+      }
+      if (siList) return siList.includes(chartTimeframeOf(tf) ?? tf);
+      const tfMs = timeframeMs(tf);
+      return !(Number.isFinite(siFinestMs) && Number.isFinite(tfMs) && tfMs < siFinestMs);
+    };
+  }
+  /** @internal Reproject workspace presets and favorites after metadata or saved choices change. */
+  async refreshTimeframeChoices() {
+    const chart = this.inner;
+    const metadata = this.timeframeMetadata;
+    const symbol = this.symbol;
+    if (!chart || metadata?.symbol !== symbol) return;
+    const session = this.session;
+    if (chart.market.offline) {
+      if (this.unavailableTimeframes().length > 0) {
+        this.unavailableTfs = { symbol, session, choices: [] };
+        this.deps.onTimeframesShown?.(this.id);
+      }
+      return;
+    }
+    const revision = ++this.timeframeChoicesRevision;
+    const isAvailable = this.timeframeAvailabilityFor(chart, metadata.market, metadata.info, session);
+    const next = [];
+    for (const tf of this.deps.timeframes?.() ?? []) {
+      if (!await isAvailable(tf)) next.push(tf);
+      if (revision !== this.timeframeChoicesRevision || this.inner !== chart || this.metadataProbeSymbol !== symbol || this.session !== session) return;
+    }
+    const previous = this.unavailableTimeframes();
+    if (next.length === previous.length && next.every((v, i) => v === previous[i])) return;
+    this.unavailableTfs = { symbol, session, choices: next };
+    this.deps.onTimeframesShown?.(this.id);
+  }
+  /** @internal Check a shortcut, including an unlisted choice. Undefined if the market changed. */
+  async isTimeframeAvailable(tf) {
+    const chart = this.inner;
+    if (!chart) return void 0;
+    const symbol = this.symbol;
+    const chartMarket = chart.market;
+    if ((chartMarket.symbol ?? symbol) !== symbol) return void 0;
+    const isCurrent = () => {
+      const current = chart.market;
+      return this.inner === chart && this.symbol === symbol && current.symbol === chartMarket.symbol && current.session === chartMarket.session && current.timeframe === chartMarket.timeframe && current.offline === chartMarket.offline;
+    };
+    if (chartMarket.offline) return isCurrent() ? true : void 0;
+    let sourceMarket = this.timeframeInfoSymbol(symbol);
+    if (symbol && sourceMarket === null && !chart.data.resolve(symbol)) await chart.data.ready();
+    if (!isCurrent()) return void 0;
+    sourceMarket = this.timeframeInfoSymbol(symbol);
+    const info = sourceMarket === null ? void 0 : await chart.data.symbolInfo(sourceMarket).catch(() => void 0);
+    if (!isCurrent() || this.timeframeInfoSymbol(symbol) !== sourceMarket) return void 0;
+    const isAvailable = this.timeframeAvailabilityFor(chart, sourceMarket, info, chartMarket.session ?? "regular");
+    const available = await isAvailable(tf);
+    return isCurrent() && this.timeframeInfoSymbol(symbol) === sourceMarket ? available : void 0;
   }
   /** (Re)derive the pre/post-market shading bands for this cell's market. The bands
    *  expand locally from the symbol's session vocabulary, so they paint as soon as
@@ -50529,7 +52578,7 @@ var ChartCell = class {
     const shadeRows = this.sessionOvernightFlag ? [
       {
         kind: "color",
-        label: TEXT37.extendedColor,
+        label: TEXT38.extendedColor,
         id: "extended-color",
         get: () => this.sessionShadeColor("extendedColor"),
         set: (v) => this.setSessionShadeColor("extendedColor", v)
@@ -50537,31 +52586,31 @@ var ChartCell = class {
     ] : [
       {
         kind: "color",
-        label: TEXT37.premarketColor,
+        label: TEXT38.premarketColor,
         id: "premarket-color",
         get: () => this.sessionShadeColor("premarketColor"),
         set: (v) => this.setSessionShadeColor("premarketColor", v)
       },
       {
         kind: "color",
-        label: TEXT37.postmarketColor,
+        label: TEXT38.postmarketColor,
         id: "postmarket-color",
         get: () => this.sessionShadeColor("postmarketColor"),
         set: (v) => this.setSessionShadeColor("postmarketColor", v)
       }
     ];
     const sessionSection = {
-      title: TEXT37.tradingSession,
+      title: TEXT38.tradingSession,
       id: "trading-session",
       placement: "symbol",
       rows: [
         {
           kind: "select",
-          label: TEXT37.session,
+          label: TEXT38.session,
           id: "session",
           options: [
-            ["regular", TEXT37.regularHours],
-            ["extended", TEXT37.extendedHours]
+            ["regular", TEXT38.regularHours],
+            ["extended", TEXT38.extendedHours]
           ],
           get: () => this.session === "extended" ? "extended" : "regular",
           set: (v) => this.setSession(v === "extended" ? "extended" : "regular")
@@ -50570,13 +52619,13 @@ var ChartCell = class {
       ]
     };
     const advanced = {
-      title: TEXT37.advanced,
+      title: TEXT38.advanced,
       id: "advanced",
       placement: "end",
       rows: [
         {
           kind: "select",
-          label: TEXT37.barsToFetch,
+          label: TEXT38.barsToFetch,
           id: "bars",
           options: ["500", "1000", "2000", "5000", "10000", "20000", "50000", "60000", "80000", "100000"],
           get: () => String(this.state.bars ?? 1e3),
@@ -50589,13 +52638,13 @@ var ChartCell = class {
       ]
     };
     const timezoneSection = {
-      title: TEXT37.timeZone,
+      title: TEXT38.timeZone,
       id: "time-zone",
       placement: "symbol",
       rows: [
         {
           kind: "select",
-          label: TEXT37.timeZoneRow,
+          label: TEXT38.timeZoneRow,
           id: "zone",
           options: timezoneMenuRows(this.deps.timezone(), chart.i18n).map((r) => [r.value, r.label]),
           get: () => {
@@ -50607,20 +52656,20 @@ var ChartCell = class {
       ]
     };
     const watermarkSection = {
-      title: TEXT37.watermark,
+      title: TEXT38.watermark,
       id: "watermark",
       placement: "symbol",
       rows: [
         {
           kind: "toggle",
-          label: TEXT37.symbolWatermark,
+          label: TEXT38.symbolWatermark,
           id: "visible",
           get: () => this.watermarkOn,
           set: (v) => this.setWatermarkVisible(v)
         },
         {
           kind: "toggle",
-          label: TEXT37.replayWatermark,
+          label: TEXT38.replayWatermark,
           id: "replay",
           get: () => this.replayWatermarkOn,
           set: (v) => this.setReplayWatermarkVisible(v)
@@ -50631,10 +52680,10 @@ var ChartCell = class {
     if (this.statusline) {
       const sl = this.statusline;
       sections.push({
-        title: TEXT37.statusLine,
+        title: TEXT38.statusLine,
         id: "status-line",
         rows: [
-          { kind: "heading", label: TEXT37.statusLineParts, id: "parts" },
+          { kind: "heading", label: TEXT38.statusLineParts, id: "parts" },
           {
             kind: "toggle",
             label: STATUSLINE_PART_LABELS.name,
@@ -50663,17 +52712,17 @@ var ChartCell = class {
             get: () => sl.partVisible("change"),
             set: (v) => this.setStatuslinePart("change", v)
           },
-          { kind: "heading", label: TEXT37.indicators, id: "indicators" },
+          { kind: "heading", label: TEXT38.indicators, id: "indicators" },
           {
             kind: "toggle",
-            label: TEXT37.indicatorTitles,
+            label: TEXT38.indicatorTitles,
             id: "indicator-titles",
             get: () => this.indicatorTitlesOn,
             set: (v) => this.setIndicatorTitlesVisible(v)
           },
           {
             kind: "toggle",
-            label: TEXT37.indicatorValues,
+            label: TEXT38.indicatorValues,
             id: "indicator-values",
             get: () => this.indicatorValuesOn,
             set: (v) => this.setIndicatorValuesVisible(v)
@@ -50769,46 +52818,6 @@ var ChartCell = class {
   get timeframe() {
     return this.fallback?.timeframe ?? this.state.timeframe ?? "60";
   }
-  timeframeSource() {
-    const feed = this.deps.feed;
-    if (!this.inner || this.inner.market.offline || !this.symbol || !(feed instanceof MultiProviderFeed)) return null;
-    const source = feed.resolveUnambiguousSymbol(this.symbol);
-    if (!source) return null;
-    const provider = feed.providerInstance(source.provider);
-    if (!provider) return null;
-    return { market: `${source.provider}:${source.ticker}`, provider };
-  }
-  /** @internal Refresh capabilities when the registry or this cell's market changes. */
-  refreshTimeframeMetadata(force = false) {
-    const chart = this.inner;
-    const probe2 = this.timeframeSource();
-    const sameSource = probe2?.market === this.timeframeProbe?.market && probe2?.provider === this.timeframeProbe?.provider;
-    if (sameSource && (!force || !probe2)) return;
-    this.timeframeProbe = probe2;
-    if (!sameSource && this.marketTimeframes !== void 0) {
-      this.marketTimeframes = void 0;
-      this.deps.onTimeframesChanged?.(this.id);
-    }
-    if (!chart || !probe2) return;
-    void chart.data.symbolInfo(probe2.market).then((info) => {
-      if (this.inner !== chart || probe2 !== this.timeframeProbe) return;
-      const current = this.timeframeSource();
-      if (probe2.market !== current?.market || probe2.provider !== current.provider) return;
-      if (info === void 0) this.timeframeProbe = null;
-      if (this.marketTimeframes === info?.timeframes) return;
-      this.marketTimeframes = info?.timeframes;
-      this.deps.onTimeframesChanged?.(this.id);
-    }, () => {
-      if (probe2 === this.timeframeProbe && this.marketTimeframes === void 0) this.timeframeProbe = null;
-    });
-  }
-  /** @internal Resolve a timeframe choice against the capabilities known for this cell. */
-  resolveTimeframeChoice(value, fallback = value) {
-    const source = this.timeframeSource();
-    const probe2 = this.timeframeProbe;
-    const timeframes = source && probe2?.market === source.market && probe2.provider === source.provider ? this.marketTimeframes : void 0;
-    return resolveTimeframeChoice(value, timeframes, fallback);
-  }
   /** The timeframe the user asked for — what the cell persists and the timeframe link
    *  shares. Differs from {@link timeframe} while the symbol's source refuses it. */
   get requestedTimeframe() {
@@ -50826,6 +52835,11 @@ var ChartCell = class {
   get requestedPriceStyle() {
     const live = this.inner?.renderer.get("priceStyle");
     return typeof live === "string" ? live : this.state.priceStyle ?? "candles";
+  }
+  /** The workspace timeframe choices the cell's current symbol cannot serve. */
+  unavailableTimeframes() {
+    const unavailable = this.unavailableTfs;
+    return unavailable?.symbol === this.symbol && unavailable.session === this.session ? unavailable.choices : [];
   }
   /** The style ids the symbol's data cannot draw — greyed in the style pickers. Empty while
    *  the symbol's facts are unknown. */
@@ -50883,8 +52897,8 @@ var ChartCell = class {
     const asked = timeframeLabel(e.timeframe, i18n);
     const to = chartTimeframeOf(e.default) ?? chartTimeframeOf(e.finest);
     const again = this.fallback !== null && this.fallback.symbol === e.symbol && this.fallback.timeframe === e.timeframe;
-    if (to === null || again || timeframeMs(to) === timeframeMs(e.timeframe)) {
-      this.deps.toast(textOf(i18n, TEXT37.unavailable, { symbol, timeframe: asked }), "error", 6e3);
+    if (to === null || again || to === e.timeframe || timeframeMs(to) === timeframeMs(e.timeframe)) {
+      this.deps.toast(textOf(i18n, TEXT38.unavailable, { symbol, timeframe: asked }), "error", 6e3);
       return;
     }
     this.fallback = { symbol: e.symbol, timeframe: to };
@@ -50894,7 +52908,7 @@ var ChartCell = class {
     void chart.setMarket({ timeframe: to, bars: this.state.bars });
     this.projectMarket(e.symbol, to);
     this.deps.onMarketChanged(this.id);
-    this.deps.toast(textOf(i18n, TEXT37.unavailableFallback, { symbol, timeframe: asked, shown: timeframeLabel(to, i18n) }), "info", 5e3);
+    this.deps.toast(textOf(i18n, TEXT38.unavailableFallback, { symbol, timeframe: asked, shown: timeframeLabel(to, i18n) }), "info", 5e3);
   }
   /** Applied live (renderer feature) — no reload. */
   setPriceStyle(style) {
@@ -51070,7 +53084,7 @@ var ChartCell = class {
       ...this.supportedNatives().map((n) => ({
         name: n.title,
         ...nativeAliases(n.type, this.inner?.i18n),
-        category: textOf(this.inner?.i18n, TEXT37.builtIn),
+        category: textOf(this.inner?.i18n, TEXT38.builtIn),
         native: true,
         nativeType: n.type,
         beta: n.beta
@@ -51085,14 +53099,15 @@ var ChartCell = class {
       ...this.instances.map((it) => ({ name: it.entry.name, language: it.entry.language }))
     ];
   }
-  /** Add by picker LIBRARY index (natives precede the manifest — mirrors libraryRows). */
+  /** Add by picker LIBRARY index (natives precede the manifest — mirrors libraryRows).
+   *  Returns `true` when the added study needs user input configuration (and opened its
+   *  settings dialog), so the caller can close the library picker cleanly. */
   addFromLibrary(index) {
     const natives = this.supportedNatives();
-    if (index < natives.length) this.addNative(natives[index].type);
-    else {
-      const entry = this.manifest[index - natives.length];
-      if (entry) this.addManifestInstance(entry);
-    }
+    if (index < natives.length) return this.addNative(natives[index].type, { confirmInputs: true });
+    const entry = this.manifest[index - natives.length];
+    if (entry) this.addManifestInstance(entry);
+    return false;
   }
   /** Remove by picker ON-CHART index (native instances precede script instances — mirrors onChartRows). */
   removeFromChart(index) {
@@ -51188,14 +53203,16 @@ var ChartCell = class {
     const visible = !(typeof entry === "object" && entry.hidden);
     if (handle.visible !== visible) handle.setVisible(visible);
   }
-  addNative(type) {
+  addNative(type, opts) {
     const chart = this.inner;
-    if (!chart) return;
+    if (!chart) return false;
     const before = new Set(chart.indicators().map((h) => h.id));
-    let added = chart.addNativeIndicator(type);
+    const inputs = opts?.inputs;
+    if (type === "compare" && (inputs?.scale ?? "same") === "same") this.ensurePercentForCompare();
+    let added = chart.addNativeIndicator(type, inputs ? { inputs } : void 0);
     this.syncPresentNatives();
     this.refreshNativeCatalog();
-    if (before.has(added.id)) return;
+    if (before.has(added.id)) return false;
     this.history.push({
       undo: () => {
         added?.remove();
@@ -51203,10 +53220,92 @@ var ChartCell = class {
         this.refreshNativeCatalog();
       },
       redo: () => {
-        added = this.inner?.addNativeIndicator(type) ?? null;
+        added = this.inner?.addNativeIndicator(type, inputs ? { inputs } : void 0) ?? null;
+        if (type === "compare" && (inputs?.scale ?? "same") === "same") this.ensurePercentForCompare();
+        this.syncPresentNatives();
         this.refreshNativeCatalog();
       }
     });
+    if (opts?.confirmInputs) {
+      const values = added.inputValues();
+      const needsConfig = added.inputs.some((inp) => inp.confirm && String(values[inp.key] ?? inp.defval ?? "") === "");
+      if (needsConfig) {
+        const targetId = added.id;
+        const off = added.on("ready", () => {
+          off();
+          if (!this.destroyed && this.inner === chart) chart.renderer.openIndicatorSettings(targetId);
+        });
+        return true;
+      }
+    }
+    return false;
+  }
+  /** Active compared symbols on this cell (for the Compare picker's removable chips). */
+  compareItems() {
+    const out = [];
+    const defaultTitle = textOf(this.inner?.i18n, compareDescriptor.title);
+    for (const h of this.nativeHandles()) {
+      if (h.nativeType !== "compare") continue;
+      const vals = h.inputValues();
+      const symbol = typeof vals.symbol === "string" ? vals.symbol : "";
+      const color = typeof vals.color === "string" && vals.color ? vals.color : palette.CATEGORICAL[0];
+      const fallback = parseSymbol(symbol).ticker || symbol;
+      const title = h.title && h.title !== defaultTitle ? h.title : fallback;
+      out.push({ id: h.id, symbol, title, color });
+    }
+    return out;
+  }
+  /** Overlay a secondary symbol for comparison with an auto-picked distinct color. */
+  addCompare(symbol, placement = "same") {
+    const chart = this.inner;
+    if (!chart || !symbol.trim()) return;
+    const used = new Set(this.compareItems().map((c) => c.color.toLowerCase()));
+    const color = palette.CATEGORICAL.find((c) => !used.has(c.toLowerCase())) ?? palette.CATEGORICAL[this.compareItems().length % palette.CATEGORICAL.length];
+    this.addNative("compare", { inputs: { symbol, color, scale: placement } });
+  }
+  /** Remove one compared symbol by indicator id (enters the undo timeline). */
+  removeCompare(id) {
+    const handle = this.nativeHandles().find((h) => h.id === id && h.nativeType === "compare");
+    if (handle) this.removeNative(handle);
+  }
+  /** Switch the main price scale to percentage mode when adding a shared-scale comparison
+   *  (remembering the prior mode so removing the last comparison can restore it). */
+  ensurePercentForCompare() {
+    const chart = this.inner;
+    if (!chart) return;
+    const mode = chart.renderer.get("scaleMode");
+    const log = Boolean(chart.renderer.get("logScale"));
+    if (mode === "percent" || mode === "indexed") {
+      if (log) chart.renderer.set("logScale", false);
+      return;
+    }
+    this.autoPercentPrev ?? (this.autoPercentPrev = { mode: typeof mode === "string" ? mode : "price", log });
+    if (log) chart.renderer.set("logScale", false);
+    chart.renderer.set("scaleMode", "percent");
+  }
+  /** Whether a comparison sharing the main percent scale is on the chart. */
+  hasSharedScaleCompare() {
+    return this.nativeHandles().some((h) => h.nativeType === "compare" && (h.inputValues().scale ?? "same") === "same");
+  }
+  /** Take the prior price scale a state document carries, once its natives are on the
+   *  chart. Only a shared-scale comparison can release it: without one it would outlive
+   *  the document and overwrite the scale when some later comparison leaves. A document
+   *  that carries none keeps whatever converging to it recorded. */
+  adoptScaleBeforeCompare(prev2) {
+    if (!this.hasSharedScaleCompare()) this.autoPercentPrev = null;
+    else if (prev2) this.autoPercentPrev = { mode: prev2.mode, log: prev2.log };
+  }
+  /** Restore the prior price scale once the last shared-scale comparison is removed. */
+  maybeRestoreScaleAfterCompare() {
+    const chart = this.inner;
+    const prev2 = this.autoPercentPrev;
+    if (!chart || !prev2) return;
+    if (this.hasSharedScaleCompare()) return;
+    this.autoPercentPrev = null;
+    if (chart.renderer.get("scaleMode") === "percent") {
+      chart.renderer.set("scaleMode", prev2.mode);
+      if (prev2.log) chart.renderer.set("logScale", true);
+    }
   }
   removeNative(handle) {
     handle.remove();
@@ -51218,9 +53317,12 @@ var ChartCell = class {
     return this.inner?.indicators().filter((h) => h.nativeType !== void 0) ?? [];
   }
   /** Sync mirror of the chart's native instances — the removal handler looks the
-   *  removed id up here (the registry has already forgotten it) to record its type. */
+   *  removed id up here (the registry has already forgotten it) to record its type + inputs. */
   syncPresentNatives() {
-    this.presentNatives = this.nativeHandles().map((h) => ({ id: h.id, type: h.nativeType }));
+    this.presentNatives = this.nativeHandles().map((h) => {
+      const inputs = inputDeltas(h.inputs, h.inputValues());
+      return inputs ? { id: h.id, type: h.nativeType, inputs } : { id: h.id, type: h.nativeType };
+    });
   }
   /** Refresh the native catalog (supported/present flags) for this cell's market. */
   refreshNativeCatalog() {
@@ -51256,7 +53358,7 @@ var ChartCell = class {
       cellId: this.id,
       chart: this.chart,
       addIndicator: (entry) => this.history.silently(() => this.addExternalIndicator(entry)),
-      addNativeIndicator: (type) => this.history.silently(() => this.addNative(type))
+      addNativeIndicator: (type, options) => this.history.silently(() => this.addNative(type, options))
     };
   }
   /**
@@ -51313,8 +53415,10 @@ var ChartCell = class {
     for (const [part, visible] of statuslinePartEntries(cs.statuslineParts)) {
       if (this.statusline && this.statusline.partVisible(part) !== visible) this.setStatuslinePart(part, visible);
     }
+    this.autoPercentPrev = null;
     if (cs.rendererConfig != null) this.inner.renderer.applyConfig(cs.rendererConfig);
     if (cs.indicators) this.applyIndicatorLedger(cs.indicators);
+    this.adoptScaleBeforeCompare(cs.scaleBeforeCompare);
     this.extState = { ...cs.ext ?? {} };
     this.restorePersistedExt();
     const symbol = prefixedSymbol(cs);
@@ -51358,6 +53462,7 @@ var ChartCell = class {
       indicatorTitles: this.indicatorTitlesOn,
       indicatorValues: this.indicatorValuesOn,
       ...statuslineParts ? { statuslineParts } : {},
+      ...this.autoPercentPrev ? { scaleBeforeCompare: { ...this.autoPercentPrev } } : {},
       rendererConfig: this.inner?.renderer.getConfig() ?? void 0,
       drawings: this.inner ? this.inner.drawings.toJSON() : void 0,
       // Natives from the chart's SYNC registry read — an async catalog mirror here
@@ -51426,7 +53531,7 @@ function buildContext(host) {
     i18n: host.i18n,
     toast: (message, kind) => host.toast(message, kind),
     addIndicator: (entry) => host.active()?.addExternalIndicator(entry),
-    addNativeIndicator: (type) => host.active()?.addNative(type),
+    addNativeIndicator: (type, options) => host.active()?.addNative(type, options),
     stateChanged: () => host.stateDirty(),
     get cells() {
       return host.cells().map((c) => ({ id: c.id, chart: c.chart, symbol: c.symbol, timeframe: c.timeframe }));
@@ -51587,8 +53692,8 @@ var WorkspaceReplay = class {
     const cells = this.host.cells();
     let next = Infinity;
     for (const c of cells) {
-      const t33 = c.chart.replay.state.nextTime;
-      if (t33 != null) next = Math.min(next, barClose(t33, c.chart.market.timeframe));
+      const t34 = c.chart.replay.state.nextTime;
+      if (t34 != null) next = Math.min(next, barClose(t34, c.chart.market.timeframe));
     }
     if (!Number.isFinite(next)) return false;
     this.stepping = true;
@@ -51596,8 +53701,8 @@ var WorkspaceReplay = class {
       for (const c of cells) {
         const tf = c.chart.market.timeframe;
         for (let n = 0; n < MAX_BARS_PER_STEP; n += 1) {
-          const t33 = c.chart.replay.state.nextTime;
-          if (t33 == null || barClose(t33, tf) > next) break;
+          const t34 = c.chart.replay.state.nextTime;
+          if (t34 == null || barClose(t34, tf) > next) break;
           if (!c.chart.replay.step()) break;
         }
       }
@@ -52002,10 +54107,10 @@ var SplitterLayer = class {
     this.container.appendChild(el);
     return el;
   }
-  place(el, axis, index, css35) {
+  place(el, axis, index, css36) {
     el.dataset.axis = axis;
     el.dataset.index = String(index);
-    el.style.cssText = `position:absolute;z-index:30;${css35}`;
+    el.style.cssText = `position:absolute;z-index:30;${css36}`;
   }
   onDown(el, e) {
     const axis = el.dataset.axis;
@@ -52096,8 +54201,8 @@ var GAP_PX = 2;
 var POOL_CAP = 16;
 var TIME_AXIS_H4 = 22;
 var ALERT_CAP = 50;
-var STYLE_ID29 = "vela-workspace";
-var CSS24 = css.css`@layer vela.chrome {
+var STYLE_ID30 = "vela-workspace";
+var CSS25 = css.css`@layer vela.chrome {
 
 .vela-workspace { position: relative; width: 100%; height: 100%; display: flex; flex-direction: column; background: ${t.t.bg}; }
 .vela-ws-main { position: relative; display: flex; flex-direction: row; flex: 1 1 auto; min-height: 0; }
@@ -52188,7 +54293,7 @@ function declaredOrder(cells) {
   }
   return names.filter((n) => !/^\d+$/.test(n));
 }
-var TEXT38 = {
+var TEXT39 = {
   syncSymbol: msg("workspace.sync.symbol", "Symbol"),
   syncInterval: msg("workspace.sync.interval", "Interval"),
   syncCrosshair: msg("workspace.sync.crosshair", "Crosshair"),
@@ -52293,6 +54398,7 @@ var VelaWorkspace = class {
     this.toolDefsBusy = false;
     /** Favorite timeframes — the shared topbar's quick-switch chips, one set for the grid. */
     this.tfFavs = [];
+    this.timeframeSelectionRevision = 0;
     /** Live sync configuration (mutable copy of the option). */
     this.syncOpts = {};
     this.stateTimer = null;
@@ -52416,9 +54522,15 @@ var VelaWorkspace = class {
       get: (kind) => this.syncOpts[kind],
       state: () => ({ ...this.syncOpts })
     };
-    this.resolveTimeframeChoice = (tf, fallback = tf) => {
-      const cell = this.activeId ? this.cellsById.get(this.activeId) : void 0;
-      return cell ? cell.resolveTimeframeChoice(tf, fallback) : fallback;
+    /** Check the active market before submitting a desktop shortcut. */
+    this.validateTimeframeSelection = async (tf) => {
+      const revision = ++this.timeframeSelectionRevision;
+      const id = this.activeId;
+      if (!id) return void 0;
+      const cell = this.cellsById.get(id);
+      const available = await cell?.isTimeframeAvailable(tf);
+      if (revision !== this.timeframeSelectionRevision || id !== this.activeId || cell !== this.cellsById.get(id)) return void 0;
+      return available;
     };
     registerBuiltinLayouts();
     registerBuiltinChartTypes();
@@ -52467,21 +54579,21 @@ var VelaWorkspace = class {
     this.topbarComp = resolveTopbarComposition(opts.topbar);
     this.indicatorsOverride = topbarActionOverride("indicators");
     this.screenshotOverride = topbarActionOverride("screenshot");
+    this.compareOverride = topbarActionOverride("compare");
     if (boot?.trackSizes) for (const [id, ts] of Object.entries(boot.trackSizes)) this.trackSizes.set(id, ts);
     if (boot?.ext) this.extState = { ...boot.ext };
     if (boot?.charts) for (const { id, ...cs } of boot.charts) this.pool.set(id, cs);
     this.order = boot?.charts ? boot.charts.map((c) => c.id) : declaredOrder(opts.cells);
     const bootActive = boot?.activeCellId ?? null;
     const doc = hostEl.ownerDocument;
-    injectChromeStyles(STYLE_ID29, CSS24, doc);
+    injectChromeStyles(STYLE_ID30, CSS25, doc);
     this.root = doc.createElement("div");
     this.root.className = "vela-workspace";
     theme.ensureUIHost(this.root, resolveTheme(opts.theme));
     this.applyRootAttributes();
     for (const [name, make] of Object.entries(opts.providers ?? {})) void this.feed.registerProvider(name, make());
     void this.feed.ready().then(() => {
-      if (this.destroyed) return;
-      this.refreshRetention();
+      if (!this.destroyed) this.refreshRetention();
     });
     this.symbolPicker = new SymbolPicker({
       ...opts.symbolPicker,
@@ -52491,17 +54603,32 @@ var VelaWorkspace = class {
       iconFor: (d) => this.feed.symbolIconOf(d),
       onSelect: (ticker) => this.active.setSymbol(ticker),
       onOpenChange: (open) => {
-        if (open) for (const cell of this.cells()) cell.chart.renderer.closeDialogs();
+        if (open && !this.symbolPicker.isPicking) for (const cell of this.cells()) cell.chart.renderer.closeDialogs();
         this.trackDialog(open);
       }
     });
     this.symbolPicker.setSource(() => this.feed.symbols());
+    this.comparePicker = !this.compareOverride && topbarHas(this.topbarComp, "compare") ? new ComparePicker({
+      host: this.root,
+      i18n: this.localeState,
+      iconFor: (d) => this.feed.symbolIconOf(d),
+      activeItems: () => this.active.compareItems(),
+      onAdd: (symbol, placement) => this.active.addCompare(symbol, placement),
+      onRemove: (id) => this.active.removeCompare(id),
+      onOpenChange: (open) => {
+        if (open) for (const cell of this.cells()) cell.chart.renderer.closeDialogs();
+        this.trackDialog(open);
+      }
+    }) : null;
+    this.comparePicker?.setSource(() => this.feed.symbols());
     this.indicatorPicker = opts.indicatorPicker !== false && !this.indicatorsOverride && topbarHas(this.topbarComp, "indicators") ? new IndicatorPicker({
       host: this.root,
       i18n: this.localeState,
       library: () => this.active.libraryRows(),
       onChart: () => this.active.onChartRows(),
-      onAdd: (i) => this.active.addFromLibrary(i),
+      onAdd: (i) => {
+        if (this.active.addFromLibrary(i)) this.indicatorPicker?.close();
+      },
       onRemove: (i) => this.active.removeFromChart(i),
       onOpenChange: (open) => {
         if (open) for (const cell of this.cells()) cell.chart.renderer.closeDialogs();
@@ -52509,19 +54636,20 @@ var VelaWorkspace = class {
       }
     }) : null;
     const picker = this.indicatorPicker;
-    this.tfQuick = createWorkspaceTimeframeQuick({
+    this.tfQuick = new TimeframeQuick({
       host: this.root,
       i18n: this.localeState,
       onApply: (tf) => this.setActiveTimeframe(tf),
       onOpenChange: (open) => this.trackDialog(open)
-    }, this.resolveTimeframeChoice);
-    this.topbar = createWorkspaceTopbar(this.root, {
+    }, this.validateTimeframeSelection);
+    this.topbar = new Topbar(this.root, {
       symbol: "",
       i18n: this.localeState,
       // RAW option, not the resolved lists — the bar distinguishes a host-declared
       // side (list is law) from a default one (an override's `order` may flow).
       composition: opts.topbar,
       onSymbolClick: () => this.symbolPicker.open(),
+      ...this.comparePicker ? { onCompareClick: () => this.comparePicker.open() } : {},
       ...picker ? { onIndicatorsClick: () => picker.open() } : {},
       onUndoClick: () => this.active.history.undo(),
       onRedoClick: () => this.active.history.redo(),
@@ -52529,7 +54657,7 @@ var VelaWorkspace = class {
       onFullscreenClick: () => this.toggleFullscreen(),
       onAlertsClick: (anchor) => this.openAlertsMenu(anchor),
       timeframe: "60",
-      timeframes: opts.timeframes ?? DEFAULT_TIMEFRAMES,
+      timeframes: this.resolvedTimeframes(),
       timeframeFavorites: this.tfFavs,
       priceStyle: "candles",
       onTimeframe: (tf) => this.setActiveTimeframe(tf),
@@ -52556,7 +54684,9 @@ var VelaWorkspace = class {
         glyph: () => layoutGlyph(this.def)
       },
       getContext: () => this.context()
-    }, this.resolveTimeframeChoice);
+    }, async (tf) => {
+      if (await this.validateTimeframeSelection(tf)) this.setActiveTimeframe(tf);
+    });
     const main = doc.createElement("div");
     main.className = "vela-ws-main";
     const toolbar = buildToolbar(opts.drawings, this.localeState);
@@ -52732,9 +54862,8 @@ var VelaWorkspace = class {
     this.setActiveCell(bootActive != null && this.cellsById.has(bootActive) ? bootActive : this.order[0] ?? null);
     this.offRegistryChange = this.feed.onRegistryChange(() => {
       if (this.destroyed) return;
-      for (const cell of this.cellsById.values()) cell.refreshTimeframeMetadata(true);
-      const active = this.activeId ? this.cellsById.get(this.activeId) : void 0;
-      if (active) this.projectTimeframeControls(active);
+      for (const cell of this.cellsById.values()) cell.refreshTimeframeMetadata();
+      if (this.activeId) this.projectCellTimeframes(this.activeId);
     });
     if (opts.autofocus) this.refocusActive();
     if (opts.indicators !== void 0) {
@@ -52829,6 +54958,7 @@ var VelaWorkspace = class {
   }
   setActiveCell(id) {
     if (id === this.activeId || this.destroyed) return;
+    ++this.timeframeSelectionRevision;
     const prev2 = this.activeId;
     if (prev2) {
       const el = this.cellsById.get(prev2)?.host;
@@ -52886,6 +55016,7 @@ var VelaWorkspace = class {
    *  it on their next open; what stays on screen is relabeled here. */
   relocalizeChrome() {
     this.symbolPicker.relabel();
+    this.comparePicker?.relabel();
     this.indicatorPicker?.relabel();
     this.tfQuick.relabel();
     this.topbar.relocalize();
@@ -53092,6 +55223,7 @@ var VelaWorkspace = class {
           const cell = this.cellsById.get(id);
           if (!cell) continue;
           cell.rehydrate(cs);
+          if (st.timeframeFavorites) void cell.refreshTimeframeChoices();
           if (cs.drawings != null) this.drawingsSettled.set(id, this.chartSymbolOf(cell));
         }
       } finally {
@@ -53185,12 +55317,12 @@ var VelaWorkspace = class {
    */
   setTheme(theme$1) {
     if (this.destroyed) return;
-    const t33 = resolveTheme(theme$1);
+    const t34 = resolveTheme(theme$1);
     this.opts.theme = theme$1;
-    theme.ensureUIHost(this.root, t33);
-    this.drawToolbar?.setTheme(t33);
-    if (this.attributionMark) applyAttributionMarkTheme(this.attributionMark, t33.background);
-    for (const cell of this.cellsById.values()) cell.chart.setTheme(t33);
+    theme.ensureUIHost(this.root, t34);
+    this.drawToolbar?.setTheme(t34);
+    if (this.attributionMark) applyAttributionMarkTheme(this.attributionMark, t34.background);
+    for (const cell of this.cellsById.values()) cell.chart.setTheme(t34);
   }
   // ── layout ──────────────────────────────────────────────────
   get layout() {
@@ -53287,7 +55419,7 @@ var VelaWorkspace = class {
     } else {
       delete this.root.dataset.fullscreen;
       doc.defaultView?.removeEventListener("keydown", this.onFullscreenEscape, true);
-      this.toastHost.hideIf(this.t(TEXT38.fullscreenHint));
+      this.toastHost.hideIf(this.t(TEXT39.fullscreenHint));
       const panel = this.fullscreenPanel;
       this.fullscreenPanel = null;
       if (panel && this.dock.openId === null) this.dock.toggle(panel, true);
@@ -53298,7 +55430,7 @@ var VelaWorkspace = class {
   toggleFullscreen() {
     const on = !this.fullscreenOn;
     this.setFullscreen(on);
-    if (on && this.fullscreenOn) this.toastHost.show(this.t(TEXT38.fullscreenHint), "info");
+    if (on && this.fullscreenOn) this.toastHost.show(this.t(TEXT39.fullscreenHint), "info");
   }
   /** Whether this Esc belongs to something other than full screen. */
   escapeIsSpent(ev) {
@@ -53416,6 +55548,7 @@ var VelaWorkspace = class {
     this.objectTree.destroy();
     this.dataWindow.destroy();
     this.symbolPicker.destroy();
+    this.comparePicker?.destroy();
     this.indicatorPicker?.destroy();
     this.tfQuick.destroy();
     this.shortcutsHelp?.destroy();
@@ -53434,12 +55567,14 @@ var VelaWorkspace = class {
     const cell = this.activeId ? this.cellsById.get(this.activeId) : void 0;
     if (!cell) return;
     this.topbar.setSymbol(cell.symbol);
-    this.projectTimeframeControls(cell);
+    this.topbar.setTimeframe(cell.timeframe);
+    this.topbar.setUnavailableTimeframes(cell.unavailableTimeframes());
     this.topbar.setPriceStyle(cell.priceStyle, cell.unavailablePriceStyles());
     this.topbar.setIndicatorCount(cell.indicatorCount);
     this.topbar.renderActions();
     this.mobileBar?.renderActions();
     this.mobileBar?.setSymbol(cell.symbol);
+    this.mobileBar?.setTimeframe(cell.timeframe);
     this.syncMobileMaximize();
     this.drawingPill?.onChart(cell.chart);
     const pushHistory = () => this.topbar.setHistoryState(cell.history.canUndo, cell.history.canRedo);
@@ -53707,6 +55842,7 @@ var VelaWorkspace = class {
         watermark: this.opts.watermark !== false,
         nativeBackend: this.cellBackend,
         dialogHost: this.root,
+        symbolPicker: (current, onPick) => this.symbolPicker.open(current.replace(/^[^:]*:/, ""), { onSelect: onPick }),
         timezone: () => this.timezone,
         setTimezone: (zone) => this.setTimezone(zone),
         context: () => this.context(),
@@ -53718,11 +55854,10 @@ var VelaWorkspace = class {
         previewDropTarget: (target) => this.setDropTarget(target),
         dropCell: (id2, target) => this.swapCells(id2, target),
         onMarketChanged: (id2) => this.onCellMarketChanged(id2),
-        onTimeframesChanged: (id2) => {
-          if (id2 === this.activeId) this.projectTimeframeControls(this.active);
-        },
         onPriceStyleChanged: (id2) => this.onCellPriceStyleChanged(id2),
         onPriceStyleShown: (id2) => this.projectCellPriceStyle(id2),
+        timeframes: () => [.../* @__PURE__ */ new Set([...this.resolvedTimeframes(), ...this.tfFavs])],
+        onTimeframesShown: (id2) => this.projectCellTimeframes(id2),
         onIndicatorsChanged: (id2) => this.onCellIndicatorsChanged(id2),
         onStatusPrefsChanged: (id2) => this.propagateStylePrefs(id2),
         onStateDirty: () => this.markStateDirty(),
@@ -53757,9 +55892,9 @@ var VelaWorkspace = class {
     chart.on("priceStyle:change", ({ from, to }) => this.events.emit("cell:priceStyle", { id: cell.id, from, to }));
     chart.on("alert", (alert) => {
       const source = [parseSymbol(cell.symbol).ticker || cell.symbol, timeframeLabel(cell.timeframe, this.localeState), alert.indicator].filter(Boolean).join(" ");
-      this.alerts.unshift({ cellId: cell.id, source, title: alert.title ?? this.t(TEXT38.alert), message: alert.message, time: alert.time });
+      this.alerts.unshift({ cellId: cell.id, source, title: alert.title ?? this.t(TEXT39.alert), message: alert.message, time: alert.time });
       if (this.alerts.length > this.alertCap) this.alerts.pop();
-      toast.toast(alert.title ?? this.t(TEXT38.alert), { description: this.t(TEXT38.alertToastDescription, { source, message: alert.message }), icon: "bell" });
+      toast.toast(alert.title ?? this.t(TEXT39.alert), { description: this.t(TEXT39.alertToastDescription, { source, message: alert.message }), icon: "bell" });
       this.topbar.setAlertCount(this.alerts.length);
     });
     chart.on("drawing:favorites", ({ favorites }) => {
@@ -53832,7 +55967,7 @@ var VelaWorkspace = class {
     chart.on("drawing:selected", ({ ids }) => this.drawingSelections.set(cell, ids.length));
     chart.on("viewport:changed", (range) => this.propagateViewport(cell.id, range));
     chart.renderer.onConfigChanged(() => this.propagateStylePrefs(cell.id));
-    chart.on("theme:changed", (t33) => this.setTheme(t33));
+    chart.on("theme:changed", (t34) => this.setTheme(t34));
     chart.on("pane:changed", () => {
       if (cell.id === this.activeId) this.syncMobileMaximize();
     });
@@ -54411,8 +56546,12 @@ var VelaWorkspace = class {
     const cell = this.cellsById.get(id);
     if (!cell) return;
     this.topbar.setSymbol(cell.symbol);
-    this.projectTimeframeControls(cell);
+    this.topbar.setTimeframe(cell.timeframe);
+    this.topbar.setUnavailableTimeframes(cell.unavailableTimeframes());
+    this.topbar.renderActions();
+    this.mobileBar?.renderActions();
     this.mobileBar?.setSymbol(cell.symbol);
+    this.mobileBar?.setTimeframe(cell.timeframe);
     this.objectTree.setSymbol(cell.symbol);
     this.bottombar?.setSession({ session: cell.session, enabled: cell.sessionAvailable });
     this.projectTimezone();
@@ -54433,6 +56572,18 @@ var VelaWorkspace = class {
     if (!cell) return;
     this.topbar.setPriceStyle(cell.priceStyle, cell.unavailablePriceStyles());
   }
+  /** Project the active cell's unavailable timeframes onto the menu and favorite chips. */
+  projectCellTimeframes(id) {
+    if (id !== this.activeId) return;
+    const cell = this.cellsById.get(id);
+    if (!cell) return;
+    this.topbar.setUnavailableTimeframes(cell.unavailableTimeframes());
+    this.tfDrawer?.refresh();
+  }
+  /** Configured timeframe presets: explicit host option wins, else plugin shell defaults, else built-in. */
+  resolvedTimeframes() {
+    return this.opts.timeframes ?? shellDefaults().timeframes ?? DEFAULT_TIMEFRAMES;
+  }
   /** Trigger ② — a cell's indicator ledger changed: count + picker only if active. */
   onCellIndicatorsChanged(id) {
     this.markStateDirty();
@@ -54442,14 +56593,9 @@ var VelaWorkspace = class {
     this.topbar.setIndicatorCount(cell.indicatorCount);
     this.indicatorPicker?.sync();
   }
-  projectTimeframeControls(cell) {
-    this.topbar.setTimeframe(cell.timeframe);
-    this.mobileBar?.setTimeframe(cell.timeframe);
-    this.tfDrawer?.refresh();
-    if (this.tfQuick.isOpen) this.tfQuick.relabel();
-  }
-  /** The controls resolve the choice again on activation before passing it here. */
+  /** Timeframe changes routed from the pickers and shortcuts (chip state follows). */
   setActiveTimeframe(tf) {
+    ++this.timeframeSelectionRevision;
     this.bottombar?.setActiveRange(null);
     this.active.setTimeframe(tf);
   }
@@ -54467,6 +56613,7 @@ var VelaWorkspace = class {
   onLayoutModeChange(mode) {
     if (mode === "mobile") this.setFullscreen(false);
     this.symbolPicker.close();
+    this.comparePicker?.close();
     this.indicatorPicker?.close();
     this.tfDrawer?.close();
     this.drawingsDrawer?.close();
@@ -54532,11 +56679,11 @@ var VelaWorkspace = class {
   openTimeframeDrawer() {
     this.tfDrawer ?? (this.tfDrawer = new TimeframeDrawer({
       host: this.root,
-      timeframes: this.opts.timeframes ?? DEFAULT_TIMEFRAMES,
-      resolveTimeframe: this.resolveTimeframeChoice,
+      timeframes: this.resolvedTimeframes(),
       ranges: RANGE_PRESETS,
       currentTimeframe: () => this.active.timeframe,
       activeRange: () => this.active.activeRangeId,
+      unavailableTimeframes: () => this.active.unavailableTimeframes(),
       onTimeframe: (tf) => this.setActiveTimeframe(tf),
       onRange: (preset) => {
         this.active.applyRange(preset);
@@ -54568,6 +56715,7 @@ var VelaWorkspace = class {
       i18n: this.localeState,
       ...has("undo-redo") ? { onUndo: () => this.active.history.undo(), onRedo: () => this.active.history.redo() } : {},
       ...has("screenshot") ? { onScreenshot: this.screenshotOverride ? () => this.runOverride(this.screenshotOverride) : () => this.downloadScreenshot() } : {},
+      ...has("compare") && (this.comparePicker || this.compareOverride) ? { onCompare: this.compareOverride ? () => this.runOverride(this.compareOverride) : () => this.comparePicker.open() } : {},
       canUndo: () => this.active.history.canUndo,
       canRedo: () => this.active.history.canRedo,
       priceStyles: () => {
@@ -54579,7 +56727,7 @@ var VelaWorkspace = class {
       onPriceStyle: (id) => this.active.setPriceStyle(id),
       panels: () => has("panels") ? [...this.dock.list()] : [],
       onTogglePanel: (id) => this.dock.toggle(id),
-      ...has("alerts") ? { alerts: () => this.alerts.map((a) => ({ title: this.t(TEXT38.alertDrawerTitle, { source: a.source, title: a.title }), message: a.message, time: a.time })) } : {},
+      ...has("alerts") ? { alerts: () => this.alerts.map((a) => ({ title: this.t(TEXT39.alertDrawerTitle, { source: a.source, title: a.title }), message: a.message, time: a.time })) } : {},
       // Actions placed on the bottom bar (left-aligned by default) have their stop
       // there — only the menu-placed ones land in the drawer, or they would appear
       // twice: left (primary) ones with the primary rows, right ones at the end.
@@ -54623,10 +56771,10 @@ var VelaWorkspace = class {
   /** The layout SYNC switches (the topbar dropdown and the mobile drawer list the same). */
   syncRows() {
     return [
-      { id: "symbol", label: this.t(TEXT38.syncSymbol), checked: this.syncOpts.symbol === true },
-      { id: "timeframe", label: this.t(TEXT38.syncInterval), checked: this.syncOpts.timeframe === true },
-      { id: "crosshair", label: this.t(TEXT38.syncCrosshair), checked: this.syncOpts.crosshair === true },
-      { id: "style", label: this.t(TEXT38.syncStyle), checked: this.syncOpts.style === true }
+      { id: "symbol", label: this.t(TEXT39.syncSymbol), checked: this.syncOpts.symbol === true },
+      { id: "timeframe", label: this.t(TEXT39.syncInterval), checked: this.syncOpts.timeframe === true },
+      { id: "crosshair", label: this.t(TEXT39.syncCrosshair), checked: this.syncOpts.crosshair === true },
+      { id: "style", label: this.t(TEXT39.syncStyle), checked: this.syncOpts.style === true }
     ];
   }
   openTimezoneDrawer() {
@@ -54654,8 +56802,8 @@ var VelaWorkspace = class {
     this.alertsMenu?.destroy();
     const items = this.alerts.length ? this.alerts.map((a, i) => ({
       id: String(i),
-      label: sliceGraphemes(this.t(TEXT38.alertRow, { source: a.source, time: eventTimeText(a.time, this.localeState), title: a.title, message: a.message }), ALERT_ROW_MAX)
-    })) : [{ id: "none", label: this.t(TEXT38.noAlerts), disabled: true }];
+      label: sliceGraphemes(this.t(TEXT39.alertRow, { source: a.source, time: eventTimeText(a.time, this.localeState), title: a.title, message: a.message }), ALERT_ROW_MAX)
+    })) : [{ id: "none", label: this.t(TEXT39.noAlerts), disabled: true }];
     this.alertsMenu = new dropdownMenu.DropdownMenu({
       host: this.root,
       items,
@@ -54690,8 +56838,8 @@ var VelaWorkspace = class {
     this.screenshotKeyOff = this.keymap.register({
       id: "chart.screenshot",
       keys: "mod+alt+s",
-      label: ov ? ov.label : TEXT38.screenshot,
-      category: TEXT38.categoryChart,
+      label: ov ? ov.label : TEXT39.screenshot,
+      category: TEXT39.categoryChart,
       run: ov ? () => this.runOverride(ov) : () => this.downloadScreenshot()
     });
   }
@@ -54701,8 +56849,8 @@ var VelaWorkspace = class {
     this.fullscreenKeyOff = this.keymap.register({
       id: "chart.fullscreen",
       keys: "alt+enter",
-      label: TEXT38.fullscreen,
-      category: TEXT38.categoryChart,
+      label: TEXT39.fullscreen,
+      category: TEXT39.categoryChart,
       run: (ev) => {
         if (!ev.repeat) this.toggleFullscreen();
       }
@@ -54712,24 +56860,35 @@ var VelaWorkspace = class {
   registerDefaultKeys() {
     this.registerScreenshotKey();
     this.registerFullscreenKey();
-    this.keymap.register({ id: "chart.reset-view", keys: "alt+r", label: TEXT38.resetView, category: TEXT38.categoryChart, run: () => this.active.resetView() });
-    this.keymap.register({ id: "chart.toggle-log", keys: "alt+l", label: TEXT38.toggleLog, category: TEXT38.categoryChart, run: () => this.active.chart.renderer.set("logScale", !this.active.chart.renderer.get("logScale")) });
+    this.keymap.register({ id: "chart.reset-view", keys: "alt+r", label: TEXT39.resetView, category: TEXT39.categoryChart, run: () => this.active.resetView() });
+    this.keymap.register({
+      id: "chart.toggle-log",
+      keys: "alt+l",
+      label: TEXT39.toggleLog,
+      category: TEXT39.categoryChart,
+      run: () => {
+        const next = !this.active.chart.renderer.get("logScale");
+        if (next && this.active.chart.renderer.get("scaleMode") !== "price") this.active.chart.renderer.set("scaleMode", "price");
+        this.active.chart.renderer.set("logScale", next);
+      }
+    });
     this.keymap.register({
       id: "chart.toggle-percent",
       keys: "alt+p",
-      label: TEXT38.togglePercent,
-      category: TEXT38.categoryChart,
+      label: TEXT39.togglePercent,
+      category: TEXT39.categoryChart,
       run: () => {
-        const mode = this.active.chart.renderer.get("scaleMode");
-        this.active.chart.renderer.set("scaleMode", mode === "percent" ? "price" : "percent");
+        const nextPct = this.active.chart.renderer.get("scaleMode") !== "percent";
+        if (nextPct && this.active.chart.renderer.get("logScale")) this.active.chart.renderer.set("logScale", false);
+        this.active.chart.renderer.set("scaleMode", nextPct ? "percent" : "price");
       }
     });
-    this.keymap.register({ id: "drawings.trendline", keys: "alt+t", label: TEXT38.trendline, category: TEXT38.categoryDrawings, run: () => this.active.chart.drawings.setTool("trendline") });
+    this.keymap.register({ id: "drawings.trendline", keys: "alt+t", label: TEXT39.trendline, category: TEXT39.categoryDrawings, run: () => this.active.chart.drawings.setTool("trendline") });
     this.keymap.register({
       id: "drawings.hline-cursor",
       keys: "alt+h",
-      label: TEXT38.hlineCursor,
-      category: TEXT38.categoryDrawings,
+      label: TEXT39.hlineCursor,
+      category: TEXT39.categoryDrawings,
       run: () => {
         const c = this.active;
         if (c.lastCrossTime != null && c.lastCrossPrice != null) c.chart.drawings.add("hline", { anchors: [{ time: c.lastCrossTime, price: c.lastCrossPrice }] });
@@ -54738,30 +56897,30 @@ var VelaWorkspace = class {
     this.keymap.register({
       id: "drawings.vline-cursor",
       keys: "alt+v",
-      label: TEXT38.vlineCursor,
-      category: TEXT38.categoryDrawings,
+      label: TEXT39.vlineCursor,
+      category: TEXT39.categoryDrawings,
       run: () => {
         const c = this.active;
         if (c.lastCrossTime != null && c.lastCrossPrice != null) c.chart.drawings.add("vline", { anchors: [{ time: c.lastCrossTime, price: c.lastCrossPrice }] });
       }
     });
-    this.keymap.register({ id: "history.undo", keys: ["mod+z"], label: TEXT38.undo, category: TEXT38.categoryEdit, run: () => this.active.history.undo() });
-    this.keymap.register({ id: "history.redo", keys: ["mod+y", "mod+shift+z"], label: TEXT38.redo, category: TEXT38.categoryEdit, run: () => this.active.history.redo() });
-    this.keymap.register({ id: "view.zoom-in", keys: "mod+arrowup", label: TEXT38.zoomIn, category: TEXT38.categoryChart, run: () => this.glider.zoom(ZOOM_IN) });
-    this.keymap.register({ id: "view.zoom-out", keys: "mod+arrowdown", label: TEXT38.zoomOut, category: TEXT38.categoryChart, run: () => this.glider.zoom(ZOOM_OUT) });
-    this.keymap.register({ id: "view.pan-left", keys: "mod+arrowleft", label: TEXT38.panLeft, category: TEXT38.categoryChart, run: () => this.active.chart.panBy(-PAN_FAST) });
-    this.keymap.register({ id: "view.pan-right", keys: "mod+arrowright", label: TEXT38.panRight, category: TEXT38.categoryChart, run: () => this.active.chart.panBy(PAN_FAST) });
+    this.keymap.register({ id: "history.undo", keys: ["mod+z"], label: TEXT39.undo, category: TEXT39.categoryEdit, run: () => this.active.history.undo() });
+    this.keymap.register({ id: "history.redo", keys: ["mod+y", "mod+shift+z"], label: TEXT39.redo, category: TEXT39.categoryEdit, run: () => this.active.history.redo() });
+    this.keymap.register({ id: "view.zoom-in", keys: "mod+arrowup", label: TEXT39.zoomIn, category: TEXT39.categoryChart, run: () => this.glider.zoom(ZOOM_IN) });
+    this.keymap.register({ id: "view.zoom-out", keys: "mod+arrowdown", label: TEXT39.zoomOut, category: TEXT39.categoryChart, run: () => this.glider.zoom(ZOOM_OUT) });
+    this.keymap.register({ id: "view.pan-left", keys: "mod+arrowleft", label: TEXT39.panLeft, category: TEXT39.categoryChart, run: () => this.active.chart.panBy(-PAN_FAST) });
+    this.keymap.register({ id: "view.pan-right", keys: "mod+arrowright", label: TEXT39.panRight, category: TEXT39.categoryChart, run: () => this.active.chart.panBy(PAN_FAST) });
     const indOv = this.indicatorsOverride;
     if (indOv && topbarHas(this.topbarComp, "indicators")) {
-      this.keymap.register({ id: "indicators.open", keys: "/", label: indOv.label, category: TEXT38.categoryIndicators, run: () => this.runOverride(indOv) });
+      this.keymap.register({ id: "indicators.open", keys: "/", label: indOv.label, category: TEXT39.categoryIndicators, run: () => this.runOverride(indOv) });
     } else if (this.indicatorPicker) {
-      this.keymap.register({ id: "indicators.open", keys: "/", label: TEXT38.openIndicators, category: TEXT38.categoryIndicators, run: () => this.indicatorPicker?.open() });
+      this.keymap.register({ id: "indicators.open", keys: "/", label: TEXT39.openIndicators, category: TEXT39.categoryIndicators, run: () => this.indicatorPicker?.open() });
     }
     this.keymap.register({
       id: "help.shortcuts",
       keys: "?",
-      label: TEXT38.showShortcuts,
-      category: TEXT38.categoryHelp,
+      label: TEXT39.showShortcuts,
+      category: TEXT39.categoryHelp,
       run: () => {
         this.shortcutsHelp ?? (this.shortcutsHelp = new ShortcutsHelp(this.keymap, this.root, (open) => this.trackDialog(open), () => this.localeState, { symbolMenuFromKey: this.symbolMenuFromKey }));
         this.shortcutsHelp.open();

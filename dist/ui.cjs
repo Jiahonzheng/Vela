@@ -196,14 +196,18 @@ function dateFormat(settings, options) {
   }
   return dtf;
 }
-function clockOptions(settings) {
-  if (settings.hourCycle === "h23") return { hour: "2-digit", minute: "2-digit", hourCycle: "h23" };
-  if (settings.hourCycle === "h12") return { hour: "numeric", minute: "2-digit", hourCycle: "h12" };
-  return { hour: "numeric", minute: "2-digit" };
+function clockOptions(settings, withSeconds = false) {
+  const sec = withSeconds ? { second: "2-digit" } : {};
+  if (settings.hourCycle === "h23") return { hour: "2-digit", minute: "2-digit", ...sec, hourCycle: "h23" };
+  if (settings.hourCycle === "h12") return { hour: "numeric", minute: "2-digit", ...sec, hourCycle: "h12" };
+  return { hour: "numeric", minute: "2-digit", ...sec };
 }
-function englishClock(wall, settings) {
-  if (settings.hourCycle === "h23") return localizeAscii(`${pad2(wall.getUTCHours())}:${pad2(wall.getUTCMinutes())}`, settings);
-  return stripBidiMarks(dateFormat(settings, clockOptions(settings)).format(wall));
+function englishClock(wall, settings, withSeconds = false) {
+  if (settings.hourCycle === "h23") {
+    const base = `${pad2(wall.getUTCHours())}:${pad2(wall.getUTCMinutes())}`;
+    return localizeAscii(withSeconds ? `${base}:${pad2(wall.getUTCSeconds())}` : base, settings);
+  }
+  return stripBidiMarks(dateFormat(settings, clockOptions(settings, withSeconds)).format(wall));
 }
 var TICK_OPTIONS = {
   year: { year: "numeric" },
@@ -214,27 +218,29 @@ var isClockUnit = (unit) => unit === "hour" || unit === "minute" || unit === "se
 function formatTimeTick(ms, options, settings) {
   const wall = new Date(ms + (options.offsetMs ?? 0));
   const unit = options.unit;
+  const withSeconds = unit === "second";
   if (settings.english) {
-    if (isClockUnit(unit)) return englishClock(wall, settings);
+    if (isClockUnit(unit)) return englishClock(wall, settings, withSeconds);
     const month = EN_MONTHS_SHORT[wall.getUTCMonth()];
     if (unit === "year") return localizeAscii(String(wall.getUTCFullYear()), settings);
     if (unit === "month") return month;
     return localizeAscii(`${month} ${wall.getUTCDate()}`, settings);
   }
-  const opts = isClockUnit(unit) ? clockOptions(settings) : TICK_OPTIONS[unit];
+  const opts = isClockUnit(unit) ? clockOptions(settings, withSeconds) : TICK_OPTIONS[unit];
   return stripBidiMarks(dateFormat(settings, opts).format(wall));
 }
 function formatTimeStamp(ms, options, settings) {
   const wall = new Date(ms + zoneOffsetMs(ms, options?.timeZone ?? "UTC"));
   const withTime = options?.withTime ?? true;
+  const withSeconds = options?.withSeconds === true;
   if (settings.english) {
     const date = localizeAscii(
       `${EN_WEEKDAYS_SHORT[wall.getUTCDay()]} ${wall.getUTCDate()} ${EN_MONTHS_SHORT[wall.getUTCMonth()]} '${pad2(wall.getUTCFullYear() % 100)}`,
       settings
     );
-    return withTime ? `${date} ${englishClock(wall, settings)}` : date;
+    return withTime ? `${date} ${englishClock(wall, settings, withSeconds)}` : date;
   }
-  const opts = { weekday: "short", day: "numeric", month: "short", year: "2-digit", ...withTime ? clockOptions(settings) : {} };
+  const opts = { weekday: "short", day: "numeric", month: "short", year: "2-digit", ...withTime ? clockOptions(settings, withSeconds) : {} };
   return stripBidiMarks(dateFormat(settings, opts).format(wall));
 }
 function countdownText(ms) {
@@ -357,7 +363,7 @@ function resolveFormatters(settings, overrides) {
     timeStamp(ms, options) {
       const fallback = () => base.timeStamp(ms, options);
       if (typeof o.timeStamp !== "function") return fallback();
-      return viaHost(o.timeStamp, ms, { ...ctx(options?.surface, "crosshair", options?.timeZone, fallback), withTime: options?.withTime ?? true }, fallback);
+      return viaHost(o.timeStamp, ms, { ...ctx(options?.surface, "crosshair", options?.timeZone, fallback), withTime: options?.withTime ?? true, ...options?.withSeconds !== void 0 ? { withSeconds: options.withSeconds } : {} }, fallback);
     },
     duration(ms, options) {
       const fallback = () => base.duration(ms, options);

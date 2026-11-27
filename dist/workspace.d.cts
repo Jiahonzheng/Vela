@@ -1,9 +1,9 @@
-import { O as OHLCV, V as VisibleRangePreset, b as VisibleRange, c as VelaOptions, I as InputValue, M as MarketDataFeed, d as VelaTheme, N as NativeBackend, e as MarketSession } from './DataProvider-DqY7R0hL.cjs';
-import { S as SyncSetting, V as VelaStorage, C as CellState, W as WidgetHistory, R as ResolvedIndicator, a as StatuslinePart, b as RangePreset, T as TrackSizes, c as VelaShellOptions, d as SyncOptions, e as SyncKind, f as WorkspaceState } from './statusline-model-D9jul5-W.cjs';
-export { g as ChartState, D as DrawingToolsState, P as PanelsState, h as SYMBOL_PICKER_DEFAULT_CATEGORIES, i as SymbolPickerCategory, j as SymbolPickerConfig, k as decodeState, l as encodeState, s as sanitizeState } from './statusline-model-D9jul5-W.cjs';
-import { a as KeymapManager } from './keymap-Nk4cb7Tm.cjs';
-import { I as IndicatorHandle, S as ScriptingEngine, W as WidgetContext, V as Vela, E as ExternalIndicatorEntry, R as ReplayState, a as ReplayBounds, b as VelaEventMap, c as ScriptRun } from './contributions-CYrk3HKz.cjs';
-import { b as LocalizationOptions, M as MessageLike, T as Translator, c as LocaleChangedEvent } from './types-CsUd831-.cjs';
+import { O as OHLCV, V as VisibleRangePreset, b as VisibleRange, c as VelaOptions, I as InputValue, M as MarketDataFeed, d as VelaTheme, N as NativeBackend, e as SymbolPickerFn, f as MarketSession } from './DataProvider-l65c5k9q.cjs';
+import { S as SyncSetting, V as VelaStorage, C as CellState, W as WidgetHistory, R as ResolvedIndicator, a as StatuslinePart, b as RangePreset, T as TrackSizes, c as VelaShellOptions, d as SyncOptions, e as SyncKind, f as WorkspaceState } from './statusline-model-9-UvArRD.cjs';
+export { g as ChartState, D as DrawingToolsState, P as PanelsState, h as SYMBOL_PICKER_DEFAULT_CATEGORIES, i as SymbolPickerCategory, j as SymbolPickerConfig, k as decodeState, l as encodeState, s as sanitizeState } from './statusline-model-9-UvArRD.cjs';
+import { a as KeymapManager } from './keymap-Bv49ugg9.cjs';
+import { I as IndicatorHandle, S as ScriptingEngine, W as WidgetContext, V as Vela, E as ExternalIndicatorEntry, R as ReplayState, b as ReplayBounds, c as VelaEventMap, d as ScriptRun } from './contributions-CwSc8Qq7.cjs';
+import { b as LocalizationOptions, M as MessageLike, T as Translator, c as LocaleChangedEvent } from './types-DXVlW2vL.cjs';
 import '@luxalgo/vela-ui/theme';
 
 /** The cells that follow `originId` under `setting` — PURE (never includes the origin). */
@@ -25,6 +25,16 @@ type WorkspaceStorage = VelaStorage;
 /** An in-memory, session-lived {@link VelaStorage} — the OPT-IN alternative to the
  *  localStorage default when persisted state must not outlive the page session. */
 declare function memoryStorageAdapter(): VelaStorage;
+
+/** Where a compared symbol is placed relative to the main chart. */
+type ComparePlacement = 'same' | 'new-scale' | 'new-pane';
+
+interface ActiveCompareItem {
+    id: string;
+    symbol: string;
+    title: string;
+    color: string;
+}
 
 /** The seed/mutable market state of one cell (all optional — an empty cell parks).
  *  The SAME vocabulary as the widget's chart options: the workspace's top-level chart
@@ -95,6 +105,9 @@ interface CellDeps {
     /** Where the renderer mounts its MODAL dialogs (chart/indicator settings) — the
      *  workspace root, so dialogs center over the whole grid instead of one cell. */
     dialogHost: HTMLElement;
+    /** Default symbol picker wired onto every cell's renderer for `input.symbol` controls
+     *  (a host attachment can still override it via `chart.renderer.setSymbolPicker`). */
+    symbolPicker?: SymbolPickerFn;
     /** The workspace-global display-timezone CHOICE — an IANA zone, or the exchange
      *  rule, which each cell resolves to its own market's zone ({@link ChartCell.applyTimezone}). */
     timezone(): string;
@@ -124,13 +137,15 @@ interface CellDeps {
     dropCell(id: string, targetId: string): void;
     /** The cell's market changed in place (chrome/retention refresh upstream). */
     onMarketChanged(id: string): void;
-    /** Timeframe capabilities resolved for this cell's market. */
-    onTimeframesChanged?(id: string): void;
     /** The cell's price style changed in place (topbar icon/menu refresh upstream). */
     onPriceStyleChanged(id: string): void;
     /** What the cell can draw changed with its symbol's facts — the drawn style, the greyed
      *  styles — while the chosen style did not: refresh the style chrome, nothing to save. */
     onPriceStyleShown?(id: string): void;
+    /** The workspace's timeframe presets and favorites, for per-symbol availability checks. */
+    timeframes?(): readonly string[];
+    /** Per-symbol timeframe availability changed — refresh the timeframe chrome, nothing to save. */
+    onTimeframesShown?(id: string): void;
     /** The cell's indicator ledger changed (count/picker refresh upstream). */
     onIndicatorsChanged(id: string): void;
     /** A Status line tab or watermark pref changed on this cell (the style link mirrors upstream). */
@@ -180,14 +195,17 @@ declare class ChartCell {
     private sessionAvailableFlag;
     /** The symbol of the most recent metadata probe — an older one landing late is dropped. */
     private metadataProbeSymbol;
-    private timeframeProbe;
-    private marketTimeframes;
     /** Latched: the symbol's extended tape wraps midnight (an overnight roll market) —
      *  one extended-hours shading phase instead of the pre/post split. */
     private sessionOvernightFlag;
     /** Latched: the symbol's own trading zone (`SymbolInfo.timezone`) — what the exchange
      *  rule resolves to on this cell. Undefined until metadata lands or when none is declared. */
     private exchangeZone;
+    /** The current symbol's metadata, shared by the pickers and quick entry. */
+    private timeframeMetadata;
+    private timeframeChoicesRevision;
+    /** Timeframe choices the active symbol's source cannot serve. */
+    private unavailableTfs;
     private inner;
     /** The live app theme — seeded from deps, updated on `theme:changed` (the base the
      *  plot-overlay tokens re-derive from). */
@@ -216,9 +234,14 @@ declare class ChartCell {
     /** Volume intent: the seed's ledger, else the workspace `volume` option — a
      *  rehydrated ledger overwrites it (see {@link applyIndicatorLedger}). */
     private volumeIntent;
-    /** Sync mirror of the chart's native instances (id + type) — the removal handler
-     *  looks the removed id up here to learn which type an undo must re-add. */
+    /** Sync mirror of the chart's native instances (id + type + input deltas) — the removal
+     *  handler looks the removed id up here to learn which type and inputs an undo must re-add. */
     private presentNatives;
+    /** Scale state before adding a `'same'` comparison auto-switched the price pane to `'percent'`.
+     *  Restored when the last `'same'` comparison leaves and the pane is still on `'percent'`.
+     *  Rides the state document as `scaleBeforeCompare`: the document's `rendererConfig`
+     *  already says `'percent'`, so nothing else could tell it from the user's own choice. */
+    private autoPercentPrev;
     private rangeBars;
     private pendingRange;
     /** Last symbol we toasted "no provider serves this" for — once per symbol (the
@@ -277,6 +300,16 @@ declare class ChartCell {
     /** Re-read the symbol's metadata: session posture (RTH/ETH toggle, shading) and its
      *  trading zone (the exchange rule). Async — the workspace re-projects when a verdict lands. */
     private refreshSymbolMetadata;
+    /** Re-probe provider metadata after the shared provider registry changes. */
+    refreshTimeframeMetadata(): void;
+    /** Resolve a provider-qualified metadata key when the current listing is unambiguous. */
+    private timeframeInfoSymbol;
+    /** Registered series adapters take precedence over the provider's symbol metadata. */
+    private timeframeAvailabilityFor;
+    /** @internal Reproject workspace presets and favorites after metadata or saved choices change. */
+    refreshTimeframeChoices(): Promise<void>;
+    /** @internal Check a shortcut, including an unlisted choice. Undefined if the market changed. */
+    isTimeframeAvailable(tf: string): Promise<boolean | undefined>;
     /** (Re)derive the pre/post-market shading bands for this cell's market. The bands
      *  expand locally from the symbol's session vocabulary, so they paint as soon as
      *  metadata is known and follow any pan depth without provider round trips. */
@@ -321,11 +354,6 @@ declare class ChartCell {
     /** The timeframe the chart shows — the requested one, or the fallback while the symbol's
      *  source refuses it (what the topbar shows). */
     get timeframe(): string;
-    private timeframeSource;
-    /** @internal Refresh capabilities when the registry or this cell's market changes. */
-    refreshTimeframeMetadata(force?: boolean): void;
-    /** @internal Resolve a timeframe choice against the capabilities known for this cell. */
-    resolveTimeframeChoice(value: string, fallback?: string): string | null;
     /** The timeframe the user asked for — what the cell persists and the timeframe link
      *  shares. Differs from {@link timeframe} while the symbol's source refuses it. */
     get requestedTimeframe(): string;
@@ -336,6 +364,8 @@ declare class ChartCell {
      *  {@link priceStyle} while the symbol's data cannot draw it (`SymbolInfo.ohlc: false`
      *  rules out candles, bars and Heikin Ashi); it comes back on the next symbol that can. */
     get requestedPriceStyle(): string;
+    /** The workspace timeframe choices the cell's current symbol cannot serve. */
+    unavailableTimeframes(): readonly string[];
     /** The style ids the symbol's data cannot draw — greyed in the style pickers. Empty while
      *  the symbol's facts are unknown. */
     unavailablePriceStyles(): string[];
@@ -425,8 +455,10 @@ declare class ChartCell {
         native?: boolean;
         nativeType?: string;
     }>;
-    /** Add by picker LIBRARY index (natives precede the manifest — mirrors libraryRows). */
-    addFromLibrary(index: number): void;
+    /** Add by picker LIBRARY index (natives precede the manifest — mirrors libraryRows).
+     *  Returns `true` when the added study needs user input configuration (and opened its
+     *  settings dialog), so the caller can close the library picker cleanly. */
+    addFromLibrary(index: number): boolean;
     /** Remove by picker ON-CHART index (native instances precede script instances — mirrors onChartRows). */
     removeFromChart(index: number): void;
     /**
@@ -459,13 +491,34 @@ declare class ChartCell {
      * re-runs the indicator, and a no-op restore must not flicker every native.
      */
     private applyNativeLedgerEntry;
-    addNative(type: string): void;
+    addNative(type: string, opts?: {
+        confirmInputs?: boolean;
+        inputs?: Record<string, InputValue>;
+    }): boolean;
+    /** Active compared symbols on this cell (for the Compare picker's removable chips). */
+    compareItems(): ActiveCompareItem[];
+    /** Overlay a secondary symbol for comparison with an auto-picked distinct color. */
+    addCompare(symbol: string, placement?: ComparePlacement): void;
+    /** Remove one compared symbol by indicator id (enters the undo timeline). */
+    removeCompare(id: string): void;
+    /** Switch the main price scale to percentage mode when adding a shared-scale comparison
+     *  (remembering the prior mode so removing the last comparison can restore it). */
+    private ensurePercentForCompare;
+    /** Whether a comparison sharing the main percent scale is on the chart. */
+    private hasSharedScaleCompare;
+    /** Take the prior price scale a state document carries, once its natives are on the
+     *  chart. Only a shared-scale comparison can release it: without one it would outlive
+     *  the document and overwrite the scale when some later comparison leaves. A document
+     *  that carries none keeps whatever converging to it recorded. */
+    private adoptScaleBeforeCompare;
+    /** Restore the prior price scale once the last shared-scale comparison is removed. */
+    private maybeRestoreScaleAfterCompare;
     private removeNative;
     /** The chart's native instances, insertion order — the picker's on-chart rows and
      *  the removal index space (script instances follow them). */
     private nativeHandles;
     /** Sync mirror of the chart's native instances — the removal handler looks the
-     *  removed id up here (the registry has already forgotten it) to record its type. */
+     *  removed id up here (the registry has already forgotten it) to record its type + inputs. */
     private syncPresentNatives;
     /** Refresh the native catalog (supported/present flags) for this cell's market. */
     refreshNativeCatalog(): void;
@@ -875,6 +928,7 @@ declare class VelaWorkspace {
     /** The side-panel column, shared by the whole grid. */
     private readonly dock;
     private readonly symbolPicker;
+    private readonly comparePicker;
     /** Null when the host disabled it (`indicatorPicker: false`). */
     private readonly indicatorPicker;
     private readonly tfQuick;
@@ -902,6 +956,7 @@ declare class VelaWorkspace {
     private toolDefsBusy;
     /** Favorite timeframes — the shared topbar's quick-switch chips, one set for the grid. */
     private tfFavs;
+    private timeframeSelectionRevision;
     /** Live sync configuration (mutable copy of the option). */
     private readonly syncOpts;
     private readonly persistKey;
@@ -996,6 +1051,7 @@ declare class VelaWorkspace {
      *  WHOLE surface: desktop button, mobile counterpart, keyboard chord. */
     private indicatorsOverride?;
     private screenshotOverride?;
+    private compareOverride?;
     /** The document-level third-party state bag (`state.ext`) — seeded from the restored
      *  document, refreshed by global-scope handler `serialize` calls at snapshot time.
      *  Entries with no registered handler this session ride along verbatim. */
@@ -1457,11 +1513,15 @@ declare class VelaWorkspace {
     /** The topbar style button/menu from the cell, if active: the style it draws and the
      *  styles its symbol's data cannot draw (greyed). */
     private projectCellPriceStyle;
+    /** Project the active cell's unavailable timeframes onto the menu and favorite chips. */
+    private projectCellTimeframes;
+    /** Configured timeframe presets: explicit host option wins, else plugin shell defaults, else built-in. */
+    private resolvedTimeframes;
     /** Trigger ② — a cell's indicator ledger changed: count + picker only if active. */
     private onCellIndicatorsChanged;
-    private projectTimeframeControls;
-    private readonly resolveTimeframeChoice;
-    /** The controls resolve the choice again on activation before passing it here. */
+    /** Check the active market before submitting a desktop shortcut. */
+    private readonly validateTimeframeSelection;
+    /** Timeframe changes routed from the pickers and shortcuts (chip state follows). */
     private setActiveTimeframe;
     /** Star/unstar a timeframe — a WORKSPACE preference (one chip row, whatever the
      *  active cell); the topbar follows and the set persists with the document. */

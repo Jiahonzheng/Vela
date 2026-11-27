@@ -1,5 +1,5 @@
-import { D as DataProvider, P as ProviderInfo, B as BarRange, O as OHLCV, S as SymbolInfo, a as SymbolDescriptor, U as Unsubscribe } from '../DataProvider-DqY7R0hL.cjs';
-import '../types-CsUd831-.cjs';
+import { D as DataProvider, P as ProviderInfo, B as BarRange, O as OHLCV, S as SymbolInfo, a as SymbolDescriptor, U as Unsubscribe } from '../DataProvider-l65c5k9q.cjs';
+import '../types-DXVlW2vL.cjs';
 import '@luxalgo/vela-ui/theme';
 
 /**
@@ -19,6 +19,9 @@ import '@luxalgo/vela-ui/theme';
 declare class CoinbaseProvider implements DataProvider {
     /** Cached symbol enumeration (the products list is large; fetch once). */
     private symbolsPromise;
+    /** The products list once it has LANDED, by id — per-symbol info reads it instead of
+     *  spending a gated request (and the gate's spacing) on `/products/{id}`. */
+    private products;
     /** Shared request gate: caps concurrency, spaces request starts, honors 429 backoff. */
     private readonly gate;
     info(): ProviderInfo;

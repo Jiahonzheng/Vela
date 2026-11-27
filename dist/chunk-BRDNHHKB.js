@@ -1,9 +1,9 @@
-import { LEGEND_AT_TOP_ATTR, priceStyleMessage, SecondClock, clockCorrection, parseSymbol, isGroupRow, defaultMemberOf, groupKeyOf, groupMembers, normalizeSession, Vela, MultiProviderFeed, priceStyleIds, TypedEventBus, registerBuiltinChartTypes, resolveTheme, buildToolbar, createCustomMark, createAttributionMark, DrawingToolbar, relabelAttributionMark, applyAttributionMarkTheme, sharedBarStore, PRICE_STYLE_UNAVAILABLE, BUILTIN_PRICE_STYLES, CANDLE_OVERRIDE_KEYS, withAlpha } from './chunk-OSXGWMCA.js';
-import { injectChromeStyles, tzButtonLabel, resolveTimezone, timezoneMenuRows, SidePanel, sidePanels, DEFAULT_PANEL_ORDER, symbolRanking, iconAt, SESSION_OFF, SESSION_POST, SESSION_PRE, paneScaleAt, widgetActions, composeMenu, priceAxisItems, scaleChoiceOf, priceOnlyState, timeAxisItems, bodyItems, scaleWrites, invertWrite, settingsSectionOf, resolveEngines, legendActionsProviderFor, legendCalloutsProviderFor, drawingActionsProviderFor, normalizeTimezone, isExchangeTimezone, priceStyleApplies, statePersistenceHandlers, resolveTopbarComposition, topbarActionOverride, topbarHas, shellDefaults, rendererDefaults, TOPBAR_BUILTIN_IDS, mobilePlacement, widgetAttachments, getDrawingType, icon, nativeIndicatorEntry, inputDeltas, composeSidebar, svg16 as svg16$1, chartType, categoricalColor } from './chunk-VDJ63WNL.js';
-import { registerIcon, svg16, applyPlotOverlayTokens, ensureUIHost, KeymapManager, isEditableTarget } from './chunk-ARGBUJLO.js';
-import { msg, sourceText, textOf, localizeNumberText, englishTranslator, sliceGraphemes, tickDecimals, LocaleState, pickLocalization, eventTimeText, withValues } from './chunk-VCYHJS6Q.js';
+import { LEGEND_AT_TOP_ATTR, priceStyleMessage, parseSymbol, priceStyleIds, PRICE_STYLE_UNAVAILABLE, BUILTIN_PRICE_STYLES, SecondClock, clockCorrection, isGroupRow, defaultMemberOf, groupKeyOf, groupMembers, normalizeSession, Vela, MultiProviderFeed, compareDescriptor, TypedEventBus, registerBuiltinChartTypes, resolveTheme, buildToolbar, createCustomMark, createAttributionMark, DrawingToolbar, relabelAttributionMark, applyAttributionMarkTheme, sharedBarStore, CANDLE_OVERRIDE_KEYS, withAlpha } from './chunk-JH6BYKFA.js';
+import { resolveTopbarComposition, injectChromeStyles, topbarActionOverride, TOPBAR_BUILTIN_IDS, widgetActions, tzButtonLabel, resolveTimezone, timezoneMenuRows, SidePanel, sidePanels, DEFAULT_PANEL_ORDER, symbolRanking, iconAt, SESSION_OFF, SESSION_POST, SESSION_PRE, paneScaleAt, composeMenu, priceAxisItems, scaleChoiceOf, priceOnlyState, timeAxisItems, bodyItems, scaleWrites, invertWrite, settingsSectionOf, resolveEngines, legendActionsProviderFor, legendCalloutsProviderFor, drawingActionsProviderFor, normalizeTimezone, matchSeriesAdapter, isExchangeTimezone, priceStyleApplies, CATEGORICAL, inputDeltas, statePersistenceHandlers, topbarHas, shellDefaults, rendererDefaults, mobilePlacement, widgetAttachments, chartType, getDrawingType, icon, nativeIndicatorEntry, svg16 as svg16$1, composeSidebar, categoricalColor } from './chunk-E6BPBCTQ.js';
+import { registerIcon, svg16, applyPlotOverlayTokens, ensureUIHost, KeymapManager, isEditableTarget } from './chunk-452ETMSN.js';
+import { msg, sourceText, textOf, localizeNumberText, englishTranslator, sliceGraphemes, tickDecimals, LocaleState, pickLocalization, eventTimeText, withValues } from './chunk-TU3IUIQG.js';
 import { baseOf } from './chunk-W4EJWLEO.js';
-import { timeframeToMs } from './chunk-IXLGXG62.js';
+import { isTickTimeframe, timeframeToMs, isVariableDurationTimeframe } from './chunk-MZKXDQ4O.js';
 import { DropdownMenu } from '@luxalgo/vela-ui/dropdown-menu';
 import { Tooltip } from '@luxalgo/vela-ui/tooltip';
 import { SURFACE_OPEN_EVENT, SURFACE_CLOSE_EVENT, announceSurface } from '@luxalgo/vela-ui/surface-events';
@@ -19,7 +19,6 @@ import { createToaster, toast } from '@luxalgo/vela-ui/toast';
 import { Drawer } from '@luxalgo/vela-ui/drawer';
 
 // src/widget/timeframe.ts
-var TIMEFRAME_UNAVAILABLE = msg("widget.timeframe.unavailable", "This market does not offer that timeframe.");
 var UNIT_MS = {
   S: 1e3,
   MIN: 6e4,
@@ -30,6 +29,7 @@ var UNIT_MS = {
   Y: 31536e6
 };
 var UNIT_NAME = {
+  T: msg("widget.timeframe.ticks", "{count, plural, one {{n} tick} other {{n} ticks}}"),
   S: msg("widget.timeframe.seconds", "{count, plural, one {{n} second} other {{n} seconds}}"),
   MIN: msg("widget.timeframe.minutes", "{count, plural, one {{n} minute} other {{n} minutes}}"),
   H: msg("widget.timeframe.hours", "{count, plural, one {{n} hour} other {{n} hours}}"),
@@ -39,6 +39,7 @@ var UNIT_NAME = {
   Y: msg("widget.timeframe.years", "{count, plural, one {{n} year} other {{n} years}}")
 };
 var UNIT_SHORT = {
+  T: msg("widget.timeframe.short.ticks", "{n}T"),
   S: msg("widget.timeframe.short.seconds", "{n}s"),
   MIN: msg("widget.timeframe.short.minutes", "{n}m"),
   H: msg("widget.timeframe.short.hours", "{n}h"),
@@ -52,7 +53,7 @@ function shortLabel(key, count, i18n) {
 }
 function unitKey(letter) {
   if (letter === "") return "MIN";
-  return letter === "S" || letter === "H" || letter === "D" || letter === "W" || letter === "M" || letter === "Y" ? letter : null;
+  return letter === "T" || letter === "S" || letter === "H" || letter === "D" || letter === "W" || letter === "M" || letter === "Y" ? letter : null;
 }
 var UNIT_MINUTES = {
   MIN: 1,
@@ -63,6 +64,7 @@ var UNIT_MINUTES = {
   Y: 525600
 };
 function canonicalFor(key, count) {
+  if (key === "T") return `${count}T`;
   if (key === "S") return `${count}S`;
   return `${count * UNIT_MINUTES[key]}`;
 }
@@ -77,12 +79,12 @@ function parseTimeframe(text, i18n) {
   if (numStr === "" && key === "MIN") return { valid: false };
   const count = numStr === "" ? 1 : parseInt(numStr, 10);
   if (!Number.isFinite(count) || count < 1) return { valid: false };
-  const ms = count * UNIT_MS[key];
+  const ms = key === "T" ? void 0 : count * UNIT_MS[key];
   return {
     valid: true,
     count,
     unit: key,
-    ms,
+    ...ms !== void 0 ? { ms } : {},
     canonical: canonicalFor(key, count),
     label: textOf(i18n, UNIT_NAME[key], { count, n: localizeNumberText(String(count), i18n) }),
     short: shortLabel(key, count, i18n)
@@ -95,50 +97,23 @@ function chartTimeframeOf(value) {
   if (parsed.count === 1 && (parsed.unit === "D" || parsed.unit === "W" || parsed.unit === "M")) return parsed.unit;
   return parsed.canonical ?? null;
 }
-function calendarTimeframe({ count, unit }) {
-  return unit === "D" || unit === "W" || unit === "M" || unit === "Y" ? count === 1 ? unit : `${count}${unit}` : void 0;
-}
-function timeframeKey(parsed) {
-  return calendarTimeframe(parsed) ?? parsed.canonical;
-}
-function declaredTimeframe(value) {
-  return /[a-z]/.test(value) ? { valid: false } : parseTimeframe(value);
-}
-function resolveTimeframeChoice(value, timeframes, fallback = value) {
-  if (!timeframes) return fallback;
-  const requested = parseTimeframe(value);
-  if (timeframes.list) {
-    const key = timeframeKey(requested);
-    if (key === void 0) return null;
-    const matches = timeframes.list.filter((entry) => timeframeKey(declaredTimeframe(entry)) === key);
-    return matches.includes(value) ? value : matches[0] ?? null;
-  }
-  const finest = declaredTimeframe(timeframes.finest).ms;
-  if (finest === void 0) return fallback;
-  if (requested.ms === void 0 || requested.ms < finest) return null;
-  return calendarTimeframe(requested) ?? fallback;
-}
-function currentTimeframeChoice(options, timeframe, resolve) {
-  if (options.includes(timeframe)) return timeframe;
-  const current = resolve(timeframe);
-  return current === null ? void 0 : options.find((option) => resolve(option) === current);
-}
-function workspaceTimeframeLabel(value, i18n) {
-  const parsed = parseTimeframe(value, i18n);
-  if (parsed.unit === "D" || parsed.unit === "W" || parsed.unit === "M" || parsed.unit === "Y") return parsed.short;
-  return timeframeLabel(value, i18n);
-}
 function timeframeMs(value) {
   const v = String(value ?? "").trim();
   if (!v) return NaN;
   const m = /^(\d*)\s*([a-zA-Z]?)$/.exec(v);
   if (!m) return NaN;
   const key = unitKey((m[2] ?? "").toUpperCase());
-  if (key === null) return NaN;
+  if (key === null || key === "T") return NaN;
   if ((m[1] ?? "") === "" && key === "MIN") return NaN;
   const count = (m[1] ?? "") === "" ? 1 : parseInt(m[1], 10);
   if (!Number.isFinite(count) || count < 1) return NaN;
   return count * UNIT_MS[key];
+}
+function chipRank(tf) {
+  const parsed = parseTimeframe(tf);
+  if (!parsed.valid) return [2, 0];
+  if (parsed.unit === "T") return [0, parsed.count ?? 0];
+  return [1, parsed.ms ?? 0];
 }
 function favoriteTimeframeChips(favorites) {
   const seen = /* @__PURE__ */ new Set();
@@ -149,18 +124,17 @@ function favoriteTimeframeChips(favorites) {
     out.push(tf);
   }
   return out.sort((a, b) => {
-    const ma = timeframeMs(a);
-    const mb = timeframeMs(b);
-    const aOk = Number.isFinite(ma);
-    const bOk = Number.isFinite(mb);
-    if (aOk && bOk && ma !== mb) return ma - mb;
-    if (aOk !== bOk) return aOk ? -1 : 1;
+    const [ga, va] = chipRank(a);
+    const [gb, vb] = chipRank(b);
+    if (ga !== gb) return ga - gb;
+    if (va !== vb) return va - vb;
     return 0;
   });
 }
 function timeframeLabel(value, i18n) {
   const parsed = parseTimeframe(value, i18n);
   if (!parsed.valid) return value;
+  if (parsed.unit === "T") return parsed.short;
   const ms = parsed.ms;
   const order = ["Y", "M", "W", "D", "H", "MIN", "S"];
   for (const key of order) {
@@ -321,8 +295,8 @@ var LayoutPicker = class {
     /** Hover preview (1-based rows/cols), null = show current shape. */
     this.hover = null;
     this.onDocPointerDown = (e) => {
-      const t23 = e.target;
-      if (t23 && (this.layer.contains(t23) || this.opts.trigger.contains(t23))) return;
+      const t24 = e.target;
+      if (t24 && (this.layer.contains(t24) || this.opts.trigger.contains(t24))) return;
       this.close();
     };
     this.onDocKeydown = (e) => {
@@ -683,6 +657,7 @@ function priceStyleIcon(id) {
   return void 0;
 }
 var TEXT2 = {
+  compare: msg("widget.topbar.compare", "Compare or add symbol"),
   timeframes: msg("widget.topbar.timeframes", "Timeframes"),
   indicators: msg("widget.topbar.indicators", "Indicators"),
   undo: msg("widget.topbar.undo", "Undo"),
@@ -695,12 +670,13 @@ var TEXT2 = {
   layout: msg("widget.topbar.layout", "Layout"),
   switchTimeframe: msg("widget.topbar.switchTimeframe", "Switch timeframe to {timeframe}"),
   currentTimeframe: msg("widget.topbar.currentTimeframe", "Timeframe — {timeframe}"),
+  timeframeUnavailable: msg("widget.topbar.timeframeUnavailable", "Not available for this symbol"),
   currentLayout: msg("widget.topbar.currentLayout", "Layout — {layout}"),
   currentStyle: msg("widget.topbar.currentStyle", "Chart style — {style}")
 };
-var TopbarControl = class {
-  constructor(host, opts, resolveTimeframe) {
-    this.resolveTimeframe = resolveTimeframe;
+var Topbar = class {
+  constructor(host, opts, onFavoriteTimeframe) {
+    this.onFavoriteTimeframe = onFavoriteTimeframe;
     this.layoutButton = null;
     this.layoutPicker = null;
     this.layoutId = null;
@@ -722,6 +698,8 @@ var TopbarControl = class {
     this.warnedIconless = /* @__PURE__ */ new Set();
     /** Style ids the current symbol's data cannot draw: listed greyed, not selectable. */
     this.unavailableStyles = /* @__PURE__ */ new Set();
+    /** Timeframe ids the current symbol's data cannot serve: listed greyed, not selectable. */
+    this.unavailableTimeframes = /* @__PURE__ */ new Set();
     this.onHairlineSync = () => {
       if (this.hairlineRaf) return;
       const win = this.el.ownerDocument.defaultView;
@@ -786,6 +764,7 @@ var TopbarControl = class {
     }
     this.setHistoryState(false, false);
     const screenshotBtn = vis("screenshot") && !topbarActionOverride("screenshot") ? tool("vela-widget-screenshot", "camera", TEXT2.screenshot, opts.onScreenshotClick) : null;
+    const compareBtn = vis("compare") && opts.onCompareClick && !topbarActionOverride("compare") ? tool("vela-widget-compare", "circle-plus", TEXT2.compare, opts.onCompareClick) : null;
     const fullscreenBtn = vis("fullscreen") && opts.onFullscreenClick ? tool("vela-widget-fullscreen", "maximize", TEXT2.fullscreen, opts.onFullscreenClick) : null;
     this.alertsBtn = vis("alerts") ? tool("vela-widget-alerts", "bell", TEXT2.alerts) : doc.createElement("button");
     this.alertsBtn.style.position = "relative";
@@ -807,7 +786,7 @@ var TopbarControl = class {
     };
     this.leftActionsSep = sep();
     this.leftActionsSep.hidden = true;
-    const primaries = /* @__PURE__ */ new Set(["symbol", "timeframes", "style", "layout", "indicators"]);
+    const primaries = /* @__PURE__ */ new Set(["symbol", "compare", "timeframes", "style", "layout", "indicators"]);
     const pinSlot = (id, left) => {
       const slot = doc.createElement("span");
       slot.className = "vela-widget-action-pin";
@@ -828,6 +807,8 @@ var TopbarControl = class {
       switch (id) {
         case "symbol":
           return [this.symbolEl];
+        case "compare":
+          return overridden(id, left) ?? (compareBtn ? [compareBtn] : []);
         case "timeframes":
           return [tfGroup];
         case "style":
@@ -854,14 +835,25 @@ var TopbarControl = class {
     };
     const builtin = new Set(TOPBAR_BUILTIN_IDS);
     const sideEls = (list, left) => {
+      const entries = list.map((id) => ({ id, els: elementsFor(id, left) })).filter((e) => e.els.length > 0);
       const out = [];
-      for (const [i, id] of list.entries()) {
-        const els = elementsFor(id, left);
-        if (els.length === 0) continue;
+      for (const [i, entry] of entries.entries()) {
+        const { id, els } = entry;
         const item = [...els];
-        if (primaries.has(id) && i < list.length - 1) item.push(sep());
+        const nextId = entries[i + 1]?.id;
+        const prevId = entries[i - 1]?.id;
+        const joinedWithCompare = id === "symbol" && nextId === "compare";
+        const trailingSep = primaries.has(id) && i < entries.length - 1 && !joinedWithCompare ? sep() : null;
+        if (trailingSep) item.push(trailingSep);
         out.push(...item);
-        if (builtin.has(id) && id !== "actions") this.itemEls.set(id, item);
+        if (builtin.has(id) && id !== "actions") {
+          if (id === "compare" && prevId === "symbol" && trailingSep) {
+            this.itemEls.set(id, [...els]);
+            this.itemEls.get("symbol")?.push(trailingSep);
+          } else {
+            this.itemEls.set(id, item);
+          }
+        }
       }
       return out;
     };
@@ -899,7 +891,7 @@ var TopbarControl = class {
       host,
       i18n: opts.i18n ?? null,
       items: this.tfItems(),
-      onSelect: (id) => this.applyTimeframe(id),
+      onSelect: (id) => opts.onTimeframe(id),
       onFavorite: (id, on) => opts.onTimeframeFavorite?.(id, on),
       // Timeframe labels are two-or-three characters ("1m", "4h", "1D") — the
       // stylesheet's default min-width would leave the list mostly empty.
@@ -928,40 +920,45 @@ var TopbarControl = class {
     this.tfMenu.setItems(this.tfItems());
     this.renderTfChips();
   }
+  /** Grey out unavailable choices in the menu and omit them from the favorite chips. */
+  setUnavailableTimeframes(unavailable = []) {
+    this.unavailableTimeframes = new Set(unavailable);
+    this.tfMenu.setItems(this.tfItems());
+    this.renderTfChips();
+  }
   /** Reflect the favorite-timeframe set — the quick-switch chips and the dropdown stars. */
   setTimeframeFavorites(favs) {
     this.tfFavs = [...favs];
     this.renderTfChips();
     this.tfMenu.setItems(this.tfItems());
   }
-  /** Rebuild the quick-switch chips (current value changed, or the favorite set did). */
+  /** Rebuild the quick-switch chips when the current choice, favorites or availability change. */
   renderTfChips() {
     const doc = this.el.ownerDocument;
     this.tfChipsHost.replaceChildren();
     const stars = this.opts.onTimeframeFavorite !== void 0;
-    const chips = stars ? favoriteTimeframeChips(this.tfFavs).filter((tf) => this.timeframeValue(tf) !== null) : [];
-    const current = this.checkedTimeframe(chips);
-    const shown = current !== void 0 || chips.length === 0 ? chips : [...chips, this.timeframe];
+    const chips = stars ? favoriteTimeframeChips(this.tfFavs.filter((tf) => !this.unavailableTimeframes.has(tf))) : [];
+    const currentIsFav = chips.includes(this.timeframe);
+    const shown = currentIsFav || chips.length === 0 ? chips : [...chips, this.timeframe];
     for (const tf of shown) {
       const b = doc.createElement("button");
       b.className = "vela-widget-tf";
-      const label = this.timeframeDisplay(tf);
+      const label = timeframeLabel(tf, this.i18n);
       b.textContent = label;
-      if (tf === (current ?? this.timeframe)) {
+      if (tf === this.timeframe) {
         b.dataset.current = "1";
         b.setAttribute("aria-current", "true");
       } else {
         b.setAttribute("aria-label", this.t(TEXT2.switchTimeframe, { timeframe: label }));
-        b.addEventListener("click", () => this.applyTimeframe(tf));
+        b.addEventListener("click", () => (this.onFavoriteTimeframe ?? this.opts.onTimeframe)(tf));
       }
       this.tfChipsHost.appendChild(b);
     }
     this.tfCaret.replaceChildren();
     if (chips.length === 0) {
       this.tfCaret.dataset.solo = "1";
-      const label = this.timeframeDisplay(this.timeframe);
-      this.tfCaret.append(doc.createTextNode(label), iconEl("chevron-down", doc));
-      this.tfCaret.setAttribute("aria-label", this.t(TEXT2.currentTimeframe, { timeframe: label }));
+      this.tfCaret.append(doc.createTextNode(timeframeLabel(this.timeframe, this.i18n)), iconEl("chevron-down", doc));
+      this.tfCaret.setAttribute("aria-label", this.t(TEXT2.currentTimeframe, { timeframe: timeframeLabel(this.timeframe, this.i18n) }));
     } else {
       delete this.tfCaret.dataset.solo;
       this.tfCaret.appendChild(iconEl("chevron-down", doc));
@@ -1013,7 +1010,7 @@ var TopbarControl = class {
     this.actionsHost.replaceChildren();
     this.leftActionsHost.replaceChildren();
     for (const pin of this.pinned.values()) pin.host.replaceChildren();
-    for (const t23 of this.actionTooltips) t23.destroy();
+    for (const t24 of this.actionTooltips) t24.destroy();
     this.actionTooltips = [];
     const doc = this.actionsHost.ownerDocument;
     const flowLeft = this.comp.left.includes("actions");
@@ -1074,7 +1071,7 @@ var TopbarControl = class {
    * contributed panels on every `refreshActions()`), then pushes each pressed state.
    */
   setPanelButtons(buttons, onClick) {
-    for (const t23 of this.panelTooltips) t23.destroy();
+    for (const t24 of this.panelTooltips) t24.destroy();
     this.panelTooltips = [];
     this.panelBtns.clear();
     this.panelsHost.replaceChildren();
@@ -1098,7 +1095,7 @@ var TopbarControl = class {
     this.tfMenu.destroy();
     this.styleMenu.destroy();
     this.layoutPicker?.destroy();
-    for (const t23 of [...this.tooltips, ...this.panelTooltips, ...this.actionTooltips]) t23.destroy();
+    for (const t24 of [...this.tooltips, ...this.panelTooltips, ...this.actionTooltips]) t24.destroy();
     this.el.remove();
   }
   /** One icon-only tool button with its kit tooltip, parked in `sink` for disposal. */
@@ -1147,29 +1144,21 @@ var TopbarControl = class {
       if (dx) el.style.transform = `translateX(${dx}px)`;
     }
   }
-  timeframeValue(tf) {
-    return this.resolveTimeframe ? this.resolveTimeframe(tf) : tf;
-  }
-  applyTimeframe(tf) {
-    const value = this.timeframeValue(tf);
-    if (value !== null) this.opts.onTimeframe(value);
-  }
-  timeframeDisplay(tf) {
-    return this.resolveTimeframe ? workspaceTimeframeLabel(tf, this.i18n) : timeframeLabel(tf, this.i18n);
-  }
-  checkedTimeframe(options) {
-    return this.resolveTimeframe ? currentTimeframeChoice(options, this.timeframe, this.resolveTimeframe) : options.find((tf) => tf === this.timeframe);
-  }
   tfItems() {
     const stars = this.opts.onTimeframeFavorite !== void 0;
-    const current = this.checkedTimeframe(this.opts.timeframes);
+    let prevGroup = null;
     return this.opts.timeframes.map((tf) => {
+      const group = timeframeFamily(tf);
+      const separatorBefore = prevGroup !== null && group !== prevGroup;
+      prevGroup = group;
+      const disabled = this.unavailableTimeframes.has(tf);
       return {
         id: tf,
-        label: this.timeframeDisplay(tf),
-        checked: tf === current,
-        ...stars ? { favorite: this.tfFavs.includes(tf) } : {},
-        ...this.timeframeValue(tf) === null ? { disabled: true, title: this.t(TIMEFRAME_UNAVAILABLE) } : {}
+        label: timeframeLabel(tf, this.i18n),
+        checked: tf === this.timeframe,
+        ...separatorBefore ? { separatorBefore: true } : {},
+        ...disabled ? { disabled: true, title: this.t(TEXT2.timeframeUnavailable) } : {},
+        ...stars ? { favorite: this.tfFavs.includes(tf) } : {}
       };
     });
   }
@@ -1184,13 +1173,11 @@ var TopbarControl = class {
     }));
   }
 };
-var Topbar = class extends TopbarControl {
-  constructor(host, opts) {
-    super(host, opts);
-  }
-};
-function createWorkspaceTopbar(host, opts, resolve) {
-  return new TopbarControl(host, opts, resolve);
+function timeframeFamily(tf) {
+  const unit = parseTimeframe(tf).unit;
+  if (unit === "T") return "ticks";
+  if (unit === "S") return "seconds";
+  return "time";
 }
 var RANGE_PRESETS = [
   { id: "1D", tf: "1", preset: "1D", bars: 1500 },
@@ -1554,28 +1541,28 @@ function groupTokenIndex(pane, groupId, memberSlot) {
   return at;
 }
 function placeTokens(tokens, dragged, at) {
-  const isDragged = (t23) => dragged.some((d) => sameToken(d, t23));
+  const isDragged = (t24) => dragged.some((d) => sameToken(d, t24));
   let adjusted = at;
-  tokens.forEach((t23, i) => {
-    if (i < at && isDragged(t23)) adjusted -= 1;
+  tokens.forEach((t24, i) => {
+    if (i < at && isDragged(t24)) adjusted -= 1;
   });
-  const rest = tokens.filter((t23) => !isDragged(t23));
+  const rest = tokens.filter((t24) => !isDragged(t24));
   rest.splice(Math.max(0, Math.min(adjusted, rest.length)), 0, ...dragged);
   return rest;
 }
 function tokensEqual(a, b) {
-  return a.length === b.length && a.every((t23, i) => sameToken(t23, b[i]));
+  return a.length === b.length && a.every((t24, i) => sameToken(t24, b[i]));
 }
 function stackWrites(tokens) {
   const n = tokens.length;
   let candleZ = null;
   const series = [];
   const drawings = [];
-  tokens.forEach((t23, i) => {
+  tokens.forEach((t24, i) => {
     const z = n - i;
-    if (t23.kind === "price") candleZ = z;
-    else if (t23.kind === "indicator") series.push({ id: t23.id, z });
-    else drawings.push({ id: t23.id, z });
+    if (t24.kind === "price") candleZ = z;
+    else if (t24.kind === "indicator") series.push({ id: t24.id, z });
+    else drawings.push({ id: t24.id, z });
   });
   return { candleZ, series, drawings };
 }
@@ -2453,11 +2440,11 @@ var ObjectTree = class extends SidePanel {
     name.title = label;
     el.append(icon2, name);
     if (tag) {
-      const t23 = doc.createElement("span");
-      t23.className = "vela-ot-tag";
-      t23.textContent = tag;
-      t23.title = this.t(TEXT5.ownScaleHint);
-      el.appendChild(t23);
+      const t24 = doc.createElement("span");
+      t24.className = "vela-ot-tag";
+      t24.textContent = tag;
+      t24.title = this.t(TEXT5.ownScaleHint);
+      el.appendChild(t24);
     }
     const acts = doc.createElement("span");
     acts.className = "vela-ot-acts";
@@ -2735,7 +2722,7 @@ var ObjectTree = class extends SidePanel {
       this.groups = drop.kind === "intoGroup" ? assignToGroup(this.groups, drop.groupId, [drag.id]) : removeFromGroups(this.groups, [drag.id]);
     }
     const live = new Map(chart.drawings.all().map((d) => [d.id, d]));
-    const draggedIds = new Set(dragged.flatMap((t23) => t23.kind === "drawing" ? [t23.id] : []));
+    const draggedIds = new Set(dragged.flatMap((t24) => t24.kind === "drawing" ? [t24.id] : []));
     const repaned = [...draggedIds].some((id) => live.get(id)?.paneId !== drop.paneId);
     if (tokensEqual(tokens, placed) && !repaned) return;
     this.writeStack(pass, drop.paneId, placed, draggedIds);
@@ -3063,14 +3050,14 @@ var CSS5 = css`@layer vela.chrome {
 var REFRESH_EVENTS2 = ["bar", "context:changed", "indicator:added", "indicator:removed", "indicator:visibility", "indicator:moved", "pane:changed", "market:changed", "history:complete"];
 var EM_DASH = "—";
 function dataWindowSections(readout, i18n) {
-  const t23 = (m) => textOf(i18n, m);
+  const t24 = (m) => textOf(i18n, m);
   const sections = [];
   if (readout.date || readout.time) {
     sections.push({
-      title: t23(TEXT6.timeSection),
+      title: t24(TEXT6.timeSection),
       lines: [
-        { label: t23(TEXT6.date), value: readout.date || EM_DASH, color: "" },
-        { label: t23(TEXT6.time), value: readout.time || EM_DASH, color: "" }
+        { label: t24(TEXT6.date), value: readout.date || EM_DASH, color: "" },
+        { label: t24(TEXT6.time), value: readout.time || EM_DASH, color: "" }
       ]
     });
   }
@@ -3078,13 +3065,13 @@ function dataWindowSections(readout, i18n) {
   if (ohlc) {
     const color = ohlc.up ? "var(--vela-up)" : "var(--vela-down)";
     const lines = [
-      { label: t23(TEXT6.open), value: ohlc.o, color },
-      { label: t23(TEXT6.high), value: ohlc.h, color },
-      { label: t23(TEXT6.low), value: ohlc.l, color },
-      { label: t23(TEXT6.close), value: ohlc.c, color }
+      { label: t24(TEXT6.open), value: ohlc.o, color },
+      { label: t24(TEXT6.high), value: ohlc.h, color },
+      { label: t24(TEXT6.low), value: ohlc.l, color },
+      { label: t24(TEXT6.close), value: ohlc.c, color }
     ];
-    if (ohlc.vol !== void 0) lines.push({ label: t23(TEXT6.volume), value: ohlc.vol, color });
-    sections.push({ title: t23(TEXT6.priceSection), lines });
+    if (ohlc.vol !== void 0) lines.push({ label: t24(TEXT6.volume), value: ohlc.vol, color });
+    sections.push({ title: t24(TEXT6.priceSection), lines });
   }
   for (const group of readout.groups) {
     sections.push({ title: group.name, lines: group.rows.map((r) => ({ label: r.label, value: r.value, color: r.color })) });
@@ -3213,7 +3200,7 @@ var PanelDock = class {
       try {
         const header = {
           slot: panel.headerSlot,
-          setTitle: (t23) => panel.setTitle(t23),
+          setTitle: (t24) => panel.setTitle(t24),
           get maximized() {
             return panel.maximized;
           },
@@ -3388,8 +3375,8 @@ var TOP_TICKERS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEU
 function parseQuery(raw, venues) {
   const m = raw.match(/^\s*([^\s:]+)\s*[:\s]\s*(.*)$/);
   if (m) {
-    const t23 = m[1].toLowerCase();
-    const scope = venues.includes(t23) ? t23 : onlyOne(venues.filter((v) => v.startsWith(t23)));
+    const t24 = m[1].toLowerCase();
+    const scope = venues.includes(t24) ? t24 : onlyOne(venues.filter((v) => v.startsWith(t24)));
     if (scope) return { scope, term: m[2].trim() };
   }
   return { scope: null, term: raw.trim() };
@@ -3407,7 +3394,7 @@ function filterSymbols(list, query, limit = 100, top = TOP_TICKERS) {
     if (scope) return [...pool].sort((a, b) => a.ticker.localeCompare(b.ticker)).slice(0, limit);
     if (top === false) return pool.slice(0, limit);
     const byTicker = new Map(pool.map((s) => [s.ticker.toUpperCase(), s]));
-    const pinned = top.map((t23) => byTicker.get(t23)).filter((s) => s !== void 0);
+    const pinned = top.map((t24) => byTicker.get(t24)).filter((s) => s !== void 0);
     const rest = pool.filter((s) => !top.includes(s.ticker.toUpperCase()));
     return [...pinned, ...rest].slice(0, limit);
   }
@@ -3417,9 +3404,9 @@ function filterSymbols(list, query, limit = 100, top = TOP_TICKERS) {
   const desc = [];
   const venue = [];
   for (const s of pool) {
-    const t23 = s.ticker.toUpperCase();
-    if (t23.startsWith(q)) prefix.push(s);
-    else if (t23.includes(q)) substr.push(s);
+    const t24 = s.ticker.toUpperCase();
+    if (t24.startsWith(q)) prefix.push(s);
+    else if (t24.includes(q)) substr.push(s);
     else if ((s.description ?? "").toUpperCase().includes(q)) desc.push(s);
     else if (!scope && (venueOf(s)?.toLowerCase().includes(qLower) || s.provider?.toLowerCase().includes(qLower))) venue.push(s);
     if (prefix.length >= limit) break;
@@ -3598,6 +3585,13 @@ var SymbolPicker = class {
     /** The ranked pool cache — `key` fingerprints the raw pool the ranking ran on. */
     this.ranked = null;
     this.ranking = false;
+    /** The dialog is showing, by its own open/close callbacks (set before the open-time
+     *  rebuild runs). A ranking that lands while it is closed repaints nothing: the next
+     *  open rebuilds the rows, so no row icons load for a list nobody sees. */
+    this.shown = false;
+    /** One-shot selection override when opened for an indicator's symbol input rather than
+     *  the main chart; cleared as soon as the dialog closes. */
+    this.pickOverride = null;
     for (const category of opts.categories ?? SYMBOL_PICKER_DEFAULT_CATEGORIES) {
       const { id } = category;
       if (!id.trim() || id === ALL_TAB_ID || this.categories.has(id)) continue;
@@ -3641,6 +3635,7 @@ var SymbolPicker = class {
       flush: true,
       content: (body) => body.append(head, this.list),
       onOpenChange: (open) => {
+        this.shown = open;
         if (open) {
           this.relabel();
           this.input.value = this.seed.toUpperCase();
@@ -3652,6 +3647,7 @@ var SymbolPicker = class {
           }, 0);
         } else {
           this.input.blur();
+          this.pickOverride = null;
         }
         opts.onOpenChange?.(open);
       }
@@ -3690,9 +3686,15 @@ var SymbolPicker = class {
   setSource(source) {
     this.source = source;
   }
-  open(initialQuery = "") {
+  open(initialQuery = "", opts) {
     this.seed = initialQuery;
+    this.pickOverride = opts?.onSelect ?? null;
     this.dialog.show();
+  }
+  /** True while open for a one-shot caller override (e.g. an indicator's symbol input)
+   *  rather than switching the active chart's symbol. */
+  get isPicking() {
+    return this.pickOverride !== null;
   }
   get isOpen() {
     return this.dialog.open;
@@ -3721,7 +3723,10 @@ var SymbolPicker = class {
     if (isGroupRow(s)) {
       target = this.categoryPool === null ? defaultMemberOf(this.pool(), s) ?? s : defaultMemberOf(this.categoryPool, s);
     }
-    if (target) this.select(target.ticker, target.prefix ?? target.provider, this.opts.onSelect);
+    if (!target) return;
+    const handler = this.pickOverride ?? this.opts.onSelect;
+    this.pickOverride = null;
+    this.select(target.ticker, target.prefix ?? target.provider, handler);
   }
   /** Expand/collapse a group row IN PLACE — same query, same page, same scroll; only
    *  the member rows under the group appear or go. */
@@ -3771,7 +3776,7 @@ var SymbolPicker = class {
         this.ranked = { key, result: [...raw] };
       }).finally(() => {
         this.ranking = false;
-        this.refresh();
+        if (this.shown) this.refresh();
       });
     }
     return this.ranked?.result ?? raw;
@@ -3869,13 +3874,13 @@ var SymbolPicker = class {
     const av = tickerIconEl(doc, baseOf(s), s.ticker, "vela-sp-avatar", this.opts.iconFor?.(s));
     const main = doc.createElement("span");
     main.className = "vela-sp-main";
-    const t23 = doc.createElement("span");
-    t23.className = "vela-sp-ticker";
-    t23.textContent = s.ticker;
+    const t24 = doc.createElement("span");
+    t24.className = "vela-sp-ticker";
+    t24.textContent = s.ticker;
     const d = doc.createElement("span");
     d.className = "vela-sp-desc";
     d.textContent = s.description ?? (s.type ?? "");
-    main.append(t23, d);
+    main.append(t24, d);
     row.append(av, main);
     if (isGroupRow(s)) {
       row.dataset.group = "1";
@@ -4159,11 +4164,12 @@ var TEXT9 = {
   title: msg("widget.timeframeQuick.title", "Change timeframe"),
   // The codes are what the field accepts, typed as is in every language.
   example: msg("widget.timeframeQuick.example", "e.g. 15, 4H, D, 3M"),
-  invalid: msg("widget.timeframeQuick.invalid", "Not a timeframe")
+  invalid: msg("widget.timeframeQuick.invalid", "Not a timeframe"),
+  unavailable: msg("widget.topbar.timeframeUnavailable", "Not available for this symbol")
 };
-var TimeframeQuickControl = class {
-  constructor(opts, resolveChoice) {
-    this.resolveChoice = resolveChoice;
+var TimeframeQuick = class {
+  constructor(opts, isAvailable) {
+    this.submission = 0;
     this.i18n = opts.i18n ?? null;
     const doc = (opts.host ?? document.body).ownerDocument;
     injectChromeStyles(STYLE_ID8, CSS8, doc);
@@ -4188,16 +4194,23 @@ var TimeframeQuickControl = class {
       this.input.setSelectionRange(selectionStart, selectionEnd);
       this.renderHint();
     });
-    this.input.addEventListener("keydown", (e) => {
+    this.input.addEventListener("keydown", async (e) => {
       if (e.key !== "Enter") return;
       const parsed = parseTimeframe(this.input.value);
-      const choice = parsed.canonical === void 0 ? null : this.resolveTimeframe(parsed.canonical);
-      if (choice === null) {
-        this.renderHint();
-        return;
+      if (parsed.valid && parsed.canonical !== void 0) {
+        if (isAvailable) {
+          const submission = ++this.submission;
+          const available = await isAvailable(parsed.canonical);
+          if (submission !== this.submission || !this.isOpen || available === void 0) return;
+          if (!available) {
+            this.hint.textContent = this.t(TEXT9.unavailable);
+            this.hint.dataset.invalid = "1";
+            return;
+          }
+        }
+        this.close();
+        opts.onApply(parsed.canonical);
       }
-      this.close();
-      opts.onApply(choice);
     });
   }
   t(text) {
@@ -4237,19 +4250,18 @@ var TimeframeQuickControl = class {
     this.dialog.hide();
   }
   destroy() {
+    ++this.submission;
     this.dialog.destroy();
   }
-  resolveTimeframe(canonical) {
-    return this.resolveChoice ? this.resolveChoice(this.input.value.trim(), canonical) : canonical;
-  }
   renderHint() {
+    ++this.submission;
     const raw = this.input.value.trim();
     const parsed = parseTimeframe(raw, this.i18n);
     if (!raw) {
       this.hint.textContent = this.t(TEXT9.example);
       delete this.hint.dataset.invalid;
-    } else if (parsed.canonical === void 0 || this.resolveTimeframe(parsed.canonical) === null) {
-      this.hint.textContent = this.t(parsed.valid ? TIMEFRAME_UNAVAILABLE : TEXT9.invalid);
+    } else if (!parsed.valid) {
+      this.hint.textContent = this.t(TEXT9.invalid);
       this.hint.dataset.invalid = "1";
     } else {
       this.hint.textContent = parsed.label ?? "";
@@ -4257,14 +4269,6 @@ var TimeframeQuickControl = class {
     }
   }
 };
-var TimeframeQuick = class extends TimeframeQuickControl {
-  constructor(opts) {
-    super(opts);
-  }
-};
-function createWorkspaceTimeframeQuick(opts, resolve) {
-  return new TimeframeQuickControl(opts, resolve);
-}
 var TEXT10 = {
   title: msg("widget.shortcuts.title", "Keyboard shortcuts"),
   mouse: msg("widget.shortcuts.mouse", "Mouse"),
@@ -4334,8 +4338,8 @@ var ShortcutsHelp = class {
   refresh() {
     const doc = this.list.ownerDocument;
     const i18n = this.i18n();
-    const t23 = (m) => i18n.t(m);
-    this.dialog.titleEl.textContent = t23(TEXT10.title);
+    const t24 = (m) => i18n.t(m);
+    this.dialog.titleEl.textContent = t24(TEXT10.title);
     this.dialog.setI18n(i18n);
     this.list.replaceChildren();
     const addCategory = (text) => {
@@ -4371,13 +4375,13 @@ var ShortcutsHelp = class {
       addCategory(category);
       for (const b of bindings) addRow(b.label, b.display);
     }
-    addCategory(t23(TEXT10.mouse));
-    addRow(t23(TEXT10.scroll), [t23(TEXT10.scrollKeys)]);
-    addRow(t23(TEXT10.measure), [t23(TEXT10.measureKeys)]);
-    addRow(t23(TEXT10.erase), [t23(TEXT10.eraseKeys)]);
+    addCategory(t24(TEXT10.mouse));
+    addRow(t24(TEXT10.scroll), [t24(TEXT10.scrollKeys)]);
+    addRow(t24(TEXT10.measure), [t24(TEXT10.measureKeys)]);
+    addRow(t24(TEXT10.erase), [t24(TEXT10.eraseKeys)]);
     const s = doc.createElement("div");
     s.className = "vela-sh-static";
-    s.textContent = t23(this.symbolMenuFromKey ? TEXT10.typing : TEXT10.typingTimeframe);
+    s.textContent = t24(this.symbolMenuFromKey ? TEXT10.typing : TEXT10.typingTimeframe);
     this.list.appendChild(s);
   }
 };
@@ -4399,28 +4403,30 @@ async function resolveIndicators(config, fetchImpl = fetch) {
   } else {
     manifest = config;
   }
-  const out = [];
-  for (const entry of entriesOf(manifest)) {
-    try {
-      let script = entry.script;
-      if (script === void 0 && entry.url !== void 0) {
-        let url = entry.url;
-        try {
-          const base = typeof location !== "undefined" ? new URL(baseUrl ?? ".", location.href) : new URL(baseUrl ?? "");
-          url = new URL(entry.url, base).href;
-        } catch {
+  const resolved = await Promise.all(
+    entriesOf(manifest).map(async (entry) => {
+      try {
+        let script = entry.script;
+        if (script === void 0 && entry.url !== void 0) {
+          let url = entry.url;
+          try {
+            const base = typeof location !== "undefined" ? new URL(baseUrl ?? ".", location.href) : new URL(baseUrl ?? "");
+            url = new URL(entry.url, base).href;
+          } catch {
+          }
+          const res = await fetchImpl(url);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          script = await res.text();
         }
-        const res = await fetchImpl(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        script = await res.text();
+        if (script === void 0) throw new Error("entry has neither script nor url");
+        return { name: entry.name, script, language: entry.language, enabled: entry.enabled !== false, category: entry.category };
+      } catch (err) {
+        console.warn(`[vela] indicator "${entry.name}" skipped:`, err);
+        return null;
       }
-      if (script === void 0) throw new Error("entry has neither script nor url");
-      out.push({ name: entry.name, script, language: entry.language, enabled: entry.enabled !== false, category: entry.category });
-    } catch (err) {
-      console.warn(`[vela] indicator "${entry.name}" skipped:`, err);
-    }
-  }
-  return out;
+    })
+  );
+  return resolved.filter((r) => r !== null);
 }
 var ledgerEntryName = (e) => typeof e === "string" ? e : e.name;
 var ledgerNativeType = (e) => typeof e === "string" ? e : e.type;
@@ -4552,6 +4558,10 @@ function sanitizeCell(raw) {
     for (const key of STATUSLINE_PART_KEYS) if (typeof bag[key] === "boolean") parts[key] = bag[key];
     if (Object.keys(parts).length > 0) out.statuslineParts = parts;
   }
+  if (c.scaleBeforeCompare != null && typeof c.scaleBeforeCompare === "object") {
+    const { mode, log } = c.scaleBeforeCompare;
+    if (typeof mode === "string" && mode && typeof log === "boolean") out.scaleBeforeCompare = { mode, log };
+  }
   if (c.rendererConfig != null && typeof c.rendererConfig === "object") out.rendererConfig = c.rendererConfig;
   if (c.drawings != null && typeof c.drawings === "object") out.drawings = c.drawings;
   const ind = c.indicators;
@@ -4622,10 +4632,10 @@ function sanitizeTrackSizes(raw) {
   const out = {};
   for (const [layoutId, ts] of Object.entries(raw)) {
     if (ts == null || typeof ts !== "object") continue;
-    const t23 = ts;
+    const t24 = ts;
     const entry = {};
     for (const axis of ["cols", "rows"]) {
-      const arr = t23[axis];
+      const arr = t24[axis];
       if (Array.isArray(arr) && arr.length > 0 && arr.every((w) => typeof w === "number" && Number.isFinite(w) && w > 0)) {
         entry[axis] = arr;
       }
@@ -4837,14 +4847,14 @@ function readoutCells(level, readout, i18n) {
   return [{ key: "close", label: level === "compact" ? label("close") : "" }];
 }
 function statuslineMenuItems(parts, chartVisible, i18n) {
-  const t23 = (m) => textOf(i18n, m);
+  const t24 = (m) => textOf(i18n, m);
   return [
-    { id: "part:logo", label: t23(STATUSLINE_PART_LABELS.logo), checked: parts.logo },
-    { id: "part:name", label: t23(STATUSLINE_PART_LABELS.name), checked: parts.name },
-    { id: "part:market", label: t23(STATUSLINE_PART_LABELS.market), checked: parts.market },
-    { id: "part:ohlc", label: t23(STATUSLINE_PART_LABELS.ohlc), checked: parts.ohlc },
-    { id: "part:change", label: t23(STATUSLINE_PART_LABELS.change), checked: parts.change },
-    { id: "chart", label: t23(chartVisible ? TEXT11.hideChart : TEXT11.showChart), separatorBefore: true }
+    { id: "part:logo", label: t24(STATUSLINE_PART_LABELS.logo), checked: parts.logo },
+    { id: "part:name", label: t24(STATUSLINE_PART_LABELS.name), checked: parts.name },
+    { id: "part:market", label: t24(STATUSLINE_PART_LABELS.market), checked: parts.market },
+    { id: "part:ohlc", label: t24(STATUSLINE_PART_LABELS.ohlc), checked: parts.ohlc },
+    { id: "part:change", label: t24(STATUSLINE_PART_LABELS.change), checked: parts.change },
+    { id: "chart", label: t24(chartVisible ? TEXT11.hideChart : TEXT11.showChart), separatorBefore: true }
   ];
 }
 var SHOW_CHART_LABEL = TEXT11.showChart;
@@ -5678,6 +5688,8 @@ var ChartContextMenu = class {
         axisLabels: this.flag("axisLabels"),
         priceLabel: this.flag("priceLabel"),
         countdown: this.flag("countdown"),
+        indicatorValueLabels: this.flag("indicatorValueLabels"),
+        indicatorNameLabels: this.flag("indicatorNameLabels"),
         priceLine: this.flag("currentPriceLine")
       }, this.chart?.i18n);
     }
@@ -5781,7 +5793,7 @@ function civilFormatter(tz) {
 }
 function civilParts(dtf, ms) {
   const parts = dtf.formatToParts(ms);
-  const get = (t23) => parts.find((p) => p.type === t23)?.value ?? "";
+  const get = (t24) => parts.find((p) => p.type === t24)?.value ?? "";
   return {
     weekday: get("weekday"),
     year: Number(get("year")),
@@ -5858,7 +5870,7 @@ var SessionShadingTracker = class {
     this.covered = null;
     this.session = opts.session;
     const tfMs = timeframeMs(opts.timeframe);
-    this.intraday = Number.isFinite(tfMs) && tfMs < DAY_MS;
+    this.intraday = isVariableDurationTimeframe(opts.timeframe) || Number.isFinite(tfMs) && tfMs < DAY_MS;
     this.lastRange = opts.range;
     void data.symbolInfo(symbol).catch(() => void 0).then((si) => {
       if (my !== this.epoch) return;
@@ -5935,8 +5947,8 @@ function nextStatusBoundary(now, w) {
   let next = null;
   for (const ws of [w.regular, w.extended]) {
     for (const [s, e] of ws) {
-      for (const t23 of [s, e]) {
-        if (t23 > now && (next == null || t23 < next)) next = t23;
+      for (const t24 of [s, e]) {
+        if (t24 > now && (next == null || t24 < next)) next = t24;
       }
     }
   }
@@ -6455,10 +6467,14 @@ var ChartCell = class {
     this.sessionAvailableFlag = false;
     /** The symbol of the most recent metadata probe — an older one landing late is dropped. */
     this.metadataProbeSymbol = null;
-    this.timeframeProbe = null;
     /** Latched: the symbol's extended tape wraps midnight (an overnight roll market) —
      *  one extended-hours shading phase instead of the pre/post split. */
     this.sessionOvernightFlag = false;
+    /** The current symbol's metadata, shared by the pickers and quick entry. */
+    this.timeframeMetadata = null;
+    this.timeframeChoicesRevision = 0;
+    /** Timeframe choices the active symbol's source cannot serve. */
+    this.unavailableTfs = null;
     /** Keeps the session shading on the symbol's real calendar (see {@link SessionShadingTracker}). */
     this.sessionShading = new SessionShadingTracker((zones) => this.inner?.renderer.set("sessionZones", zones));
     this.manifest = [];
@@ -6469,9 +6485,14 @@ var ChartCell = class {
      *  registry can't show it and the dehydrated ledger reports the INTENT instead. After
      *  them the chart itself reports an add still waiting for the symbol's facts. */
     this.volumeMayBePending = true;
-    /** Sync mirror of the chart's native instances (id + type) — the removal handler
-     *  looks the removed id up here to learn which type an undo must re-add. */
+    /** Sync mirror of the chart's native instances (id + type + input deltas) — the removal
+     *  handler looks the removed id up here to learn which type and inputs an undo must re-add. */
     this.presentNatives = [];
+    /** Scale state before adding a `'same'` comparison auto-switched the price pane to `'percent'`.
+     *  Restored when the last `'same'` comparison leaves and the pane is still on `'percent'`.
+     *  Rides the state document as `scaleBeforeCompare`: the document's `rendererConfig`
+     *  already says `'percent'`, so nothing else could tell it from the user's own choice. */
+    this.autoPercentPrev = null;
     this.rangeBars = 0;
     this.pendingRange = null;
     /** Last symbol we toasted "no provider serves this" for — once per symbol (the
@@ -6542,6 +6563,7 @@ var ChartCell = class {
     for (const [language, make] of Object.entries(resolveEngines(deps.engines))) this.inner.registerEngine(language, make());
     this.inner.renderer.set("attribution", false);
     this.inner.renderer.set("dialogHost", deps.dialogHost);
+    if (deps.symbolPicker) this.inner.renderer.setSymbolPicker(deps.symbolPicker);
     this.inner.renderer.setLegendActions(legendActionsProviderFor(this.inner, () => deps.context()));
     this.inner.renderer.setLegendCallouts(legendCalloutsProviderFor(this.inner, () => deps.context()));
     this.inner.renderer.setDrawingActions(drawingActionsProviderFor(this.inner, () => deps.context()));
@@ -6560,8 +6582,8 @@ var ChartCell = class {
       this.syncStatuslineColors();
       this.syncPlotOverlayTokens();
     });
-    this.inner.on("theme:changed", (t23) => {
-      this.appTheme = t23;
+    this.inner.on("theme:changed", (t24) => {
+      this.appTheme = t24;
       this.syncPlotOverlayTokens();
     });
     this.syncPlotOverlayTokens();
@@ -6574,6 +6596,7 @@ var ChartCell = class {
       }
       this.pendingManifestNames = [...seed.indicators.manifest];
     }
+    this.adoptScaleBeforeCompare(seed.scaleBeforeCompare);
     this.volumeIntent = seed.indicators ? seed.indicators.natives.some((e) => ledgerNativeType(e) === "volume") : deps.volume;
     this.extState = { ...seed.ext ?? {} };
     this.inner.on("load:end", () => {
@@ -6597,7 +6620,6 @@ var ChartCell = class {
     this.inner.on("load:end", () => {
       this.watermark?.setLoading(false);
       this.refreshSessionShading();
-      this.refreshTimeframeMetadata();
     });
     this.inner.on("viewport:changed", (range) => this.sessionShading.updateRange(range));
     this.applyTimezone();
@@ -6628,7 +6650,6 @@ var ChartCell = class {
         this.statusline?.setMeta(this.timeframe, this.inner.data.displayPrefix(this.state.symbol) ?? this.state.provider ?? "");
       }
       this.refreshSymbolMetadata();
-      this.refreshTimeframeMetadata();
       if (this.inner && this.state.symbol) this.marketStatus?.track(this.inner.data, this.state.symbol);
     });
     this.syncStatuslineColors();
@@ -6659,7 +6680,15 @@ var ChartCell = class {
       this.syncPresentNatives();
       this.refreshNativeCatalog();
     });
-    this.inner.on("indicator:inputs", () => this.deps.onStateDirty());
+    this.inner.on("indicator:inputs", ({ id: id2 }) => {
+      this.syncPresentNatives();
+      const h = this.nativeHandles().find((n) => n.id === id2);
+      if (h?.nativeType === "compare") {
+        if ((h.inputValues().scale ?? "same") === "same") this.ensurePercentForCompare();
+        else this.maybeRestoreScaleAfterCompare();
+      }
+      this.deps.onStateDirty();
+    });
     this.inner.on("indicator:visibility", () => this.deps.onStateDirty());
     this.inner.on("indicator:removed", ({ id: id2 }) => {
       if (this.destroyed) return;
@@ -6678,11 +6707,13 @@ var ChartCell = class {
       } else {
         const gone = this.presentNatives.find((n) => n.id === id2);
         if (gone) {
-          const { type } = gone;
+          const { type, inputs } = gone;
           let revived = null;
           this.history.push({
             undo: () => {
-              revived = this.inner?.addNativeIndicator(type) ?? null;
+              revived = this.inner?.addNativeIndicator(type, inputs ? { inputs } : void 0) ?? null;
+              if (type === "compare" && (inputs?.scale ?? "same") === "same") this.ensurePercentForCompare();
+              this.syncPresentNatives();
               this.refreshNativeCatalog();
             },
             redo: () => {
@@ -6691,6 +6722,7 @@ var ChartCell = class {
               this.refreshNativeCatalog();
             }
           });
+          if (type === "compare") this.maybeRestoreScaleAfterCompare();
         }
       }
       this.syncPresentNatives();
@@ -6720,7 +6752,6 @@ var ChartCell = class {
     this.state.provider = parseSymbol(symbol).provider ?? void 0;
     if (!this.fallback) this.state.timeframe = timeframe;
     this.state.session = normalizeSession(this.inner?.market.session);
-    this.refreshTimeframeMetadata();
     this.watermark?.update(symbol, timeframe);
     this.statusline?.setSymbol(symbol);
     this.statusline?.setMeta(timeframe, this.inner?.data.displayPrefix(symbol) ?? this.state.provider ?? "");
@@ -6777,12 +6808,18 @@ var ChartCell = class {
     const chart = this.inner;
     if (!chart || !symbol) return;
     this.metadataProbeSymbol = symbol;
-    void chart.data.symbolInfo(symbol).then((si) => {
+    const market = this.timeframeInfoSymbol(symbol);
+    const infoSymbol = market ?? symbol;
+    void chart.data.symbolInfo(infoSymbol).then((si) => {
       if (this.inner !== chart || this.metadataProbeSymbol !== symbol) return;
       if (si === void 0 && retry) {
         void chart.data.ready().then(() => {
           if (this.inner === chart && this.metadataProbeSymbol === symbol) this.refreshSymbolMetadata(symbol, false);
         });
+        return;
+      }
+      if (this.timeframeInfoSymbol(symbol) !== market) {
+        this.refreshSymbolMetadata(symbol, false);
         return;
       }
       if (this.state.symbol !== symbol) return;
@@ -6801,7 +6838,104 @@ var ChartCell = class {
         this.pushSettingsSections();
       }
       this.refreshSessionShading();
+      this.timeframeMetadata = { symbol, market, info: market === null ? void 0 : si };
+      void this.refreshTimeframeChoices();
     });
+  }
+  /** Re-probe provider metadata after the shared provider registry changes. */
+  refreshTimeframeMetadata() {
+    this.refreshSymbolMetadata();
+  }
+  /** Resolve a provider-qualified metadata key when the current listing is unambiguous. */
+  timeframeInfoSymbol(symbol) {
+    const feed = this.deps.feed;
+    if (!this.inner || this.inner.market.offline || !(feed instanceof MultiProviderFeed)) return null;
+    const resolved = feed.resolveUnambiguousSymbol(symbol);
+    return resolved ? `${resolved.provider}:${resolved.ticker}` : null;
+  }
+  /** Registered series adapters take precedence over the provider's symbol metadata. */
+  timeframeAvailabilityFor(chart, market, si, session) {
+    const resolved = market ? chart.data.resolve(market) : null;
+    const provider = resolved ? chart.data.providerInstance(resolved.provider) : void 0;
+    const providerInfo = provider?.info?.();
+    const providerHasTicks = providerInfo?.supportedTimeframes?.some((t24) => isTickTimeframe(t24)) === true;
+    const siList = si?.timeframes?.list?.map((t24) => chartTimeframeOf(t24)).filter((t24) => t24 !== null);
+    const siFinestMs = si?.timeframes?.finest !== void 0 ? timeframeMs(si.timeframes.finest) : NaN;
+    const siHasTicks = si?.timeframes?.ticks === true || si?.["has_ticks"] === true;
+    return async (tf) => {
+      const adapter = resolved && provider ? matchSeriesAdapter(tf, provider, resolved.provider) : void 0;
+      if (adapter?.supports && resolved && provider) {
+        try {
+          return await adapter.supports(
+            {
+              providerName: resolved.provider,
+              provider,
+              ticker: resolved.ticker,
+              session,
+              symbolInfo: async () => si
+            },
+            tf
+          );
+        } catch {
+          return false;
+        }
+      }
+      if (isTickTimeframe(tf)) {
+        const inList = siList?.includes(chartTimeframeOf(tf) ?? tf) === true;
+        return si === void 0 || siHasTicks || inList || providerHasTicks;
+      }
+      if (siList) return siList.includes(chartTimeframeOf(tf) ?? tf);
+      const tfMs = timeframeMs(tf);
+      return !(Number.isFinite(siFinestMs) && Number.isFinite(tfMs) && tfMs < siFinestMs);
+    };
+  }
+  /** @internal Reproject workspace presets and favorites after metadata or saved choices change. */
+  async refreshTimeframeChoices() {
+    const chart = this.inner;
+    const metadata = this.timeframeMetadata;
+    const symbol = this.symbol;
+    if (!chart || metadata?.symbol !== symbol) return;
+    const session = this.session;
+    if (chart.market.offline) {
+      if (this.unavailableTimeframes().length > 0) {
+        this.unavailableTfs = { symbol, session, choices: [] };
+        this.deps.onTimeframesShown?.(this.id);
+      }
+      return;
+    }
+    const revision = ++this.timeframeChoicesRevision;
+    const isAvailable = this.timeframeAvailabilityFor(chart, metadata.market, metadata.info, session);
+    const next = [];
+    for (const tf of this.deps.timeframes?.() ?? []) {
+      if (!await isAvailable(tf)) next.push(tf);
+      if (revision !== this.timeframeChoicesRevision || this.inner !== chart || this.metadataProbeSymbol !== symbol || this.session !== session) return;
+    }
+    const previous = this.unavailableTimeframes();
+    if (next.length === previous.length && next.every((v, i) => v === previous[i])) return;
+    this.unavailableTfs = { symbol, session, choices: next };
+    this.deps.onTimeframesShown?.(this.id);
+  }
+  /** @internal Check a shortcut, including an unlisted choice. Undefined if the market changed. */
+  async isTimeframeAvailable(tf) {
+    const chart = this.inner;
+    if (!chart) return void 0;
+    const symbol = this.symbol;
+    const chartMarket = chart.market;
+    if ((chartMarket.symbol ?? symbol) !== symbol) return void 0;
+    const isCurrent = () => {
+      const current = chart.market;
+      return this.inner === chart && this.symbol === symbol && current.symbol === chartMarket.symbol && current.session === chartMarket.session && current.timeframe === chartMarket.timeframe && current.offline === chartMarket.offline;
+    };
+    if (chartMarket.offline) return isCurrent() ? true : void 0;
+    let sourceMarket = this.timeframeInfoSymbol(symbol);
+    if (symbol && sourceMarket === null && !chart.data.resolve(symbol)) await chart.data.ready();
+    if (!isCurrent()) return void 0;
+    sourceMarket = this.timeframeInfoSymbol(symbol);
+    const info = sourceMarket === null ? void 0 : await chart.data.symbolInfo(sourceMarket).catch(() => void 0);
+    if (!isCurrent() || this.timeframeInfoSymbol(symbol) !== sourceMarket) return void 0;
+    const isAvailable = this.timeframeAvailabilityFor(chart, sourceMarket, info, chartMarket.session ?? "regular");
+    const available = await isAvailable(tf);
+    return isCurrent() && this.timeframeInfoSymbol(symbol) === sourceMarket ? available : void 0;
   }
   /** (Re)derive the pre/post-market shading bands for this cell's market. The bands
    *  expand locally from the symbol's session vocabulary, so they paint as soon as
@@ -7082,46 +7216,6 @@ var ChartCell = class {
   get timeframe() {
     return this.fallback?.timeframe ?? this.state.timeframe ?? "60";
   }
-  timeframeSource() {
-    const feed = this.deps.feed;
-    if (!this.inner || this.inner.market.offline || !this.symbol || !(feed instanceof MultiProviderFeed)) return null;
-    const source = feed.resolveUnambiguousSymbol(this.symbol);
-    if (!source) return null;
-    const provider = feed.providerInstance(source.provider);
-    if (!provider) return null;
-    return { market: `${source.provider}:${source.ticker}`, provider };
-  }
-  /** @internal Refresh capabilities when the registry or this cell's market changes. */
-  refreshTimeframeMetadata(force = false) {
-    const chart = this.inner;
-    const probe = this.timeframeSource();
-    const sameSource = probe?.market === this.timeframeProbe?.market && probe?.provider === this.timeframeProbe?.provider;
-    if (sameSource && (!force || !probe)) return;
-    this.timeframeProbe = probe;
-    if (!sameSource && this.marketTimeframes !== void 0) {
-      this.marketTimeframes = void 0;
-      this.deps.onTimeframesChanged?.(this.id);
-    }
-    if (!chart || !probe) return;
-    void chart.data.symbolInfo(probe.market).then((info) => {
-      if (this.inner !== chart || probe !== this.timeframeProbe) return;
-      const current = this.timeframeSource();
-      if (probe.market !== current?.market || probe.provider !== current.provider) return;
-      if (info === void 0) this.timeframeProbe = null;
-      if (this.marketTimeframes === info?.timeframes) return;
-      this.marketTimeframes = info?.timeframes;
-      this.deps.onTimeframesChanged?.(this.id);
-    }, () => {
-      if (probe === this.timeframeProbe && this.marketTimeframes === void 0) this.timeframeProbe = null;
-    });
-  }
-  /** @internal Resolve a timeframe choice against the capabilities known for this cell. */
-  resolveTimeframeChoice(value, fallback = value) {
-    const source = this.timeframeSource();
-    const probe = this.timeframeProbe;
-    const timeframes = source && probe?.market === source.market && probe.provider === source.provider ? this.marketTimeframes : void 0;
-    return resolveTimeframeChoice(value, timeframes, fallback);
-  }
   /** The timeframe the user asked for — what the cell persists and the timeframe link
    *  shares. Differs from {@link timeframe} while the symbol's source refuses it. */
   get requestedTimeframe() {
@@ -7139,6 +7233,11 @@ var ChartCell = class {
   get requestedPriceStyle() {
     const live = this.inner?.renderer.get("priceStyle");
     return typeof live === "string" ? live : this.state.priceStyle ?? "candles";
+  }
+  /** The workspace timeframe choices the cell's current symbol cannot serve. */
+  unavailableTimeframes() {
+    const unavailable = this.unavailableTfs;
+    return unavailable?.symbol === this.symbol && unavailable.session === this.session ? unavailable.choices : [];
   }
   /** The style ids the symbol's data cannot draw — greyed in the style pickers. Empty while
    *  the symbol's facts are unknown. */
@@ -7196,7 +7295,7 @@ var ChartCell = class {
     const asked = timeframeLabel(e.timeframe, i18n);
     const to = chartTimeframeOf(e.default) ?? chartTimeframeOf(e.finest);
     const again = this.fallback !== null && this.fallback.symbol === e.symbol && this.fallback.timeframe === e.timeframe;
-    if (to === null || again || timeframeMs(to) === timeframeMs(e.timeframe)) {
+    if (to === null || again || to === e.timeframe || timeframeMs(to) === timeframeMs(e.timeframe)) {
       this.deps.toast(textOf(i18n, TEXT14.unavailable, { symbol, timeframe: asked }), "error", 6e3);
       return;
     }
@@ -7398,14 +7497,15 @@ var ChartCell = class {
       ...this.instances.map((it) => ({ name: it.entry.name, language: it.entry.language }))
     ];
   }
-  /** Add by picker LIBRARY index (natives precede the manifest — mirrors libraryRows). */
+  /** Add by picker LIBRARY index (natives precede the manifest — mirrors libraryRows).
+   *  Returns `true` when the added study needs user input configuration (and opened its
+   *  settings dialog), so the caller can close the library picker cleanly. */
   addFromLibrary(index) {
     const natives = this.supportedNatives();
-    if (index < natives.length) this.addNative(natives[index].type);
-    else {
-      const entry = this.manifest[index - natives.length];
-      if (entry) this.addManifestInstance(entry);
-    }
+    if (index < natives.length) return this.addNative(natives[index].type, { confirmInputs: true });
+    const entry = this.manifest[index - natives.length];
+    if (entry) this.addManifestInstance(entry);
+    return false;
   }
   /** Remove by picker ON-CHART index (native instances precede script instances — mirrors onChartRows). */
   removeFromChart(index) {
@@ -7501,14 +7601,16 @@ var ChartCell = class {
     const visible = !(typeof entry === "object" && entry.hidden);
     if (handle.visible !== visible) handle.setVisible(visible);
   }
-  addNative(type) {
+  addNative(type, opts) {
     const chart = this.inner;
-    if (!chart) return;
+    if (!chart) return false;
     const before = new Set(chart.indicators().map((h) => h.id));
-    let added = chart.addNativeIndicator(type);
+    const inputs = opts?.inputs;
+    if (type === "compare" && (inputs?.scale ?? "same") === "same") this.ensurePercentForCompare();
+    let added = chart.addNativeIndicator(type, inputs ? { inputs } : void 0);
     this.syncPresentNatives();
     this.refreshNativeCatalog();
-    if (before.has(added.id)) return;
+    if (before.has(added.id)) return false;
     this.history.push({
       undo: () => {
         added?.remove();
@@ -7516,10 +7618,92 @@ var ChartCell = class {
         this.refreshNativeCatalog();
       },
       redo: () => {
-        added = this.inner?.addNativeIndicator(type) ?? null;
+        added = this.inner?.addNativeIndicator(type, inputs ? { inputs } : void 0) ?? null;
+        if (type === "compare" && (inputs?.scale ?? "same") === "same") this.ensurePercentForCompare();
+        this.syncPresentNatives();
         this.refreshNativeCatalog();
       }
     });
+    if (opts?.confirmInputs) {
+      const values = added.inputValues();
+      const needsConfig = added.inputs.some((inp) => inp.confirm && String(values[inp.key] ?? inp.defval ?? "") === "");
+      if (needsConfig) {
+        const targetId = added.id;
+        const off = added.on("ready", () => {
+          off();
+          if (!this.destroyed && this.inner === chart) chart.renderer.openIndicatorSettings(targetId);
+        });
+        return true;
+      }
+    }
+    return false;
+  }
+  /** Active compared symbols on this cell (for the Compare picker's removable chips). */
+  compareItems() {
+    const out = [];
+    const defaultTitle = textOf(this.inner?.i18n, compareDescriptor.title);
+    for (const h of this.nativeHandles()) {
+      if (h.nativeType !== "compare") continue;
+      const vals = h.inputValues();
+      const symbol = typeof vals.symbol === "string" ? vals.symbol : "";
+      const color = typeof vals.color === "string" && vals.color ? vals.color : CATEGORICAL[0];
+      const fallback = parseSymbol(symbol).ticker || symbol;
+      const title = h.title && h.title !== defaultTitle ? h.title : fallback;
+      out.push({ id: h.id, symbol, title, color });
+    }
+    return out;
+  }
+  /** Overlay a secondary symbol for comparison with an auto-picked distinct color. */
+  addCompare(symbol, placement = "same") {
+    const chart = this.inner;
+    if (!chart || !symbol.trim()) return;
+    const used = new Set(this.compareItems().map((c) => c.color.toLowerCase()));
+    const color = CATEGORICAL.find((c) => !used.has(c.toLowerCase())) ?? CATEGORICAL[this.compareItems().length % CATEGORICAL.length];
+    this.addNative("compare", { inputs: { symbol, color, scale: placement } });
+  }
+  /** Remove one compared symbol by indicator id (enters the undo timeline). */
+  removeCompare(id) {
+    const handle = this.nativeHandles().find((h) => h.id === id && h.nativeType === "compare");
+    if (handle) this.removeNative(handle);
+  }
+  /** Switch the main price scale to percentage mode when adding a shared-scale comparison
+   *  (remembering the prior mode so removing the last comparison can restore it). */
+  ensurePercentForCompare() {
+    const chart = this.inner;
+    if (!chart) return;
+    const mode = chart.renderer.get("scaleMode");
+    const log = Boolean(chart.renderer.get("logScale"));
+    if (mode === "percent" || mode === "indexed") {
+      if (log) chart.renderer.set("logScale", false);
+      return;
+    }
+    this.autoPercentPrev ?? (this.autoPercentPrev = { mode: typeof mode === "string" ? mode : "price", log });
+    if (log) chart.renderer.set("logScale", false);
+    chart.renderer.set("scaleMode", "percent");
+  }
+  /** Whether a comparison sharing the main percent scale is on the chart. */
+  hasSharedScaleCompare() {
+    return this.nativeHandles().some((h) => h.nativeType === "compare" && (h.inputValues().scale ?? "same") === "same");
+  }
+  /** Take the prior price scale a state document carries, once its natives are on the
+   *  chart. Only a shared-scale comparison can release it: without one it would outlive
+   *  the document and overwrite the scale when some later comparison leaves. A document
+   *  that carries none keeps whatever converging to it recorded. */
+  adoptScaleBeforeCompare(prev) {
+    if (!this.hasSharedScaleCompare()) this.autoPercentPrev = null;
+    else if (prev) this.autoPercentPrev = { mode: prev.mode, log: prev.log };
+  }
+  /** Restore the prior price scale once the last shared-scale comparison is removed. */
+  maybeRestoreScaleAfterCompare() {
+    const chart = this.inner;
+    const prev = this.autoPercentPrev;
+    if (!chart || !prev) return;
+    if (this.hasSharedScaleCompare()) return;
+    this.autoPercentPrev = null;
+    if (chart.renderer.get("scaleMode") === "percent") {
+      chart.renderer.set("scaleMode", prev.mode);
+      if (prev.log) chart.renderer.set("logScale", true);
+    }
   }
   removeNative(handle) {
     handle.remove();
@@ -7531,9 +7715,12 @@ var ChartCell = class {
     return this.inner?.indicators().filter((h) => h.nativeType !== void 0) ?? [];
   }
   /** Sync mirror of the chart's native instances — the removal handler looks the
-   *  removed id up here (the registry has already forgotten it) to record its type. */
+   *  removed id up here (the registry has already forgotten it) to record its type + inputs. */
   syncPresentNatives() {
-    this.presentNatives = this.nativeHandles().map((h) => ({ id: h.id, type: h.nativeType }));
+    this.presentNatives = this.nativeHandles().map((h) => {
+      const inputs = inputDeltas(h.inputs, h.inputValues());
+      return inputs ? { id: h.id, type: h.nativeType, inputs } : { id: h.id, type: h.nativeType };
+    });
   }
   /** Refresh the native catalog (supported/present flags) for this cell's market. */
   refreshNativeCatalog() {
@@ -7569,7 +7756,7 @@ var ChartCell = class {
       cellId: this.id,
       chart: this.chart,
       addIndicator: (entry) => this.history.silently(() => this.addExternalIndicator(entry)),
-      addNativeIndicator: (type) => this.history.silently(() => this.addNative(type))
+      addNativeIndicator: (type, options) => this.history.silently(() => this.addNative(type, options))
     };
   }
   /**
@@ -7626,8 +7813,10 @@ var ChartCell = class {
     for (const [part, visible] of statuslinePartEntries(cs.statuslineParts)) {
       if (this.statusline && this.statusline.partVisible(part) !== visible) this.setStatuslinePart(part, visible);
     }
+    this.autoPercentPrev = null;
     if (cs.rendererConfig != null) this.inner.renderer.applyConfig(cs.rendererConfig);
     if (cs.indicators) this.applyIndicatorLedger(cs.indicators);
+    this.adoptScaleBeforeCompare(cs.scaleBeforeCompare);
     this.extState = { ...cs.ext ?? {} };
     this.restorePersistedExt();
     const symbol = prefixedSymbol(cs);
@@ -7671,6 +7860,7 @@ var ChartCell = class {
       indicatorTitles: this.indicatorTitlesOn,
       indicatorValues: this.indicatorValuesOn,
       ...statuslineParts ? { statuslineParts } : {},
+      ...this.autoPercentPrev ? { scaleBeforeCompare: { ...this.autoPercentPrev } } : {},
       rendererConfig: this.inner?.renderer.getConfig() ?? void 0,
       drawings: this.inner ? this.inner.drawings.toJSON() : void 0,
       // Natives from the chart's SYNC registry read — an async catalog mirror here
@@ -7853,8 +8043,8 @@ var WorkspaceReplay = class {
     const cells = this.host.cells();
     let next = Infinity;
     for (const c of cells) {
-      const t23 = c.chart.replay.state.nextTime;
-      if (t23 != null) next = Math.min(next, barClose(t23, c.chart.market.timeframe));
+      const t24 = c.chart.replay.state.nextTime;
+      if (t24 != null) next = Math.min(next, barClose(t24, c.chart.market.timeframe));
     }
     if (!Number.isFinite(next)) return false;
     this.stepping = true;
@@ -7862,8 +8052,8 @@ var WorkspaceReplay = class {
       for (const c of cells) {
         const tf = c.chart.market.timeframe;
         for (let n = 0; n < MAX_BARS_PER_STEP; n += 1) {
-          const t23 = c.chart.replay.state.nextTime;
-          if (t23 == null || barClose(t23, tf) > next) break;
+          const t24 = c.chart.replay.state.nextTime;
+          if (t24 == null || barClose(t24, tf) > next) break;
           if (!c.chart.replay.step()) break;
         }
       }
@@ -8268,10 +8458,10 @@ var SplitterLayer = class {
     this.container.appendChild(el);
     return el;
   }
-  place(el, axis, index, css23) {
+  place(el, axis, index, css24) {
     el.dataset.axis = axis;
     el.dataset.index = String(index);
-    el.style.cssText = `position:absolute;z-index:30;${css23}`;
+    el.style.cssText = `position:absolute;z-index:30;${css24}`;
   }
   onDown(el, e) {
     const axis = el.dataset.axis;
@@ -8309,8 +8499,520 @@ var SplitterLayer = class {
     el.addEventListener("pointercancel", up);
   }
 };
-var STYLE_ID13 = "vela-widget-toast";
+var TABS = [
+  { id: "all", label: msg("widget.symbolPicker.tab.all", "All") },
+  { id: "stocks", label: msg("widget.symbolPicker.tab.stocks", "Stocks") },
+  { id: "etfs", label: msg("widget.symbolPicker.tab.etfs", "ETFs") },
+  { id: "crypto", label: msg("widget.symbolPicker.tab.crypto", "Crypto") },
+  { id: "futures", label: msg("widget.symbolPicker.tab.futures", "Futures") },
+  { id: "forex", label: msg("widget.symbolPicker.tab.forex", "Forex") },
+  { id: "commodities", label: msg("widget.symbolPicker.tab.commodities", "Commodities") }
+];
+var TAB_TYPES = {
+  crypto: ["crypto"],
+  stocks: ["stock"],
+  etfs: ["etf"],
+  futures: ["futures", "root"],
+  forex: ["forex"],
+  commodities: ["commodity"]
+};
+var PLACEMENTS = [
+  { id: "same", label: msg("widget.comparePicker.placement.same", "Same % scale") },
+  { id: "new-scale", label: msg("widget.comparePicker.placement.newScale", "New price scale") },
+  { id: "new-pane", label: msg("widget.comparePicker.placement.newPane", "New pane") }
+];
+var TEXT15 = {
+  title: msg("widget.comparePicker.title", "Compare symbol"),
+  search: msg("widget.comparePicker.search", "Search symbol to compare…"),
+  noMatch: msg("widget.symbolPicker.noMatch", "No symbols match."),
+  empty: msg("widget.symbolPicker.empty", "No symbols available yet."),
+  showContracts: msg("widget.symbolPicker.showContracts", "Show contracts"),
+  remove: msg("widget.comparePicker.remove", "Remove comparison")
+};
+var TOP_TICKERS2 = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "LINKUSDT"];
+var PAGE2 = 100;
+function dedupeSymbols2(list) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const s of list) {
+    const key = `${(s.prefix ?? s.provider ?? "").toLowerCase()}:${s.ticker.toUpperCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out;
+}
+var STYLE_ID13 = "vela-widget-comparepicker";
 var CSS13 = css`@layer vela.chrome {
+
+.vela-cp-head { flex: none; padding: ${t.space[4]} ${t.space[4]} 0; }
+.vela-cp-searchrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 40px;
+    padding: 0 12px;
+    background: ${t.surface.elev};
+    border: 1px solid ${t.border};
+    border-radius: ${t.radius.md};
+}
+.vela-cp-searchrow:focus-within { border-color: ${t.border.strong}; }
+.vela-cp-searchrow .vela-icon { color: ${t.fg.muted}; }
+.vela-cp-input {
+    flex: 1;
+    background: transparent;
+    color: ${t.fg};
+    border: none;
+    font-size: 14px;
+    outline: 2px solid transparent;
+    text-transform: uppercase;
+}
+.vela-cp-input::placeholder { text-transform: none; }
+.vela-cp-active {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-block-start: 10px;
+}
+.vela-cp-active:empty { display: none; }
+.vela-cp-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    padding-inline: 8px 4px;
+    border-radius: ${t.radius.sm};
+    background: ${t.surface.elev};
+    border: 1px solid ${t.border};
+    color: ${t.fg.bright};
+    font-size: 12px;
+    font-weight: 600;
+}
+.vela-cp-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex: none;
+}
+.vela-cp-chip-x {
+    all: unset;
+    box-sizing: border-box;
+    width: 18px;
+    height: 18px;
+    border-radius: ${t.radius.sm};
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: ${t.fg.muted};
+}
+.vela-cp-chip-x:hover { background: ${t.hover}; color: ${t.fg.bright}; }
+.vela-cp-chip-x .vela-icon { width: 12px; height: 12px; font-size: 12px; }
+.vela-cp-tabs { display: flex; gap: 14px; margin: 12px 2px 0; border-block-end: 1px solid ${t.border}; padding-block-end: 8px; }
+.vela-cp-list {
+    min-height: 0;
+    margin: ${t.space[2]} ${t.space[4]} ${t.space[4]};
+    max-height: 46vh;
+    overflow: auto;
+}
+[data-layout='mobile'] .vela-cp-tabs { overflow-x: auto; scrollbar-width: none; gap: 6px; }
+[data-layout='mobile'] .vela-cp-tabs::-webkit-scrollbar { display: none; }
+[data-layout='mobile'] .vela-cp-tabs > .vela-tab { flex: none; padding: 7px 10px; }
+[data-layout='mobile'] .vela-cp-list { flex: 1 1 auto; max-height: none; margin-block-end: 0; }
+.vela-cp-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 7px 10px;
+    border-radius: ${t.radius.md};
+    cursor: pointer;
+}
+.vela-cp-row:hover, .vela-cp-row[data-highlighted] { background: ${t.hover}; }
+.vela-cp-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: ${t.fg.onFill};
+    font-size: ${t.fontSize.md};
+    font-weight: 700;
+}
+.vela-cp-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.vela-cp-ticker { font-weight: 700; color: ${t.fg.bright}; font-size: 14px; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vela-cp-desc { color: ${t.fg.muted}; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vela-cp-badge {
+    flex: none;
+    padding: 2px 8px;
+    border-radius: ${t.radius.sm};
+    background: ${t.surface.elev};
+    border: 1px solid ${t.border};
+    color: ${t.fg.muted};
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+.vela-cp-actions {
+    display: none;
+    flex: none;
+    align-items: center;
+    gap: 4px;
+}
+.vela-cp-row:hover .vela-cp-actions { display: inline-flex; }
+.vela-cp-row:hover .vela-cp-badge { display: none; }
+[data-layout='mobile'] .vela-cp-row:hover .vela-cp-actions { display: none; }
+[data-layout='mobile'] .vela-cp-row:hover .vela-cp-badge { display: inline-flex; }
+.vela-cp-action {
+    all: unset;
+    box-sizing: border-box;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: ${t.radius.sm};
+    border: 1px solid ${t.border};
+    background: ${t.surface.elev};
+    color: ${t.fg};
+    font-size: 11px;
+    font-weight: 550;
+    white-space: nowrap;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+}
+.vela-cp-action:hover {
+    background: ${t.selected.bg};
+    color: ${t.selected.fg};
+    border-color: transparent;
+}
+.vela-cp-empty { padding: ${t.space[3]}; color: ${t.fg.muted}; text-align: center; }
+.vela-cp-expander {
+    all: unset;
+    box-sizing: border-box;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: ${t.radius.sm};
+    cursor: pointer;
+    color: ${t.fg.muted};
+}
+.vela-cp-expander:hover { background: ${t.surface.elev}; color: ${t.fg}; }
+.vela-cp-row[data-member] { padding-inline-start: 34px; }
+
+}`;
+var ComparePicker = class {
+  constructor(opts) {
+    this.opts = opts;
+    this.source = () => [];
+    this.rows = [];
+    this.highlighted = 0;
+    this.activeTab = "all";
+    this.visible = PAGE2;
+    this.exhausted = false;
+    this.expanded = /* @__PURE__ */ new Set();
+    this.ranked = null;
+    this.ranking = false;
+    this.shown = false;
+    this.focusTimer = null;
+    const doc = (opts.host ?? document.body).ownerDocument;
+    injectChromeStyles(STYLE_ID13, CSS13, doc);
+    this.input = doc.createElement("input");
+    this.input.className = "vela-cp-input";
+    this.input.placeholder = textOf(opts.i18n, TEXT15.search);
+    this.input.setAttribute("spellcheck", "false");
+    const searchRow = doc.createElement("div");
+    searchRow.className = "vela-cp-searchrow";
+    searchRow.append(iconEl("search", doc), this.input);
+    this.activeEl = doc.createElement("div");
+    this.activeEl.className = "vela-cp-active";
+    this.tabs = createTabs({
+      variant: "filled",
+      className: "vela-cp-tabs",
+      items: TABS.map((tab) => ({ value: tab.id, label: textOf(opts.i18n, tab.label) })),
+      defaultValue: this.activeTab,
+      onValueChange: (id) => {
+        this.activeTab = id;
+        this.refresh();
+      }
+    });
+    const head = doc.createElement("div");
+    head.className = "vela-cp-head";
+    head.append(searchRow, this.activeEl, this.tabs.el);
+    this.list = doc.createElement("div");
+    this.list.className = "vela-cp-list";
+    this.list.addEventListener("scroll", () => {
+      if (this.exhausted) return;
+      if (this.list.scrollTop + this.list.clientHeight < this.list.scrollHeight - 200) return;
+      this.visible += PAGE2;
+      this.grow();
+    });
+    this.dialog = new Dialog({
+      title: textOf(opts.i18n, TEXT15.title),
+      ...opts.i18n ? { i18n: opts.i18n } : {},
+      host: opts.host,
+      closeOnInteractOutside: true,
+      flush: true,
+      content: (body) => body.append(head, this.list),
+      onOpenChange: (open) => {
+        this.shown = open;
+        if (open) {
+          this.relabel();
+          this.input.value = "";
+          this.renderActive();
+          this.refresh();
+          if (this.focusTimer !== null) clearTimeout(this.focusTimer);
+          this.focusTimer = setTimeout(() => {
+            this.focusTimer = null;
+            if (this.shown) this.input.focus();
+          }, 0);
+        } else {
+          if (this.focusTimer !== null) {
+            clearTimeout(this.focusTimer);
+            this.focusTimer = null;
+          }
+          this.input.blur();
+        }
+        opts.onOpenChange?.(open);
+      }
+    });
+    this.input.addEventListener("input", () => {
+      const next = this.input.value.toUpperCase();
+      if (this.input.value !== next) {
+        const start = this.input.selectionStart;
+        const end = this.input.selectionEnd;
+        this.input.value = next;
+        if (start != null && end != null) this.input.setSelectionRange(start, end);
+      }
+      this.refresh();
+    });
+    this.input.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown") this.moveHighlight(1);
+      else if (e.key === "ArrowUp") this.moveHighlight(-1);
+      else if (e.key === "Enter") {
+        const pick = this.rows[this.highlighted];
+        if (pick) this.pick(pick, "same");
+        return;
+      } else return;
+      e.preventDefault();
+    });
+    this.list.addEventListener("click", (e) => {
+      const target = e.target;
+      const row = target.closest(".vela-cp-row");
+      if (!row) return;
+      const s = this.rows[Number(row.dataset.i)];
+      if (!s) return;
+      if (target.closest(".vela-cp-expander")) {
+        this.toggleExpand(s);
+        return;
+      }
+      const actionBtn = target.closest(".vela-cp-action");
+      const placement = actionBtn?.dataset.placement ?? "same";
+      this.pick(s, placement);
+    });
+  }
+  setSource(source) {
+    this.source = source;
+  }
+  open() {
+    this.dialog.show();
+  }
+  close() {
+    this.dialog.hide();
+  }
+  get isOpen() {
+    return this.dialog.open;
+  }
+  destroy() {
+    this.shown = false;
+    if (this.focusTimer !== null) {
+      clearTimeout(this.focusTimer);
+      this.focusTimer = null;
+    }
+    this.tabs.destroy();
+    this.dialog.destroy();
+  }
+  relabel() {
+    const i18n = this.opts.i18n;
+    this.dialog.titleEl.textContent = textOf(i18n, TEXT15.title);
+    this.dialog.setI18n(i18n ?? null);
+    this.input.placeholder = textOf(i18n, TEXT15.search);
+    this.tabs.setItems(TABS.map((tab) => ({ value: tab.id, label: textOf(i18n, tab.label) })));
+  }
+  renderActive() {
+    const doc = this.activeEl.ownerDocument;
+    this.activeEl.replaceChildren();
+    const items = this.opts.activeItems?.() ?? [];
+    for (const item of items) {
+      const chip = doc.createElement("span");
+      chip.className = "vela-cp-chip";
+      chip.dataset.compareId = item.id;
+      const dot = doc.createElement("span");
+      dot.className = "vela-cp-dot";
+      dot.style.background = item.color;
+      const label = doc.createElement("span");
+      label.textContent = item.title;
+      const x = doc.createElement("button");
+      x.type = "button";
+      x.className = "vela-cp-chip-x";
+      x.setAttribute("aria-label", textOf(this.opts.i18n, TEXT15.remove));
+      x.appendChild(iconEl("close", doc));
+      x.addEventListener("click", () => {
+        this.opts.onRemove?.(item.id);
+        this.renderActive();
+      });
+      chip.append(dot, label, x);
+      this.activeEl.appendChild(chip);
+    }
+  }
+  pick(s, placement) {
+    const target = isGroupRow(s) ? defaultMemberOf(this.pool(), s) ?? s : s;
+    const venue = target.prefix ?? target.provider;
+    const canonical = venue ? `${venue}:${target.ticker}` : target.ticker;
+    this.close();
+    this.opts.onAdd(canonical, placement);
+  }
+  toggleExpand(s) {
+    const key = groupKeyOf(s);
+    if (!this.expanded.delete(key)) this.expanded.add(key);
+    const scrollTop = this.list.scrollTop;
+    const focus = this.rows[this.highlighted];
+    this.rows = this.computeRows();
+    this.list.replaceChildren();
+    this.rows.forEach((r, i) => this.list.appendChild(this.rowEl(r, i)));
+    const at = focus ? this.rows.indexOf(focus) : -1;
+    this.highlighted = at >= 0 ? at : Math.min(this.highlighted, Math.max(0, this.rows.length - 1));
+    this.renderHighlight();
+    this.list.scrollTop = scrollTop;
+  }
+  moveHighlight(delta) {
+    if (!this.rows.length) return;
+    this.highlighted = Math.min(this.rows.length - 1, Math.max(0, this.highlighted + delta));
+    this.renderHighlight();
+  }
+  renderHighlight() {
+    [...this.list.children].forEach((el, i) => {
+      if (i === this.highlighted) {
+        el.dataset.highlighted = "1";
+        el.scrollIntoView({ block: "nearest" });
+      } else delete el.dataset.highlighted;
+    });
+  }
+  pool() {
+    const raw = this.source();
+    const hook = symbolRanking();
+    if (!hook) return raw;
+    const key = `${raw.length}:${raw[0]?.ticker ?? ""}:${raw[raw.length - 1]?.ticker ?? ""}`;
+    if (this.ranked?.key !== key && !this.ranking) {
+      this.ranking = true;
+      Promise.resolve([...raw]).then((copy) => hook(copy)).then((out) => {
+        this.ranked = { key, result: dedupeSymbols2(out) };
+      }).catch(() => {
+        this.ranked = { key, result: [...raw] };
+      }).finally(() => {
+        this.ranking = false;
+        if (this.shown) this.refresh();
+      });
+    }
+    return this.ranked?.result ?? raw;
+  }
+  computeRows() {
+    const all = this.pool();
+    const tab = this.activeTab;
+    const pool = tab === "all" ? all : all.filter((s) => TAB_TYPES[tab].includes((s.type ?? "").toLowerCase()) || tab === "crypto" && (s.type ?? "").toLowerCase() === "futures");
+    const filtered = filterSymbols(pool, this.input.value, this.visible, symbolRanking() ? false : TOP_TICKERS2);
+    this.exhausted = filtered.length < this.visible;
+    const folded = foldGroups(filtered);
+    if (!this.expanded.size) return folded;
+    const keyOf = (s) => `${(s.prefix ?? s.provider ?? "").toLowerCase()}:${s.ticker.toUpperCase()}`;
+    const present = new Set(folded.map(keyOf));
+    const out = [];
+    for (const s of folded) {
+      out.push(s);
+      if (!isGroupRow(s) || !this.expanded.has(groupKeyOf(s))) continue;
+      for (const m of groupMembers(all, s)) {
+        if (present.has(keyOf(m))) continue;
+        present.add(keyOf(m));
+        out.push(m);
+      }
+    }
+    return out;
+  }
+  refresh() {
+    const doc = this.list.ownerDocument;
+    this.visible = PAGE2;
+    this.rows = this.computeRows();
+    this.highlighted = 0;
+    this.list.replaceChildren();
+    if (!this.rows.length) {
+      const empty = doc.createElement("div");
+      empty.className = "vela-cp-empty";
+      empty.textContent = textOf(this.opts.i18n, this.input.value ? TEXT15.noMatch : TEXT15.empty);
+      this.list.appendChild(empty);
+      return;
+    }
+    this.rows.forEach((s, i) => this.list.appendChild(this.rowEl(s, i)));
+    this.renderHighlight();
+  }
+  grow() {
+    const already = this.rows.length;
+    this.rows = this.computeRows();
+    this.rows.slice(already).forEach((s, j) => this.list.appendChild(this.rowEl(s, already + j)));
+  }
+  rowEl(s, i) {
+    const doc = this.list.ownerDocument;
+    const row = doc.createElement("div");
+    row.className = "vela-cp-row";
+    row.dataset.i = String(i);
+    row.dataset.ticker = s.ticker;
+    const venue = s.prefix ?? s.provider;
+    if (venue) row.dataset.venue = venue;
+    const av = tickerIconEl(doc, baseOf(s), s.ticker, "vela-cp-avatar", this.opts.iconFor?.(s));
+    const main = doc.createElement("span");
+    main.className = "vela-cp-main";
+    const ticker = doc.createElement("span");
+    ticker.className = "vela-cp-ticker";
+    ticker.textContent = s.ticker;
+    const desc = doc.createElement("span");
+    desc.className = "vela-cp-desc";
+    desc.textContent = s.description ?? (s.type ?? "");
+    main.append(ticker, desc);
+    row.append(av, main);
+    if (isGroupRow(s)) {
+      row.dataset.group = "1";
+      const expander = doc.createElement("button");
+      expander.type = "button";
+      expander.className = "vela-cp-expander";
+      expander.setAttribute("aria-label", textOf(this.opts.i18n, TEXT15.showContracts));
+      expander.appendChild(iconEl(this.expanded.has(groupKeyOf(s)) ? "chevron-down" : "chevron-right", doc));
+      row.appendChild(expander);
+    } else if (s.group != null && this.expanded.has(groupKeyOf(s))) row.dataset.member = "1";
+    const actions = doc.createElement("span");
+    actions.className = "vela-cp-actions";
+    for (const p of PLACEMENTS) {
+      const btn = doc.createElement("button");
+      btn.type = "button";
+      btn.className = "vela-cp-action";
+      btn.dataset.placement = p.id;
+      btn.textContent = textOf(this.opts.i18n, p.label);
+      actions.appendChild(btn);
+    }
+    row.appendChild(actions);
+    if (venue) {
+      const badge = doc.createElement("span");
+      badge.className = "vela-cp-badge";
+      badge.dataset.p = s.provider ?? venue;
+      badge.textContent = venue;
+      row.appendChild(badge);
+    }
+    return row;
+  }
+};
+var STYLE_ID14 = "vela-widget-toast";
+var CSS14 = css`@layer vela.chrome {
 
 .vela-toast {
     position: absolute;
@@ -8342,7 +9044,7 @@ var CSS13 = css`@layer vela.chrome {
 var Toast = class {
   constructor(host) {
     this.timer = null;
-    injectChromeStyles(STYLE_ID13, CSS13, host.ownerDocument);
+    injectChromeStyles(STYLE_ID14, CSS14, host.ownerDocument);
     this.el = host.ownerDocument.createElement("div");
     this.el.className = "vela-toast";
     host.appendChild(this.el);
@@ -8439,12 +9141,12 @@ var LayoutModeController = class {
     for (const cb of [...this.listeners]) cb(next);
   }
 };
-var TEXT15 = {
+var TEXT16 = {
   sidebar: msg("vela.sidebar.label", "Sidebar")
 };
 var SIDEBAR_WIDTH_PX = 44;
-var STYLE_ID14 = "vela-sidebar";
-var CSS14 = css`@layer vela.chrome {
+var STYLE_ID15 = "vela-sidebar";
+var CSS15 = css`@layer vela.chrome {
 
 .vela-sidebar {
     order: 1;
@@ -8520,7 +9222,7 @@ var Sidebar = class {
     /** The shell finished building: the actions (which read the context) may show. */
     this.live = false;
     const doc = opts.host.ownerDocument;
-    injectChromeStyles(STYLE_ID14, CSS14, doc);
+    injectChromeStyles(STYLE_ID15, CSS15, doc);
     this.el = doc.createElement("nav");
     this.el.className = "vela-sidebar";
     this.topEl = doc.createElement("div");
@@ -8566,7 +9268,7 @@ var Sidebar = class {
   }
   /** Redraw from the dock's panels and the registered sidebar actions. */
   render() {
-    for (const t23 of this.tooltips) t23.destroy();
+    for (const t24 of this.tooltips) t24.destroy();
     this.tooltips = [];
     this.buttons.clear();
     const entries = [
@@ -8581,11 +9283,11 @@ var Sidebar = class {
     this.bottomEl.replaceChildren(...this.groups(layout.bottom));
   }
   relocalize() {
-    this.el.setAttribute("aria-label", this.t(TEXT15.sidebar));
+    this.el.setAttribute("aria-label", this.t(TEXT16.sidebar));
     this.render();
   }
   destroy() {
-    for (const t23 of this.tooltips) t23.destroy();
+    for (const t24 of this.tooltips) t24.destroy();
     this.tooltips = [];
     this.el.remove();
   }
@@ -8677,8 +9379,8 @@ function safe(fn) {
     return false;
   }
 }
-var STYLE_ID15 = "vela-widget-mobilebar";
-var CSS15 = css`@layer vela.chrome {
+var STYLE_ID16 = "vela-widget-mobilebar";
+var CSS16 = css`@layer vela.chrome {
 
 .vela-mobilebar {
     display: none;
@@ -8732,7 +9434,7 @@ var CSS15 = css`@layer vela.chrome {
 }
 
 }`;
-var TEXT16 = {
+var TEXT17 = {
   symbolSearch: msg("widget.mobileBar.symbolSearch", "Symbol search"),
   timeframe: msg("widget.mobileBar.timeframe", "Timeframe"),
   indicators: msg("widget.mobileBar.indicators", "Indicators"),
@@ -8749,7 +9451,7 @@ var MobileBar = class {
     this.maximizeActive = false;
     this.opts = opts;
     const doc = host.ownerDocument;
-    injectChromeStyles(STYLE_ID15, CSS15, doc);
+    injectChromeStyles(STYLE_ID16, CSS16, doc);
     this.el = doc.createElement("div");
     this.el.className = "vela-mobilebar";
     this.timeframe = opts.timeframe;
@@ -8762,21 +9464,21 @@ var MobileBar = class {
       b.addEventListener("click", onClick);
       return b;
     };
-    this.symbolEl = item("vela-mb-symbol", TEXT16.symbolSearch, opts.onSymbolClick);
+    this.symbolEl = item("vela-mb-symbol", TEXT17.symbolSearch, opts.onSymbolClick);
     this.symbolEl.textContent = parseSymbol(opts.symbol).ticker;
-    this.tfEl = item("vela-mb-tf", TEXT16.timeframe, opts.onTimeframeClick);
+    this.tfEl = item("vela-mb-tf", TEXT17.timeframe, opts.onTimeframeClick);
     this.tfEl.textContent = timeframeLabel(opts.timeframe, opts.i18n);
     const onIndicators = opts.onIndicatorsClick;
-    const indicators = onIndicators ? item("vela-mb-indicators", TEXT16.indicators, onIndicators, "indicators") : null;
+    const indicators = onIndicators ? item("vela-mb-indicators", TEXT17.indicators, onIndicators, "indicators") : null;
     this.indicatorsEl = indicators;
     this.actionsHost = doc.createElement("span");
     this.actionsHost.className = "vela-mb-actions";
     const onDrawings = opts.onDrawingsClick;
-    const drawings = onDrawings ? item("vela-mb-drawings", TEXT16.drawings, onDrawings, "pen") : null;
+    const drawings = onDrawings ? item("vela-mb-drawings", TEXT17.drawings, onDrawings, "pen") : null;
     const onMaximize = opts.onMaximizeClick;
-    this.maxEl = onMaximize ? item("vela-mb-maximize", TEXT16.maximizeChart, onMaximize, "maximize") : null;
-    const more = item("vela-mb-more", TEXT16.more, opts.onMoreClick, "kebab");
-    const settings = item("vela-mb-settings", TEXT16.chartSettings, opts.onSettingsClick, "gear");
+    this.maxEl = onMaximize ? item("vela-mb-maximize", TEXT17.maximizeChart, onMaximize, "maximize") : null;
+    const more = item("vela-mb-more", TEXT17.more, opts.onMoreClick, "kebab");
+    const settings = item("vela-mb-settings", TEXT17.chartSettings, opts.onSettingsClick, "gear");
     this.el.append(this.symbolEl, this.tfEl, ...indicators ? [indicators] : [], this.actionsHost, ...drawings ? [drawings] : [], ...this.maxEl ? [this.maxEl] : [], more, settings);
     host.appendChild(this.el);
     this.renderActions();
@@ -8832,7 +9534,7 @@ var MobileBar = class {
     if (!this.maxEl) return;
     this.maximizeActive = on;
     this.maxEl.classList.toggle("vela-mb-on", on);
-    this.maxEl.setAttribute("aria-label", this.t(on ? TEXT16.restoreLayout : TEXT16.maximizeChart));
+    this.maxEl.setAttribute("aria-label", this.t(on ? TEXT17.restoreLayout : TEXT17.maximizeChart));
     this.maxEl.replaceChildren(iconEl(on ? "restore" : "maximize", this.el.ownerDocument));
   }
   /** Show the maximize stop only while the grid holds more than one chart — on a
@@ -8845,8 +9547,8 @@ var MobileBar = class {
     this.el.remove();
   }
 };
-var STYLE_ID16 = "vela-widget-tf-drawer";
-var CSS16 = css`@layer vela.chrome {
+var STYLE_ID17 = "vela-widget-tf-drawer";
+var CSS17 = css`@layer vela.chrome {
 
 .vela-tfd-heading {
     padding: 4px 2px 8px;
@@ -8856,8 +9558,6 @@ var CSS16 = css`@layer vela.chrome {
     text-transform: uppercase;
     color: ${t.fg.bright};
 }
-.vela-tfd-heading + .vela-tfd-ranges,
-.vela-tfd-heading + .vela-tfd-grid { padding-top: 0; }
 .vela-tfd-ranges {
     display: flex;
     gap: 6px;
@@ -8874,6 +9574,8 @@ var CSS16 = css`@layer vela.chrome {
     gap: 6px;
     padding-bottom: 4px;
 }
+.vela-tfd-heading + .vela-tfd-ranges,
+.vela-tfd-heading + .vela-tfd-grid { padding-top: 0; }
 .vela-tfd-chip {
     all: unset;
     box-sizing: border-box;
@@ -8892,8 +9594,8 @@ var CSS16 = css`@layer vela.chrome {
     -webkit-tap-highlight-color: transparent;
 }
 .vela-tfd-chip:disabled {
-    opacity: 0.45;
-    cursor: default;
+    opacity: 0.38;
+    cursor: not-allowed;
 }
 .vela-tfd-chip:enabled:active { background: ${t.hover}; }
 .vela-tfd-chip[data-active='1'] {
@@ -8903,7 +9605,7 @@ var CSS16 = css`@layer vela.chrome {
 }
 
 }`;
-var TEXT17 = {
+var TEXT18 = {
   dateRange: msg("widget.timeframeDrawer.dateRange", "Date Range"),
   timeframes: msg("widget.timeframeDrawer.timeframes", "Timeframes")
 };
@@ -8914,11 +9616,11 @@ var TimeframeDrawer = class {
     this.tfChips = /* @__PURE__ */ new Map();
     this.headings = [];
     const doc = opts.host.ownerDocument;
-    injectChromeStyles(STYLE_ID16, CSS16, doc);
+    injectChromeStyles(STYLE_ID17, CSS17, doc);
     this.drawer = new Drawer({ host: opts.host, onOpenChange: opts.onOpenChange });
     const rangeHeading = doc.createElement("div");
     rangeHeading.className = "vela-tfd-heading";
-    this.headings.push({ el: rangeHeading, text: TEXT17.dateRange });
+    this.headings.push({ el: rangeHeading, text: TEXT18.dateRange });
     const ranges = doc.createElement("div");
     ranges.className = "vela-tfd-ranges";
     for (const preset of opts.ranges) {
@@ -8934,16 +9636,15 @@ var TimeframeDrawer = class {
     }
     const tfHeading = doc.createElement("div");
     tfHeading.className = "vela-tfd-heading";
-    this.headings.push({ el: tfHeading, text: TEXT17.timeframes });
+    this.headings.push({ el: tfHeading, text: TEXT18.timeframes });
     const grid = doc.createElement("div");
     grid.className = "vela-tfd-grid";
     for (const tf of opts.timeframes) {
       const chip = doc.createElement("button");
       chip.className = "vela-tfd-chip";
       chip.addEventListener("click", () => {
-        const choice = opts.resolveTimeframe(tf);
-        if (choice === null) return;
-        opts.onTimeframe(choice);
+        if (chip.disabled) return;
+        opts.onTimeframe(tf);
         this.drawer.hide();
       });
       this.tfChips.set(tf, chip);
@@ -8957,7 +9658,7 @@ var TimeframeDrawer = class {
     const i18n = this.opts.i18n;
     for (const { el, text } of this.headings) el.textContent = textOf(i18n, text);
     for (const [id, chip] of this.rangeChips) chip.textContent = rangeLabel(id, i18n);
-    for (const [tf, chip] of this.tfChips) chip.textContent = workspaceTimeframeLabel(tf, i18n);
+    for (const [tf, chip] of this.tfChips) chip.textContent = timeframeLabel(tf, i18n);
   }
   open() {
     this.relabel();
@@ -8966,16 +9667,16 @@ var TimeframeDrawer = class {
   }
   refresh() {
     const tf = this.opts.currentTimeframe();
-    const current = currentTimeframeChoice(this.opts.timeframes, tf, this.opts.resolveTimeframe);
     const range = this.opts.activeRange();
+    const unavailable = new Set(this.opts.unavailableTimeframes?.() ?? []);
     for (const [id, chip] of this.rangeChips) {
       if (range !== null && id === range) chip.dataset.active = "1";
       else delete chip.dataset.active;
     }
     for (const [id, chip] of this.tfChips) {
-      chip.disabled = this.opts.resolveTimeframe(id) === null;
-      if (range === null && id === current) chip.dataset.active = "1";
+      if (range === null && id === tf) chip.dataset.active = "1";
       else delete chip.dataset.active;
+      chip.disabled = unavailable.has(id);
     }
   }
   close() {
@@ -8985,14 +9686,14 @@ var TimeframeDrawer = class {
     this.drawer.destroy();
   }
 };
-var TEXT18 = {
+var TEXT19 = {
   title: msg("widget.drawingsDrawer.title", "Drawings"),
   search: msg("widget.drawingsDrawer.search", "Search tools…"),
   favorite: msg("widget.drawingsDrawer.favorite", "Favorite {tool}"),
   noMatch: msg("widget.drawingsDrawer.noMatch", "No tools match.")
 };
-var STYLE_ID17 = "vela-widget-drawings-drawer";
-var CSS17 = css`@layer vela.chrome {
+var STYLE_ID18 = "vela-widget-drawings-drawer";
+var CSS18 = css`@layer vela.chrome {
 
 /* Search + tabs stay pinned while the tool list scrolls underneath. */
 .vela-dd-sticky {
@@ -9084,10 +9785,10 @@ var DrawingsDrawer = class {
     this.definition = { groups: [] };
     this.activeGroup = "";
     const doc = opts.host.ownerDocument;
-    injectChromeStyles(STYLE_ID17, CSS17, doc);
+    injectChromeStyles(STYLE_ID18, CSS18, doc);
     this.drawer = new Drawer({
       host: opts.host,
-      title: this.t(TEXT18.title),
+      title: this.t(TEXT19.title),
       onOpenChange: opts.onOpenChange,
       // Swiping across the tool list pages through the group tabs.
       onSwipe: (dir) => this.stepGroup(dir === "left" ? 1 : -1)
@@ -9099,7 +9800,7 @@ var DrawingsDrawer = class {
     search.appendChild(iconEl("search", doc));
     this.input = doc.createElement("input");
     this.input.type = "text";
-    this.input.placeholder = this.t(TEXT18.search);
+    this.input.placeholder = this.t(TEXT19.search);
     this.input.addEventListener("input", () => this.renderList());
     search.appendChild(this.input);
     this.tabs = createTabs({
@@ -9125,8 +9826,8 @@ var DrawingsDrawer = class {
     return textOf(this.opts.i18n?.() ?? null, m, values);
   }
   open() {
-    this.drawer.setTitle(this.t(TEXT18.title));
-    this.input.placeholder = this.t(TEXT18.search);
+    this.drawer.setTitle(this.t(TEXT19.title));
+    this.input.placeholder = this.t(TEXT19.search);
     this.definition = this.opts.toolbar();
     if (!this.definition.groups.some((g) => g.id === this.activeGroup)) this.activeGroup = this.definition.groups[0]?.id ?? "";
     this.input.value = "";
@@ -9193,7 +9894,7 @@ var DrawingsDrawer = class {
         else delete star.dataset.on;
       };
       paintStar(this.opts.isFavorite(tool.type));
-      star.setAttribute("aria-label", this.t(TEXT18.favorite, { tool: this.t(tool.label) }));
+      star.setAttribute("aria-label", this.t(TEXT19.favorite, { tool: this.t(tool.label) }));
       star.addEventListener("click", (e) => {
         e.stopPropagation();
         const on = !this.opts.isFavorite(tool.type);
@@ -9210,7 +9911,7 @@ var DrawingsDrawer = class {
     if (query) {
       let any = false;
       for (const group2 of this.definition.groups) {
-        const hits = group2.tools.filter((t23) => lower(this.t(t23.label)).includes(query) || sourceText(t23.label).toLowerCase().includes(query));
+        const hits = group2.tools.filter((t24) => lower(this.t(t24.label)).includes(query) || sourceText(t24.label).toLowerCase().includes(query));
         if (hits.length === 0) continue;
         any = true;
         section(this.t(group2.label));
@@ -9219,7 +9920,7 @@ var DrawingsDrawer = class {
       if (!any) {
         const empty = doc.createElement("div");
         empty.className = "vela-dd-empty";
-        empty.textContent = this.t(TEXT18.noMatch);
+        empty.textContent = this.t(TEXT19.noMatch);
         this.list.appendChild(empty);
       }
       return;
@@ -9236,7 +9937,8 @@ var DrawingsDrawer = class {
     }
   }
 };
-var TEXT19 = {
+var TEXT20 = {
+  compare: msg("widget.moreDrawer.compare", "Compare symbol"),
   chartType: msg("widget.moreDrawer.chartType", "Chart type"),
   layout: msg("widget.moreDrawer.layout", "Layout"),
   alerts: msg("widget.moreDrawer.alerts", "Alerts"),
@@ -9247,8 +9949,8 @@ var TEXT19 = {
   noAlerts: msg("widget.moreDrawer.noAlerts", "No alerts yet."),
   alert: msg("widget.moreDrawer.alert", "{title}: {message}")
 };
-var STYLE_ID18 = "vela-widget-more-drawer";
-var CSS18 = css`@layer vela.chrome {
+var STYLE_ID19 = "vela-widget-more-drawer";
+var CSS19 = css`@layer vela.chrome {
 
 .vela-md-actions {
     display: flex;
@@ -9328,7 +10030,7 @@ var MoreDrawer = class {
   constructor(opts) {
     this.opts = opts;
     this.view = "main";
-    injectChromeStyles(STYLE_ID18, CSS18, opts.host.ownerDocument);
+    injectChromeStyles(STYLE_ID19, CSS19, opts.host.ownerDocument);
     this.drawer = new Drawer({ host: opts.host, onOpenChange: opts.onOpenChange });
   }
   open() {
@@ -9356,7 +10058,7 @@ var MoreDrawer = class {
       const back = doc.createElement("button");
       back.className = "vela-md-back";
       back.appendChild(iconEl("chevron-left", doc));
-      back.appendChild(doc.createTextNode(this.t(this.view === "style" ? TEXT19.chartType : this.view === "layout" ? TEXT19.layout : TEXT19.alerts)));
+      back.appendChild(doc.createTextNode(this.t(this.view === "style" ? TEXT20.chartType : this.view === "layout" ? TEXT20.layout : TEXT20.alerts)));
       back.addEventListener("click", () => this.show("main"));
       this.drawer.body.appendChild(back);
     }
@@ -9409,18 +10111,29 @@ var MoreDrawer = class {
       });
       actions.appendChild(b);
     };
-    if (this.opts.onUndo) action("undo", TEXT19.undo, this.opts.canUndo(), this.opts.onUndo);
-    if (this.opts.onRedo) action("redo", TEXT19.redo, this.opts.canRedo(), this.opts.onRedo);
-    if (this.opts.onScreenshot) action("camera", TEXT19.screenshot, true, this.opts.onScreenshot);
+    if (this.opts.onUndo) action("undo", TEXT20.undo, this.opts.canUndo(), this.opts.onUndo);
+    if (this.opts.onRedo) action("redo", TEXT20.redo, this.opts.canRedo(), this.opts.onRedo);
+    if (this.opts.onScreenshot) action("camera", TEXT20.screenshot, true, this.opts.onScreenshot);
     if (actions.childElementCount > 0) this.drawer.body.appendChild(actions);
     const list = doc.createElement("div");
     list.className = "vela-md-list";
+    if (this.opts.onCompare) {
+      list.appendChild(
+        this.row(doc, this.t(TEXT20.compare), {
+          icon: "circle-plus",
+          onClick: () => {
+            this.drawer.hide();
+            this.opts.onCompare?.();
+          }
+        })
+      );
+    }
     const current = this.opts.priceStyles().find((s) => s.id === this.opts.priceStyle());
-    list.appendChild(this.row(doc, this.t(TEXT19.chartType), { icon: "style-line", value: current?.label, chevron: true, onClick: () => this.show("style") }));
+    list.appendChild(this.row(doc, this.t(TEXT20.chartType), { icon: "style-line", value: current?.label, chevron: true, onClick: () => this.show("style") }));
     if (this.opts.layout) {
       const shape = this.opts.layout.shape();
       const value = shape ? layoutGridLabel(shape.cols, shape.rows, this.opts.i18n) : this.opts.layout.presets().find((p) => p.checked)?.label;
-      list.appendChild(this.row(doc, this.t(TEXT19.layout), { icon: "layout", glyph: this.opts.layout.glyph?.(), value, chevron: true, onClick: () => this.show("layout") }));
+      list.appendChild(this.row(doc, this.t(TEXT20.layout), { icon: "layout", glyph: this.opts.layout.glyph?.(), value, chevron: true, onClick: () => this.show("layout") }));
     }
     for (const act of this.opts.primaryActions?.() ?? []) list.appendChild(this.actionRow(doc, act));
     for (const panel of this.opts.panels()) {
@@ -9436,7 +10149,7 @@ var MoreDrawer = class {
     }
     if (this.opts.alerts) {
       const alertCount = this.opts.alerts().length;
-      list.appendChild(this.row(doc, this.t(TEXT19.alerts), { icon: "bell", value: alertCount > 0 ? String(alertCount) : void 0, chevron: true, onClick: () => this.show("alerts") }));
+      list.appendChild(this.row(doc, this.t(TEXT20.alerts), { icon: "bell", value: alertCount > 0 ? String(alertCount) : void 0, chevron: true, onClick: () => this.show("alerts") }));
     }
     for (const act of this.opts.actions()) list.appendChild(this.actionRow(doc, act));
     this.drawer.body.appendChild(list);
@@ -9503,7 +10216,7 @@ var MoreDrawer = class {
     if (syncs.length > 0) {
       const heading = doc.createElement("div");
       heading.className = "vela-md-section";
-      heading.textContent = this.t(TEXT19.sync);
+      heading.textContent = this.t(TEXT20.sync);
       list.appendChild(heading);
       for (const s of syncs) {
         list.appendChild(
@@ -9524,23 +10237,23 @@ var MoreDrawer = class {
     if (alerts.length === 0) {
       const empty = doc.createElement("div");
       empty.className = "vela-md-empty";
-      empty.textContent = this.t(TEXT19.noAlerts);
+      empty.textContent = this.t(TEXT20.noAlerts);
       this.drawer.body.appendChild(empty);
       return;
     }
     const list = doc.createElement("div");
     list.className = "vela-md-list";
     for (const a of alerts) {
-      list.appendChild(this.row(doc, this.t(TEXT19.alert, { title: a.title, message: a.message }), { value: eventTimeText(a.time, this.opts.i18n), onClick: () => void 0 }));
+      list.appendChild(this.row(doc, this.t(TEXT20.alert, { title: a.title, message: a.message }), { value: eventTimeText(a.time, this.opts.i18n), onClick: () => void 0 }));
     }
     this.drawer.body.appendChild(list);
   }
 };
-var TEXT20 = {
+var TEXT21 = {
   title: msg("widget.timezoneDrawer.title", "Time zone")
 };
-var STYLE_ID19 = "vela-widget-timezone-drawer";
-var CSS19 = css`@layer vela.chrome {
+var STYLE_ID20 = "vela-widget-timezone-drawer";
+var CSS20 = css`@layer vela.chrome {
 
 .vela-tzd-list { padding: 2px 0 4px; }
 .vela-tzd-row {
@@ -9561,11 +10274,11 @@ var CSS19 = css`@layer vela.chrome {
 var TimezoneDrawer = class {
   constructor(opts) {
     this.opts = opts;
-    injectChromeStyles(STYLE_ID19, CSS19, opts.host.ownerDocument);
-    this.drawer = new Drawer({ host: opts.host, title: textOf(opts.i18n, TEXT20.title), onOpenChange: opts.onOpenChange });
+    injectChromeStyles(STYLE_ID20, CSS20, opts.host.ownerDocument);
+    this.drawer = new Drawer({ host: opts.host, title: textOf(opts.i18n, TEXT21.title), onOpenChange: opts.onOpenChange });
   }
   open() {
-    this.drawer.setTitle(textOf(this.opts.i18n, TEXT20.title));
+    this.drawer.setTitle(textOf(this.opts.i18n, TEXT21.title));
     this.render();
     this.drawer.show();
   }
@@ -9597,8 +10310,8 @@ var TimezoneDrawer = class {
     this.drawer.body.appendChild(list);
   }
 };
-var STYLE_ID20 = "vela-widget-price-scale-drawer";
-var CSS20 = css`@layer vela.chrome {
+var STYLE_ID21 = "vela-widget-price-scale-drawer";
+var CSS21 = css`@layer vela.chrome {
 
 .vela-psd-list { padding: 2px 0 4px; }
 .vela-psd-row {
@@ -9625,21 +10338,21 @@ var CSS20 = css`@layer vela.chrome {
 }
 
 }`;
-var TEXT21 = {
+var TEXT22 = {
   title: msg("widget.priceScaleDrawer.title", "Price scale")
 };
 var PriceScaleDrawer = class {
   constructor(opts) {
     this.opts = opts;
     this.pane = null;
-    injectChromeStyles(STYLE_ID20, CSS20, opts.host.ownerDocument);
-    this.drawer = new Drawer({ host: opts.host, title: textOf(opts.chart()?.i18n, TEXT21.title), onOpenChange: opts.onOpenChange });
+    injectChromeStyles(STYLE_ID21, CSS21, opts.host.ownerDocument);
+    this.drawer = new Drawer({ host: opts.host, title: textOf(opts.chart()?.i18n, TEXT22.title), onOpenChange: opts.onOpenChange });
   }
   open() {
     const chart = this.opts.chart();
     const panes = chart?.renderer.get("paneScales");
     this.pane = Array.isArray(panes) ? paneScaleAt(panes, this.opts.pressY()) : null;
-    this.drawer.setTitle(textOf(chart?.i18n, TEXT21.title));
+    this.drawer.setTitle(textOf(chart?.i18n, TEXT22.title));
     this.render();
     this.drawer.show();
   }
@@ -9666,6 +10379,8 @@ var PriceScaleDrawer = class {
       axisLabels: this.flag("axisLabels"),
       priceLabel: this.flag("priceLabel"),
       countdown: this.flag("countdown"),
+      indicatorValueLabels: this.flag("indicatorValueLabels"),
+      indicatorNameLabels: this.flag("indicatorNameLabels"),
       priceLine: this.flag("currentPriceLine")
     }, chart.i18n);
     const list = doc.createElement("div");
@@ -9778,14 +10493,14 @@ var PriceScaleDrawer = class {
     this.drawer.body.appendChild(list);
   }
 };
-var TEXT22 = {
+var TEXT23 = {
   magnet: msg("widget.drawingPill.magnet", "Magnet snap"),
   stay: msg("widget.drawingPill.stay", "Stay in drawing mode"),
   eraser: msg("widget.drawingPill.eraser", "Eraser"),
   exit: msg("widget.drawingPill.exit", "Exit drawing mode")
 };
-var STYLE_ID21 = "vela-widget-drawing-pill";
-var CSS21 = css`@layer vela.chrome {
+var STYLE_ID22 = "vela-widget-drawing-pill";
+var CSS22 = css`@layer vela.chrome {
 
 .vela-drawpill { display: none; }
 [data-layout='mobile'] .vela-drawpill {
@@ -9855,7 +10570,7 @@ var DrawingPill = class {
     /** Each button's accessible name, re-read in the chart's language on every sync. */
     this.labels = [];
     const doc = host.ownerDocument;
-    injectChromeStyles(STYLE_ID21, CSS21, doc);
+    injectChromeStyles(STYLE_ID22, CSS22, doc);
     this.el = doc.createElement("div");
     this.el.className = "vela-drawpill";
     this.el.hidden = true;
@@ -9870,7 +10585,7 @@ var DrawingPill = class {
       b.addEventListener("click", onClick);
       return b;
     };
-    this.magnetBtn = btn("magnet", TEXT22.magnet, () => {
+    this.magnetBtn = btn("magnet", TEXT23.magnet, () => {
       const order = ["off", "weak", "strong"];
       const cur = this.chart?.drawings.getSnapMode() ?? "off";
       this.chart?.drawings.setSnapMode(order[(order.indexOf(cur) + 1) % order.length]);
@@ -9880,13 +10595,13 @@ var DrawingPill = class {
     this.magnetBadge.setAttribute("aria-hidden", "true");
     this.magnetBadge.append(doc.createElement("i"), doc.createElement("i"));
     this.magnetBtn.appendChild(this.magnetBadge);
-    this.stayBtn = btn(iconMarkup("pen-lock") ? "pen-lock" : "pen", TEXT22.stay, () => {
+    this.stayBtn = btn(iconMarkup("pen-lock") ? "pen-lock" : "pen", TEXT23.stay, () => {
       this.chart?.drawings.setStayMode(!this.chart.drawings.getStayMode());
     });
-    this.eraserBtn = btn("eraser", TEXT22.eraser, () => {
+    this.eraserBtn = btn("eraser", TEXT23.eraser, () => {
       this.chart?.drawings.setMode(this.chart.drawings.getMode() === "eraser" ? null : "eraser");
     });
-    const close = btn("close", TEXT22.exit, () => {
+    const close = btn("close", TEXT23.exit, () => {
       this.chart?.drawings.setTool(null);
       this.chart?.drawings.setMode(null);
     });
@@ -9967,7 +10682,7 @@ function buildContext(host) {
     i18n: host.i18n,
     toast: (message, kind) => host.toast(message, kind),
     addIndicator: (entry) => host.active()?.addExternalIndicator(entry),
-    addNativeIndicator: (type) => host.active()?.addNative(type),
+    addNativeIndicator: (type, options) => host.active()?.addNative(type, options),
     stateChanged: () => host.stateDirty(),
     get cells() {
       return host.cells().map((c) => ({ id: c.id, chart: c.chart, symbol: c.symbol, timeframe: c.timeframe }));
@@ -10038,8 +10753,8 @@ var GAP_PX = 2;
 var POOL_CAP = 16;
 var TIME_AXIS_H3 = 22;
 var ALERT_CAP = 50;
-var STYLE_ID22 = "vela-workspace";
-var CSS22 = css`@layer vela.chrome {
+var STYLE_ID23 = "vela-workspace";
+var CSS23 = css`@layer vela.chrome {
 
 .vela-workspace { position: relative; width: 100%; height: 100%; display: flex; flex-direction: column; background: ${t.bg}; }
 .vela-ws-main { position: relative; display: flex; flex-direction: row; flex: 1 1 auto; min-height: 0; }
@@ -10130,7 +10845,7 @@ function declaredOrder(cells) {
   }
   return names.filter((n) => !/^\d+$/.test(n));
 }
-var TEXT23 = {
+var TEXT24 = {
   syncSymbol: msg("workspace.sync.symbol", "Symbol"),
   syncInterval: msg("workspace.sync.interval", "Interval"),
   syncCrosshair: msg("workspace.sync.crosshair", "Crosshair"),
@@ -10235,6 +10950,7 @@ var VelaWorkspace = class {
     this.toolDefsBusy = false;
     /** Favorite timeframes — the shared topbar's quick-switch chips, one set for the grid. */
     this.tfFavs = [];
+    this.timeframeSelectionRevision = 0;
     /** Live sync configuration (mutable copy of the option). */
     this.syncOpts = {};
     this.stateTimer = null;
@@ -10358,9 +11074,15 @@ var VelaWorkspace = class {
       get: (kind) => this.syncOpts[kind],
       state: () => ({ ...this.syncOpts })
     };
-    this.resolveTimeframeChoice = (tf, fallback = tf) => {
-      const cell = this.activeId ? this.cellsById.get(this.activeId) : void 0;
-      return cell ? cell.resolveTimeframeChoice(tf, fallback) : fallback;
+    /** Check the active market before submitting a desktop shortcut. */
+    this.validateTimeframeSelection = async (tf) => {
+      const revision = ++this.timeframeSelectionRevision;
+      const id = this.activeId;
+      if (!id) return void 0;
+      const cell = this.cellsById.get(id);
+      const available = await cell?.isTimeframeAvailable(tf);
+      if (revision !== this.timeframeSelectionRevision || id !== this.activeId || cell !== this.cellsById.get(id)) return void 0;
+      return available;
     };
     registerBuiltinLayouts();
     registerBuiltinChartTypes();
@@ -10409,21 +11131,21 @@ var VelaWorkspace = class {
     this.topbarComp = resolveTopbarComposition(opts.topbar);
     this.indicatorsOverride = topbarActionOverride("indicators");
     this.screenshotOverride = topbarActionOverride("screenshot");
+    this.compareOverride = topbarActionOverride("compare");
     if (boot?.trackSizes) for (const [id, ts] of Object.entries(boot.trackSizes)) this.trackSizes.set(id, ts);
     if (boot?.ext) this.extState = { ...boot.ext };
     if (boot?.charts) for (const { id, ...cs } of boot.charts) this.pool.set(id, cs);
     this.order = boot?.charts ? boot.charts.map((c) => c.id) : declaredOrder(opts.cells);
     const bootActive = boot?.activeCellId ?? null;
     const doc = hostEl.ownerDocument;
-    injectChromeStyles(STYLE_ID22, CSS22, doc);
+    injectChromeStyles(STYLE_ID23, CSS23, doc);
     this.root = doc.createElement("div");
     this.root.className = "vela-workspace";
     ensureUIHost(this.root, resolveTheme(opts.theme));
     this.applyRootAttributes();
     for (const [name, make] of Object.entries(opts.providers ?? {})) void this.feed.registerProvider(name, make());
     void this.feed.ready().then(() => {
-      if (this.destroyed) return;
-      this.refreshRetention();
+      if (!this.destroyed) this.refreshRetention();
     });
     this.symbolPicker = new SymbolPicker({
       ...opts.symbolPicker,
@@ -10433,17 +11155,32 @@ var VelaWorkspace = class {
       iconFor: (d) => this.feed.symbolIconOf(d),
       onSelect: (ticker) => this.active.setSymbol(ticker),
       onOpenChange: (open) => {
-        if (open) for (const cell of this.cells()) cell.chart.renderer.closeDialogs();
+        if (open && !this.symbolPicker.isPicking) for (const cell of this.cells()) cell.chart.renderer.closeDialogs();
         this.trackDialog(open);
       }
     });
     this.symbolPicker.setSource(() => this.feed.symbols());
+    this.comparePicker = !this.compareOverride && topbarHas(this.topbarComp, "compare") ? new ComparePicker({
+      host: this.root,
+      i18n: this.localeState,
+      iconFor: (d) => this.feed.symbolIconOf(d),
+      activeItems: () => this.active.compareItems(),
+      onAdd: (symbol, placement) => this.active.addCompare(symbol, placement),
+      onRemove: (id) => this.active.removeCompare(id),
+      onOpenChange: (open) => {
+        if (open) for (const cell of this.cells()) cell.chart.renderer.closeDialogs();
+        this.trackDialog(open);
+      }
+    }) : null;
+    this.comparePicker?.setSource(() => this.feed.symbols());
     this.indicatorPicker = opts.indicatorPicker !== false && !this.indicatorsOverride && topbarHas(this.topbarComp, "indicators") ? new IndicatorPicker({
       host: this.root,
       i18n: this.localeState,
       library: () => this.active.libraryRows(),
       onChart: () => this.active.onChartRows(),
-      onAdd: (i) => this.active.addFromLibrary(i),
+      onAdd: (i) => {
+        if (this.active.addFromLibrary(i)) this.indicatorPicker?.close();
+      },
       onRemove: (i) => this.active.removeFromChart(i),
       onOpenChange: (open) => {
         if (open) for (const cell of this.cells()) cell.chart.renderer.closeDialogs();
@@ -10451,19 +11188,20 @@ var VelaWorkspace = class {
       }
     }) : null;
     const picker = this.indicatorPicker;
-    this.tfQuick = createWorkspaceTimeframeQuick({
+    this.tfQuick = new TimeframeQuick({
       host: this.root,
       i18n: this.localeState,
       onApply: (tf) => this.setActiveTimeframe(tf),
       onOpenChange: (open) => this.trackDialog(open)
-    }, this.resolveTimeframeChoice);
-    this.topbar = createWorkspaceTopbar(this.root, {
+    }, this.validateTimeframeSelection);
+    this.topbar = new Topbar(this.root, {
       symbol: "",
       i18n: this.localeState,
       // RAW option, not the resolved lists — the bar distinguishes a host-declared
       // side (list is law) from a default one (an override's `order` may flow).
       composition: opts.topbar,
       onSymbolClick: () => this.symbolPicker.open(),
+      ...this.comparePicker ? { onCompareClick: () => this.comparePicker.open() } : {},
       ...picker ? { onIndicatorsClick: () => picker.open() } : {},
       onUndoClick: () => this.active.history.undo(),
       onRedoClick: () => this.active.history.redo(),
@@ -10471,7 +11209,7 @@ var VelaWorkspace = class {
       onFullscreenClick: () => this.toggleFullscreen(),
       onAlertsClick: (anchor) => this.openAlertsMenu(anchor),
       timeframe: "60",
-      timeframes: opts.timeframes ?? DEFAULT_TIMEFRAMES,
+      timeframes: this.resolvedTimeframes(),
       timeframeFavorites: this.tfFavs,
       priceStyle: "candles",
       onTimeframe: (tf) => this.setActiveTimeframe(tf),
@@ -10498,7 +11236,9 @@ var VelaWorkspace = class {
         glyph: () => layoutGlyph(this.def)
       },
       getContext: () => this.context()
-    }, this.resolveTimeframeChoice);
+    }, async (tf) => {
+      if (await this.validateTimeframeSelection(tf)) this.setActiveTimeframe(tf);
+    });
     const main = doc.createElement("div");
     main.className = "vela-ws-main";
     const toolbar = buildToolbar(opts.drawings, this.localeState);
@@ -10674,9 +11414,8 @@ var VelaWorkspace = class {
     this.setActiveCell(bootActive != null && this.cellsById.has(bootActive) ? bootActive : this.order[0] ?? null);
     this.offRegistryChange = this.feed.onRegistryChange(() => {
       if (this.destroyed) return;
-      for (const cell of this.cellsById.values()) cell.refreshTimeframeMetadata(true);
-      const active = this.activeId ? this.cellsById.get(this.activeId) : void 0;
-      if (active) this.projectTimeframeControls(active);
+      for (const cell of this.cellsById.values()) cell.refreshTimeframeMetadata();
+      if (this.activeId) this.projectCellTimeframes(this.activeId);
     });
     if (opts.autofocus) this.refocusActive();
     if (opts.indicators !== void 0) {
@@ -10771,6 +11510,7 @@ var VelaWorkspace = class {
   }
   setActiveCell(id) {
     if (id === this.activeId || this.destroyed) return;
+    ++this.timeframeSelectionRevision;
     const prev = this.activeId;
     if (prev) {
       const el = this.cellsById.get(prev)?.host;
@@ -10828,6 +11568,7 @@ var VelaWorkspace = class {
    *  it on their next open; what stays on screen is relabeled here. */
   relocalizeChrome() {
     this.symbolPicker.relabel();
+    this.comparePicker?.relabel();
     this.indicatorPicker?.relabel();
     this.tfQuick.relabel();
     this.topbar.relocalize();
@@ -11034,6 +11775,7 @@ var VelaWorkspace = class {
           const cell = this.cellsById.get(id);
           if (!cell) continue;
           cell.rehydrate(cs);
+          if (st.timeframeFavorites) void cell.refreshTimeframeChoices();
           if (cs.drawings != null) this.drawingsSettled.set(id, this.chartSymbolOf(cell));
         }
       } finally {
@@ -11127,12 +11869,12 @@ var VelaWorkspace = class {
    */
   setTheme(theme) {
     if (this.destroyed) return;
-    const t23 = resolveTheme(theme);
+    const t24 = resolveTheme(theme);
     this.opts.theme = theme;
-    ensureUIHost(this.root, t23);
-    this.drawToolbar?.setTheme(t23);
-    if (this.attributionMark) applyAttributionMarkTheme(this.attributionMark, t23.background);
-    for (const cell of this.cellsById.values()) cell.chart.setTheme(t23);
+    ensureUIHost(this.root, t24);
+    this.drawToolbar?.setTheme(t24);
+    if (this.attributionMark) applyAttributionMarkTheme(this.attributionMark, t24.background);
+    for (const cell of this.cellsById.values()) cell.chart.setTheme(t24);
   }
   // ── layout ──────────────────────────────────────────────────
   get layout() {
@@ -11229,7 +11971,7 @@ var VelaWorkspace = class {
     } else {
       delete this.root.dataset.fullscreen;
       doc.defaultView?.removeEventListener("keydown", this.onFullscreenEscape, true);
-      this.toastHost.hideIf(this.t(TEXT23.fullscreenHint));
+      this.toastHost.hideIf(this.t(TEXT24.fullscreenHint));
       const panel = this.fullscreenPanel;
       this.fullscreenPanel = null;
       if (panel && this.dock.openId === null) this.dock.toggle(panel, true);
@@ -11240,7 +11982,7 @@ var VelaWorkspace = class {
   toggleFullscreen() {
     const on = !this.fullscreenOn;
     this.setFullscreen(on);
-    if (on && this.fullscreenOn) this.toastHost.show(this.t(TEXT23.fullscreenHint), "info");
+    if (on && this.fullscreenOn) this.toastHost.show(this.t(TEXT24.fullscreenHint), "info");
   }
   /** Whether this Esc belongs to something other than full screen. */
   escapeIsSpent(ev) {
@@ -11358,6 +12100,7 @@ var VelaWorkspace = class {
     this.objectTree.destroy();
     this.dataWindow.destroy();
     this.symbolPicker.destroy();
+    this.comparePicker?.destroy();
     this.indicatorPicker?.destroy();
     this.tfQuick.destroy();
     this.shortcutsHelp?.destroy();
@@ -11376,12 +12119,14 @@ var VelaWorkspace = class {
     const cell = this.activeId ? this.cellsById.get(this.activeId) : void 0;
     if (!cell) return;
     this.topbar.setSymbol(cell.symbol);
-    this.projectTimeframeControls(cell);
+    this.topbar.setTimeframe(cell.timeframe);
+    this.topbar.setUnavailableTimeframes(cell.unavailableTimeframes());
     this.topbar.setPriceStyle(cell.priceStyle, cell.unavailablePriceStyles());
     this.topbar.setIndicatorCount(cell.indicatorCount);
     this.topbar.renderActions();
     this.mobileBar?.renderActions();
     this.mobileBar?.setSymbol(cell.symbol);
+    this.mobileBar?.setTimeframe(cell.timeframe);
     this.syncMobileMaximize();
     this.drawingPill?.onChart(cell.chart);
     const pushHistory = () => this.topbar.setHistoryState(cell.history.canUndo, cell.history.canRedo);
@@ -11649,6 +12394,7 @@ var VelaWorkspace = class {
         watermark: this.opts.watermark !== false,
         nativeBackend: this.cellBackend,
         dialogHost: this.root,
+        symbolPicker: (current, onPick) => this.symbolPicker.open(current.replace(/^[^:]*:/, ""), { onSelect: onPick }),
         timezone: () => this.timezone,
         setTimezone: (zone) => this.setTimezone(zone),
         context: () => this.context(),
@@ -11660,11 +12406,10 @@ var VelaWorkspace = class {
         previewDropTarget: (target) => this.setDropTarget(target),
         dropCell: (id2, target) => this.swapCells(id2, target),
         onMarketChanged: (id2) => this.onCellMarketChanged(id2),
-        onTimeframesChanged: (id2) => {
-          if (id2 === this.activeId) this.projectTimeframeControls(this.active);
-        },
         onPriceStyleChanged: (id2) => this.onCellPriceStyleChanged(id2),
         onPriceStyleShown: (id2) => this.projectCellPriceStyle(id2),
+        timeframes: () => [.../* @__PURE__ */ new Set([...this.resolvedTimeframes(), ...this.tfFavs])],
+        onTimeframesShown: (id2) => this.projectCellTimeframes(id2),
         onIndicatorsChanged: (id2) => this.onCellIndicatorsChanged(id2),
         onStatusPrefsChanged: (id2) => this.propagateStylePrefs(id2),
         onStateDirty: () => this.markStateDirty(),
@@ -11699,9 +12444,9 @@ var VelaWorkspace = class {
     chart.on("priceStyle:change", ({ from, to }) => this.events.emit("cell:priceStyle", { id: cell.id, from, to }));
     chart.on("alert", (alert) => {
       const source = [parseSymbol(cell.symbol).ticker || cell.symbol, timeframeLabel(cell.timeframe, this.localeState), alert.indicator].filter(Boolean).join(" ");
-      this.alerts.unshift({ cellId: cell.id, source, title: alert.title ?? this.t(TEXT23.alert), message: alert.message, time: alert.time });
+      this.alerts.unshift({ cellId: cell.id, source, title: alert.title ?? this.t(TEXT24.alert), message: alert.message, time: alert.time });
       if (this.alerts.length > this.alertCap) this.alerts.pop();
-      toast(alert.title ?? this.t(TEXT23.alert), { description: this.t(TEXT23.alertToastDescription, { source, message: alert.message }), icon: "bell" });
+      toast(alert.title ?? this.t(TEXT24.alert), { description: this.t(TEXT24.alertToastDescription, { source, message: alert.message }), icon: "bell" });
       this.topbar.setAlertCount(this.alerts.length);
     });
     chart.on("drawing:favorites", ({ favorites }) => {
@@ -11774,7 +12519,7 @@ var VelaWorkspace = class {
     chart.on("drawing:selected", ({ ids }) => this.drawingSelections.set(cell, ids.length));
     chart.on("viewport:changed", (range) => this.propagateViewport(cell.id, range));
     chart.renderer.onConfigChanged(() => this.propagateStylePrefs(cell.id));
-    chart.on("theme:changed", (t23) => this.setTheme(t23));
+    chart.on("theme:changed", (t24) => this.setTheme(t24));
     chart.on("pane:changed", () => {
       if (cell.id === this.activeId) this.syncMobileMaximize();
     });
@@ -12353,8 +13098,12 @@ var VelaWorkspace = class {
     const cell = this.cellsById.get(id);
     if (!cell) return;
     this.topbar.setSymbol(cell.symbol);
-    this.projectTimeframeControls(cell);
+    this.topbar.setTimeframe(cell.timeframe);
+    this.topbar.setUnavailableTimeframes(cell.unavailableTimeframes());
+    this.topbar.renderActions();
+    this.mobileBar?.renderActions();
     this.mobileBar?.setSymbol(cell.symbol);
+    this.mobileBar?.setTimeframe(cell.timeframe);
     this.objectTree.setSymbol(cell.symbol);
     this.bottombar?.setSession({ session: cell.session, enabled: cell.sessionAvailable });
     this.projectTimezone();
@@ -12375,6 +13124,18 @@ var VelaWorkspace = class {
     if (!cell) return;
     this.topbar.setPriceStyle(cell.priceStyle, cell.unavailablePriceStyles());
   }
+  /** Project the active cell's unavailable timeframes onto the menu and favorite chips. */
+  projectCellTimeframes(id) {
+    if (id !== this.activeId) return;
+    const cell = this.cellsById.get(id);
+    if (!cell) return;
+    this.topbar.setUnavailableTimeframes(cell.unavailableTimeframes());
+    this.tfDrawer?.refresh();
+  }
+  /** Configured timeframe presets: explicit host option wins, else plugin shell defaults, else built-in. */
+  resolvedTimeframes() {
+    return this.opts.timeframes ?? shellDefaults().timeframes ?? DEFAULT_TIMEFRAMES;
+  }
   /** Trigger ② — a cell's indicator ledger changed: count + picker only if active. */
   onCellIndicatorsChanged(id) {
     this.markStateDirty();
@@ -12384,14 +13145,9 @@ var VelaWorkspace = class {
     this.topbar.setIndicatorCount(cell.indicatorCount);
     this.indicatorPicker?.sync();
   }
-  projectTimeframeControls(cell) {
-    this.topbar.setTimeframe(cell.timeframe);
-    this.mobileBar?.setTimeframe(cell.timeframe);
-    this.tfDrawer?.refresh();
-    if (this.tfQuick.isOpen) this.tfQuick.relabel();
-  }
-  /** The controls resolve the choice again on activation before passing it here. */
+  /** Timeframe changes routed from the pickers and shortcuts (chip state follows). */
   setActiveTimeframe(tf) {
+    ++this.timeframeSelectionRevision;
     this.bottombar?.setActiveRange(null);
     this.active.setTimeframe(tf);
   }
@@ -12409,6 +13165,7 @@ var VelaWorkspace = class {
   onLayoutModeChange(mode) {
     if (mode === "mobile") this.setFullscreen(false);
     this.symbolPicker.close();
+    this.comparePicker?.close();
     this.indicatorPicker?.close();
     this.tfDrawer?.close();
     this.drawingsDrawer?.close();
@@ -12474,11 +13231,11 @@ var VelaWorkspace = class {
   openTimeframeDrawer() {
     this.tfDrawer ?? (this.tfDrawer = new TimeframeDrawer({
       host: this.root,
-      timeframes: this.opts.timeframes ?? DEFAULT_TIMEFRAMES,
-      resolveTimeframe: this.resolveTimeframeChoice,
+      timeframes: this.resolvedTimeframes(),
       ranges: RANGE_PRESETS,
       currentTimeframe: () => this.active.timeframe,
       activeRange: () => this.active.activeRangeId,
+      unavailableTimeframes: () => this.active.unavailableTimeframes(),
       onTimeframe: (tf) => this.setActiveTimeframe(tf),
       onRange: (preset) => {
         this.active.applyRange(preset);
@@ -12510,6 +13267,7 @@ var VelaWorkspace = class {
       i18n: this.localeState,
       ...has("undo-redo") ? { onUndo: () => this.active.history.undo(), onRedo: () => this.active.history.redo() } : {},
       ...has("screenshot") ? { onScreenshot: this.screenshotOverride ? () => this.runOverride(this.screenshotOverride) : () => this.downloadScreenshot() } : {},
+      ...has("compare") && (this.comparePicker || this.compareOverride) ? { onCompare: this.compareOverride ? () => this.runOverride(this.compareOverride) : () => this.comparePicker.open() } : {},
       canUndo: () => this.active.history.canUndo,
       canRedo: () => this.active.history.canRedo,
       priceStyles: () => {
@@ -12521,7 +13279,7 @@ var VelaWorkspace = class {
       onPriceStyle: (id) => this.active.setPriceStyle(id),
       panels: () => has("panels") ? [...this.dock.list()] : [],
       onTogglePanel: (id) => this.dock.toggle(id),
-      ...has("alerts") ? { alerts: () => this.alerts.map((a) => ({ title: this.t(TEXT23.alertDrawerTitle, { source: a.source, title: a.title }), message: a.message, time: a.time })) } : {},
+      ...has("alerts") ? { alerts: () => this.alerts.map((a) => ({ title: this.t(TEXT24.alertDrawerTitle, { source: a.source, title: a.title }), message: a.message, time: a.time })) } : {},
       // Actions placed on the bottom bar (left-aligned by default) have their stop
       // there — only the menu-placed ones land in the drawer, or they would appear
       // twice: left (primary) ones with the primary rows, right ones at the end.
@@ -12565,10 +13323,10 @@ var VelaWorkspace = class {
   /** The layout SYNC switches (the topbar dropdown and the mobile drawer list the same). */
   syncRows() {
     return [
-      { id: "symbol", label: this.t(TEXT23.syncSymbol), checked: this.syncOpts.symbol === true },
-      { id: "timeframe", label: this.t(TEXT23.syncInterval), checked: this.syncOpts.timeframe === true },
-      { id: "crosshair", label: this.t(TEXT23.syncCrosshair), checked: this.syncOpts.crosshair === true },
-      { id: "style", label: this.t(TEXT23.syncStyle), checked: this.syncOpts.style === true }
+      { id: "symbol", label: this.t(TEXT24.syncSymbol), checked: this.syncOpts.symbol === true },
+      { id: "timeframe", label: this.t(TEXT24.syncInterval), checked: this.syncOpts.timeframe === true },
+      { id: "crosshair", label: this.t(TEXT24.syncCrosshair), checked: this.syncOpts.crosshair === true },
+      { id: "style", label: this.t(TEXT24.syncStyle), checked: this.syncOpts.style === true }
     ];
   }
   openTimezoneDrawer() {
@@ -12596,8 +13354,8 @@ var VelaWorkspace = class {
     this.alertsMenu?.destroy();
     const items = this.alerts.length ? this.alerts.map((a, i) => ({
       id: String(i),
-      label: sliceGraphemes(this.t(TEXT23.alertRow, { source: a.source, time: eventTimeText(a.time, this.localeState), title: a.title, message: a.message }), ALERT_ROW_MAX)
-    })) : [{ id: "none", label: this.t(TEXT23.noAlerts), disabled: true }];
+      label: sliceGraphemes(this.t(TEXT24.alertRow, { source: a.source, time: eventTimeText(a.time, this.localeState), title: a.title, message: a.message }), ALERT_ROW_MAX)
+    })) : [{ id: "none", label: this.t(TEXT24.noAlerts), disabled: true }];
     this.alertsMenu = new DropdownMenu({
       host: this.root,
       items,
@@ -12632,8 +13390,8 @@ var VelaWorkspace = class {
     this.screenshotKeyOff = this.keymap.register({
       id: "chart.screenshot",
       keys: "mod+alt+s",
-      label: ov ? ov.label : TEXT23.screenshot,
-      category: TEXT23.categoryChart,
+      label: ov ? ov.label : TEXT24.screenshot,
+      category: TEXT24.categoryChart,
       run: ov ? () => this.runOverride(ov) : () => this.downloadScreenshot()
     });
   }
@@ -12643,8 +13401,8 @@ var VelaWorkspace = class {
     this.fullscreenKeyOff = this.keymap.register({
       id: "chart.fullscreen",
       keys: "alt+enter",
-      label: TEXT23.fullscreen,
-      category: TEXT23.categoryChart,
+      label: TEXT24.fullscreen,
+      category: TEXT24.categoryChart,
       run: (ev) => {
         if (!ev.repeat) this.toggleFullscreen();
       }
@@ -12654,24 +13412,35 @@ var VelaWorkspace = class {
   registerDefaultKeys() {
     this.registerScreenshotKey();
     this.registerFullscreenKey();
-    this.keymap.register({ id: "chart.reset-view", keys: "alt+r", label: TEXT23.resetView, category: TEXT23.categoryChart, run: () => this.active.resetView() });
-    this.keymap.register({ id: "chart.toggle-log", keys: "alt+l", label: TEXT23.toggleLog, category: TEXT23.categoryChart, run: () => this.active.chart.renderer.set("logScale", !this.active.chart.renderer.get("logScale")) });
+    this.keymap.register({ id: "chart.reset-view", keys: "alt+r", label: TEXT24.resetView, category: TEXT24.categoryChart, run: () => this.active.resetView() });
+    this.keymap.register({
+      id: "chart.toggle-log",
+      keys: "alt+l",
+      label: TEXT24.toggleLog,
+      category: TEXT24.categoryChart,
+      run: () => {
+        const next = !this.active.chart.renderer.get("logScale");
+        if (next && this.active.chart.renderer.get("scaleMode") !== "price") this.active.chart.renderer.set("scaleMode", "price");
+        this.active.chart.renderer.set("logScale", next);
+      }
+    });
     this.keymap.register({
       id: "chart.toggle-percent",
       keys: "alt+p",
-      label: TEXT23.togglePercent,
-      category: TEXT23.categoryChart,
+      label: TEXT24.togglePercent,
+      category: TEXT24.categoryChart,
       run: () => {
-        const mode = this.active.chart.renderer.get("scaleMode");
-        this.active.chart.renderer.set("scaleMode", mode === "percent" ? "price" : "percent");
+        const nextPct = this.active.chart.renderer.get("scaleMode") !== "percent";
+        if (nextPct && this.active.chart.renderer.get("logScale")) this.active.chart.renderer.set("logScale", false);
+        this.active.chart.renderer.set("scaleMode", nextPct ? "percent" : "price");
       }
     });
-    this.keymap.register({ id: "drawings.trendline", keys: "alt+t", label: TEXT23.trendline, category: TEXT23.categoryDrawings, run: () => this.active.chart.drawings.setTool("trendline") });
+    this.keymap.register({ id: "drawings.trendline", keys: "alt+t", label: TEXT24.trendline, category: TEXT24.categoryDrawings, run: () => this.active.chart.drawings.setTool("trendline") });
     this.keymap.register({
       id: "drawings.hline-cursor",
       keys: "alt+h",
-      label: TEXT23.hlineCursor,
-      category: TEXT23.categoryDrawings,
+      label: TEXT24.hlineCursor,
+      category: TEXT24.categoryDrawings,
       run: () => {
         const c = this.active;
         if (c.lastCrossTime != null && c.lastCrossPrice != null) c.chart.drawings.add("hline", { anchors: [{ time: c.lastCrossTime, price: c.lastCrossPrice }] });
@@ -12680,30 +13449,30 @@ var VelaWorkspace = class {
     this.keymap.register({
       id: "drawings.vline-cursor",
       keys: "alt+v",
-      label: TEXT23.vlineCursor,
-      category: TEXT23.categoryDrawings,
+      label: TEXT24.vlineCursor,
+      category: TEXT24.categoryDrawings,
       run: () => {
         const c = this.active;
         if (c.lastCrossTime != null && c.lastCrossPrice != null) c.chart.drawings.add("vline", { anchors: [{ time: c.lastCrossTime, price: c.lastCrossPrice }] });
       }
     });
-    this.keymap.register({ id: "history.undo", keys: ["mod+z"], label: TEXT23.undo, category: TEXT23.categoryEdit, run: () => this.active.history.undo() });
-    this.keymap.register({ id: "history.redo", keys: ["mod+y", "mod+shift+z"], label: TEXT23.redo, category: TEXT23.categoryEdit, run: () => this.active.history.redo() });
-    this.keymap.register({ id: "view.zoom-in", keys: "mod+arrowup", label: TEXT23.zoomIn, category: TEXT23.categoryChart, run: () => this.glider.zoom(ZOOM_IN) });
-    this.keymap.register({ id: "view.zoom-out", keys: "mod+arrowdown", label: TEXT23.zoomOut, category: TEXT23.categoryChart, run: () => this.glider.zoom(ZOOM_OUT) });
-    this.keymap.register({ id: "view.pan-left", keys: "mod+arrowleft", label: TEXT23.panLeft, category: TEXT23.categoryChart, run: () => this.active.chart.panBy(-PAN_FAST) });
-    this.keymap.register({ id: "view.pan-right", keys: "mod+arrowright", label: TEXT23.panRight, category: TEXT23.categoryChart, run: () => this.active.chart.panBy(PAN_FAST) });
+    this.keymap.register({ id: "history.undo", keys: ["mod+z"], label: TEXT24.undo, category: TEXT24.categoryEdit, run: () => this.active.history.undo() });
+    this.keymap.register({ id: "history.redo", keys: ["mod+y", "mod+shift+z"], label: TEXT24.redo, category: TEXT24.categoryEdit, run: () => this.active.history.redo() });
+    this.keymap.register({ id: "view.zoom-in", keys: "mod+arrowup", label: TEXT24.zoomIn, category: TEXT24.categoryChart, run: () => this.glider.zoom(ZOOM_IN) });
+    this.keymap.register({ id: "view.zoom-out", keys: "mod+arrowdown", label: TEXT24.zoomOut, category: TEXT24.categoryChart, run: () => this.glider.zoom(ZOOM_OUT) });
+    this.keymap.register({ id: "view.pan-left", keys: "mod+arrowleft", label: TEXT24.panLeft, category: TEXT24.categoryChart, run: () => this.active.chart.panBy(-PAN_FAST) });
+    this.keymap.register({ id: "view.pan-right", keys: "mod+arrowright", label: TEXT24.panRight, category: TEXT24.categoryChart, run: () => this.active.chart.panBy(PAN_FAST) });
     const indOv = this.indicatorsOverride;
     if (indOv && topbarHas(this.topbarComp, "indicators")) {
-      this.keymap.register({ id: "indicators.open", keys: "/", label: indOv.label, category: TEXT23.categoryIndicators, run: () => this.runOverride(indOv) });
+      this.keymap.register({ id: "indicators.open", keys: "/", label: indOv.label, category: TEXT24.categoryIndicators, run: () => this.runOverride(indOv) });
     } else if (this.indicatorPicker) {
-      this.keymap.register({ id: "indicators.open", keys: "/", label: TEXT23.openIndicators, category: TEXT23.categoryIndicators, run: () => this.indicatorPicker?.open() });
+      this.keymap.register({ id: "indicators.open", keys: "/", label: TEXT24.openIndicators, category: TEXT24.categoryIndicators, run: () => this.indicatorPicker?.open() });
     }
     this.keymap.register({
       id: "help.shortcuts",
       keys: "?",
-      label: TEXT23.showShortcuts,
-      category: TEXT23.categoryHelp,
+      label: TEXT24.showShortcuts,
+      category: TEXT24.categoryHelp,
       run: () => {
         this.shortcutsHelp ?? (this.shortcutsHelp = new ShortcutsHelp(this.keymap, this.root, (open) => this.trackDialog(open), () => this.localeState, { symbolMenuFromKey: this.symbolMenuFromKey }));
         this.shortcutsHelp.open();
@@ -12753,4 +13522,4 @@ var VelaWorkspace = class {
   }
 };
 
-export { Bottombar, ChartCell, ChartContextMenu, DataWindow, GRID_PICKER_MAX, IndicatorPicker, ObjectTree, PanelDock, RANGE_PRESETS, SYMBOL_PICKER_DEFAULT_CATEGORIES, ShortcutsHelp, Statusline, SymbolPicker, TimeframeQuick, Topbar, VelaWorkspace, Watermark, WorkspaceReplay, activeAfterLayout, barClose, dataWindowSections, decimalsFor, decodeState, encodeState, ensureLayout, evenTracks, filterSymbols, fmtChange, fmtPrice, gridStyles, lastOpenClosedBy, layoutDefinition, layoutForGrid, layoutShape, layouts, localStorageAdapter, memoryStorageAdapter, parseTimeframe, priceStyleLabel, rangesWithin, registerBuiltinLayouts, registerLayout, resizeTracks, resolveIndicators, sanitizeState, syncTargets, timeframeLabel, timeframeMs, trackOffsets, unregisterLayout };
+export { Bottombar, ChartCell, ChartContextMenu, DataWindow, GRID_PICKER_MAX, IndicatorPicker, ObjectTree, PanelDock, RANGE_PRESETS, SYMBOL_PICKER_DEFAULT_CATEGORIES, ShortcutsHelp, Statusline, SymbolPicker, TimeframeQuick, Topbar, VelaWorkspace, Watermark, WorkspaceReplay, activeAfterLayout, barClose, chartTimeframeOf, dataWindowSections, decimalsFor, decodeState, encodeState, ensureLayout, evenTracks, filterSymbols, fmtChange, fmtPrice, gridStyles, lastOpenClosedBy, layoutDefinition, layoutForGrid, layoutShape, layouts, localStorageAdapter, memoryStorageAdapter, parseTimeframe, priceStyleLabel, rangesWithin, registerBuiltinLayouts, registerLayout, resizeTracks, resolveIndicators, sanitizeState, syncTargets, timeframeLabel, timeframeMs, trackOffsets, unregisterLayout };
